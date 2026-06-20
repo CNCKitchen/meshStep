@@ -1,0 +1,20 @@
+{
+  "name": "meshstep",
+  "version": "0.1.0",
+  "description": "Standalone STEP -> uniform-isotropic mesh importer (analytic surfaces, v1) for bumpmesh & infeall. Pure TypeScript, zero runtime dependencies.",
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node test/convert.ts",
+    "inspect": "node test/inspect.ts",
+    "entities": "node test/step-inspect.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["step", "iso-10303", "brep", "mesh", "tessellation", "isotropic-remesh", "stl", "3mf", "cad"],
+  "author": "CNC Kitchen",
+  "devDependencies": {}
+}
