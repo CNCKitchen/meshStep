@@ -55,7 +55,9 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   // Assembly placements per solid (empty for a single part); applied to the final mesh below.
   const solidXf = new Map<number, Frame>();
   for (const solid of brep.solids) if (solid.transform) solidXf.set(solid.id, solid.transform);
-  if (opts.remesh === false) {
+  // AP242 tessellated-geometry bodies have no analytic surfaces, so the curvature-adaptive remesh
+  // can't project — return the (already watertight) faceted mesh as imported.
+  if (opts.remesh === false || brep.solids.length === 0) {
     orientConsistent(result.mesh);
     applyAssemblyPlacement(result.mesh, result.solidOfTri, solidXf);
     return result;

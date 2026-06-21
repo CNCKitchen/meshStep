@@ -134,7 +134,11 @@ export function buildBrep(src: string): BrepModel {
   }
 
   const readLoop = (loopId: number): OrientedEdge[] => {
-    const loop = table.record(loopId); // EDGE_LOOP(name, (orientedEdge#...))
+    const loop = table.record(loopId);
+    // VERTEX_LOOP(name, vertex#) is a degenerate single-point loop (a cone apex or sphere pole):
+    // it has no edges, so it constrains nothing for meshing — the pole point is already carried by
+    // the adjacent edges. POLY_LOOP (a raw point polygon) is likewise not edge-based. Skip both.
+    if (loop.type !== "EDGE_LOOP") return [];
     return refList(loop.params[1]!).map((oeId) => {
       const oe = table.record(oeId); // ORIENTED_EDGE(name, *, *, edge#, orient)
       return { edgeId: ref(oe.params[3]!), orient: enumOf(oe.params[4]!) === "T" };
@@ -156,7 +160,8 @@ export function buildBrep(src: string): BrepModel {
     const loops: BLoop[] = [];
     for (const bId of refList(f.params[1]!)) {
       const b = table.record(bId); // FACE_OUTER_BOUND | FACE_BOUND(name, loop#, orient)
-      loops.push({ outer: b.type === "FACE_OUTER_BOUND", edges: readLoop(ref(b.params[1]!)) });
+      const edges = readLoop(ref(b.params[1]!));
+      if (edges.length > 0) loops.push({ outer: b.type === "FACE_OUTER_BOUND", edges });
     }
     return {
       faceId: fid, surfaceId, sameSense: (enumOf(f.params[3]!) === "T") !== flip,

@@ -11,6 +11,8 @@
 // surface normal. Inner-loop holes / B-spline curves land in M3b; isotropic remesh is M4.
 import type { Vec3 } from "../geom/vec.ts";
 import { cross, dot, lerp } from "../geom/vec.ts";
+import { ref, refList, list, num, numList } from "../step/entities.ts";
+import type { Param } from "../step/parser.ts";
 import type { BrepModel, BLoop } from "../brep/build.ts";
 import type { IndexedMesh } from "../io/stl.ts";
 import type { Surface } from "../geom/surfaces.ts";
@@ -433,6 +435,7 @@ function tessellateThinFace(
 function tessellateCone(
   surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, brep: BrepModel, fid: number,
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
+  nFaceLoops: number,
 ): boolean {
   // Only a genuine apex cone (exactly one circle rim, tapering to a point) is handled here; a
   // frustum / trimmed cone has 2+ circle rims or straight sides and must go through the param grid
@@ -450,16 +453,23 @@ function tessellateCone(
   const cone = surface as Surface & { r: number; sin: number };
   const apex = surface.evaluate(0, -cone.r / cone.sin);
   const L = Math.hypot(base[0]![0] - apex[0], base[0]![1] - apex[1], base[0]![2] - apex[2]);
-  // Genuine apex cone ONLY: the face must actually taper to the apex, i.e. some boundary vertex sits
-  // AT the apex. A chamfer/countersink with one circle rim but a trimmed far side has its nearest
-  // boundary vertex well short of the apex — marching to the apex would spike a triangle clean out of
-  // the part. Such trimmed cones go through the param grid instead (which respects all their edges).
+  // Genuine apex cone, by either signal:
+  //  (a) some boundary vertex sits AT the apex (a degenerate seam edge carries the apex point), or
+  //  (b) the face's SOLE boundary is the closed full-period base circle — no trim edges, no second
+  //      rim — so the opposite side must close at the apex. (Its apex arrived as a VERTEX_LOOP, which
+  //      carries no edges and is dropped at build time, so signal (a) is absent for these.)
+  // A chamfer/countersink has one circle rim PLUS straight trim edges and its nearest vertex sits well
+  // short of the apex; marching to the apex would spike a triangle clean out of the part. Such trimmed
+  // cones go through the param grid instead (which respects all their edges).
   let minApex = Infinity;
   for (const oe of loop.edges) {
     const e = brep.edges.get(oe.edgeId); if (!e) continue;
     for (const v of [e.v0, e.v1]) minApex = Math.min(minApex, Math.hypot(v[0] - apex[0], v[1] - apex[1], v[2] - apex[2]));
   }
-  if (minApex > 0.05 * L) return false;
+  const rimEdge = brep.edges.get(oe0.edgeId)!;
+  const closedCircle = Math.hypot(rimEdge.v0[0] - rimEdge.v1[0], rimEdge.v0[1] - rimEdge.v1[1], rimEdge.v0[2] - rimEdge.v1[2]) < 1e-6;
+  const soleRim = nFaceLoops === 1 && loop.edges.length === 1 && closedCircle;
+  if (minApex > 0.05 * L && !soleRim) return false;
   const [theta0, vBase] = surface.project(base[0]!);
   const vApex = -cone.r / cone.sin, rBase = cone.r + vBase * cone.sin;
   let du = surface.project(base[1 % base.length]!)[0] - theta0; // base traversal direction in u
@@ -512,6 +522,60 @@ function tessellateSphere(
 }
 
 /**
+ * Spherical cap closing to a pole: a sphere face whose SOLE boundary is one full-longitude parallel
+ * circle (the other side was a VERTEX_LOOP pole, dropped at build time). The rim projects to a
+ * horizontal line in (u,v) enclosing no area, so the param grid meshes nothing and the cap opens.
+ * Mesh it as latitude rings from the shared rim to the enclosed pole instead. The enclosed pole is
+ * the one to the LEFT of the oriented rim in parameter space (the standard trimming convention):
+ * traversing the rim eastward (+u) keeps the +v hemisphere (north pole) as material.
+ * Returns false WITHOUT emitting if the loop isn't a single full-revolution parallel (a partial
+ * spherical patch), so the caller falls back to the param grid.
+ */
+function tessellateSphereCap(
+  s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], chordTol: number, targetEdge: number, sign: number,
+): boolean {
+  const rim: Vec3[] = [];
+  for (const oe of loop.edges) {
+    const base = sampled.get(oe.edgeId); if (!base) return false;
+    const poly = oe.orient ? base : base.slice().reverse();
+    for (let i = 0; i < poly.length - 1; i++) rim.push(poly[i]!);
+  }
+  if (rim.length < 4) return false;
+  const uv = rim.map((p) => s.project(p));
+  let vmin = Infinity, vmax = -Infinity, umin = Infinity, umax = -Infinity;
+  for (const [u, v] of uv) { if (v < vmin) vmin = v; if (v > vmax) vmax = v; if (u < umin) umin = u; if (u > umax) umax = u; }
+  // Must be a near-constant-latitude circle spanning the whole longitude (a true parallel rim).
+  if (vmax - vmin > 0.05 || umax - umin < 0.9 * TWO_PI) return false;
+  const vRim = (vmin + vmax) / 2;
+  // Net signed longitude travel of the oriented rim -> which pole is the enclosed (left-hand) side.
+  let du = 0;
+  for (let i = 0; i < uv.length; i++) { let d = uv[(i + 1) % uv.length]![0] - uv[i]![0]; while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; du += d; }
+  const vPole = du >= 0 ? Math.PI / 2 : -Math.PI / 2;
+
+  const R = Math.max(s.r, 1e-9);
+  const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - chordTol / R)));
+  const dTheta = Math.max(1e-4, Math.min(dChord, targetEdge / R));
+  const target = R * dTheta;
+  const span = Math.abs(vPole - vRim);
+  const nV = Math.max(1, Math.min(2000, Math.ceil(span / dTheta)));
+  // Build the rim ring from the SHARED edge samples (watertight with the neighbour), then march
+  // latitude rings to the pole, each sized to its own circumference so the cap tapers to a point.
+  let prev = rim.slice();
+  for (let j = 1; j <= nV; j++) {
+    const v = vRim + ((vPole - vRim) * j) / nV;
+    if (j === nV) { stitchRings(verts, faceIds, prev, [s.evaluate(0, vPole)], fid, s, sign); break; }
+    const circ = TWO_PI * R * Math.cos(v);
+    const nu = Math.max(3, Math.min(4000, Math.round(circ / target)));
+    const ring: Vec3[] = [];
+    for (let i = 0; i < nu; i++) ring.push(s.evaluate((TWO_PI * i) / nu, v));
+    stitchRings(verts, faceIds, prev, ring, fid, s, sign);
+    prev = ring;
+  }
+  return true;
+}
+
+/**
  * Untrimmed (closed) B-spline patch forming a whole body — e.g. a surface of revolution with poles
  * and a periodic seam, which has no usable trimming loop. Tessellated as a structured (u,v) grid;
  * the seam columns coincide (weld) and pole rows collapse to fans (emitTri drops the degenerate half).
@@ -551,6 +615,70 @@ function tessellateBSplineFull(
   // Stitch consecutive rings (handles unequal counts and pole fans); emitTri fixes winding.
   for (let i = 0; i < nU; i++) stitchRings(verts, faceIds, rings[i]!, rings[i + 1]!, fid, s, sign);
   return true;
+}
+
+/**
+ * Read AP242 *tessellated* geometry (ISO 10303-42 tessellated_item subtree) directly into triangles.
+ * Some MBE/AP242 exports ship the part as a faceted mesh instead of (or as well as) a precise B-rep —
+ * a TESSELLATED_SOLID / TESSELLATED_SHELL holding TRIANGULATED_FACEs that index a shared
+ * COORDINATES_LIST. There are no analytic surfaces, so the mesh is transcribed as-is (welded by
+ * position downstream, oriented by orientConsistent). Only consulted when the file has no B-rep
+ * solids (a dual-representation file uses its precise B-rep). Returns null if no tessellated bodies.
+ *
+ * Face layout (positional, tolerant of an optional geometric_link ref):
+ *   (COMPLEX_)TRIANGULATED_FACE(name, coords#, pnmax, normals, [link#], pnindex, [triangles,] strips, fans)
+ * pnindex maps a face-local 1-based index to a 1-based COORDINATES_LIST point; triangle_strips and
+ * triangle_fans give connectivity over those local indices.
+ */
+function readTessellated(brep: BrepModel): { verts: number[]; faceIds: number[]; solidIds: number[]; faces: number } | null {
+  const t = brep.table, s = brep.scale;
+  // A TESSELLATED_SOLID is the complete closed body; only fall back to loose TESSELLATED_SHELLs when
+  // there's no solid (mixing them welds supplementary feature shells into the body -> non-manifold).
+  const solids = [...t.byType("TESSELLATED_SOLID")];
+  const containers = solids.length > 0 ? solids : [...t.byType("TESSELLATED_SHELL")];
+  if (containers.length === 0) return null;
+  const verts: number[] = [], faceIds: number[] = [], solidIds: number[] = [];
+  let faces = 0;
+  const coordsCache = new Map<number, Vec3[]>();
+  const getCoords = (id: number): Vec3[] => {
+    let c = coordsCache.get(id);
+    if (!c) { c = list(t.record(id).params[2]!).map((tup) => { const a = numList(tup); return [a[0]! * s, a[1]! * s, a[2]! * s] as Vec3; }); coordsCache.set(id, c); }
+    return c;
+  };
+  for (const [cid, c] of containers) {
+    for (const fref of refList(c.params[1]!)) {
+      const rec = t.record(fref);
+      if (rec.type !== "TRIANGULATED_FACE" && rec.type !== "COMPLEX_TRIANGULATED_FACE") continue;
+      const pts = getCoords(ref(rec.params[1]!));
+      const pnmax = num(rec.params[2]!);
+      const params = rec.params;
+      // pnindex is the flat integer list of length pnmax (normals are lists-of-tuples; link is a ref).
+      let pidx = -1;
+      for (let i = 3; i < params.length; i++) { const p = params[i]!; if (p.k === "list" && p.v.length === pnmax && (p.v.length === 0 || p.v[0]!.k === "num")) { pidx = i; break; } }
+      if (pidx < 0) continue;
+      const pnindex = numList(params[pidx]!);
+      const vtx = (local: number): Vec3 => pts[pnindex[local - 1]! - 1]!;
+      const pushTri = (a: number, b: number, cc: number): void => {
+        if (a === b || b === cc || a === cc) return; // strip-restart degenerate (repeated index) — skip
+        const A = vtx(a), B = vtx(b), C = vtx(cc);
+        verts.push(A[0], A[1], A[2], B[0], B[1], B[2], C[0], C[1], C[2]); faceIds.push(fref); solidIds.push(cid);
+      };
+      const addList = (p: Param, kind: "tri" | "strip" | "fan"): void => {
+        for (const sub of list(p)) {
+          const idx = numList(sub);
+          if (kind === "tri") for (let i = 0; i + 2 < idx.length; i += 3) pushTri(idx[i]!, idx[i + 1]!, idx[i + 2]!);
+          else if (kind === "strip") for (let i = 0; i + 2 < idx.length; i++) (i % 2 === 0) ? pushTri(idx[i]!, idx[i + 1]!, idx[i + 2]!) : pushTri(idx[i + 1]!, idx[i]!, idx[i + 2]!);
+          else for (let i = 1; i + 1 < idx.length; i++) pushTri(idx[0]!, idx[i]!, idx[i + 1]!);
+        }
+      };
+      const rest = params.slice(pidx + 1);
+      if (rec.type === "TRIANGULATED_FACE") { if (rest[0]) addList(rest[0], "tri"); }
+      else if (rest.length >= 3) { addList(rest[0]!, "tri"); addList(rest[1]!, "strip"); addList(rest[2]!, "fan"); }
+      else { if (rest[0]) addList(rest[0], "strip"); if (rest[1]) addList(rest[1], "fan"); }
+      faces++;
+    }
+  }
+  return { verts, faceIds, solidIds, faces };
 }
 
 export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult {
@@ -614,10 +742,13 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           tessellateSphere(surface, face.faceId, chordTol, targetEdge, sign, verts, faceIds);
           ok = true;
         } else if (outer) {
-          ok = tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+          // A cap closing to a pole (sole full-longitude parallel rim) fans to the pole; any other
+          // spherical patch returns false from the cap mesher and uses the param grid.
+          ok = tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, sign)
+            || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
-        && tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)) {
+        && tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length)) {
         ok = true; // genuine apex cone (singular vertex); frustums/trimmed cones use the param grid
       } else if (isBSpline(surface)) {
         // A standalone closed B-spline body (its solid's only face) has no usable trimming loop ->
@@ -642,6 +773,19 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     for (const ix of z.indices) indices.push(ix + voff);
     voff += z.positions.length / 3;
     for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) { faceOfTri.push(faceIds[t]!); solidOfTri.push(solid.id); }
+  }
+
+  // No precise B-rep? Fall back to AP242 tessellated geometry (a pre-faceted body in the file).
+  if (brep.solids.length === 0) {
+    const tg = readTessellated(brep);
+    if (tg && tg.verts.length > 0) {
+      const { mesh } = weld(tg.verts);
+      for (const x of mesh.positions) positions.push(x);
+      for (const ix of mesh.indices) indices.push(ix + voff);
+      voff += mesh.positions.length / 3;
+      for (let k = 0; k < tg.faceIds.length; k++) { faceOfTri.push(tg.faceIds[k]!); solidOfTri.push(tg.solidIds[k]!); }
+      facesTotal += tg.faces; facesTessellated += tg.faces;
+    }
   }
 
   return {
