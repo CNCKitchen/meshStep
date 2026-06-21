@@ -91,6 +91,13 @@ function loopParam(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>):
   return { p3, p2 };
 }
 
+/** Signed area of a closed (u,v) polygon (shoelace); |area| ranks loops to find the outer boundary. */
+function polyArea(poly: P2[]): number {
+  let a = 0;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) a += (poly[j]![0] + poly[i]![0]) * (poly[j]![1] - poly[i]![1]);
+  return a / 2;
+}
+
 function pointInPoly(p: P2, poly: P2[]): boolean {
   let inside = false;
   for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -130,9 +137,18 @@ function tessellateParamGrid(
   surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
 ): boolean {
-  const outerLoop = loops.find((l) => l.outer) ?? loops[0];
-  if (!outerLoop) return false;
-  const outer = loopParam(surface, outerLoop, sampled);
+  // Project every loop, then pick the outer boundary. Prefer the STEP FACE_OUTER_BOUND flag, but some
+  // kernels (e.g. Onshape via ST-DEVELOPER) mark EVERY bound FACE_BOUND and never set it — there the
+  // outer loop is whichever encloses the largest area in parameter space; the rest are holes. Without
+  // this an annular face picks a hole as its boundary and meshes the wrong region (open seams).
+  const projected = loops.map((l) => ({ outer: l.outer, lp: loopParam(surface, l, sampled) }));
+  let oi = projected.findIndex((p) => p.outer);
+  if (oi < 0) {
+    let best = -Infinity;
+    for (let i = 0; i < projected.length; i++) { const a = Math.abs(polyArea(projected[i]!.lp.p2)); if (a > best) { best = a; oi = i; } }
+  }
+  if (oi < 0) return false;
+  const outer = projected[oi]!.lp;
   if (outer.p3.length < 3) return false;
 
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
@@ -140,7 +156,7 @@ function tessellateParamGrid(
     if (q[0] < umin) umin = q[0]; if (q[0] > umax) umax = q[0];
     if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1];
   }
-  const holes = loops.filter((l) => l !== outerLoop).map((l) => loopParam(surface, l, sampled));
+  const holes = projected.filter((_, i) => i !== oi).map((p) => p.lp);
   if (surface.periodicU) for (const h of holes) shiftIntoRange(h.p2, (umin + umax) / 2, 0, surface.uPeriod || TWO_PI);
   if (surface.periodicV) for (const h of holes) shiftIntoRange(h.p2, (vmin + vmax) / 2, 1, surface.vPeriod || TWO_PI);
   const holeP2 = holes.map((h) => h.p2);
@@ -280,6 +296,68 @@ function stitchRings(
     if (ia < na && (ib >= nb || ia / na < ib / nb)) { emitTri(verts, faceIds, A[ia % na]!, A[(ia + 1) % na]!, B[ib % nb]!, fid, surface, sign); ia++; }
     else { emitTri(verts, faceIds, A[ia % na]!, B[(ib + 1) % nb]!, B[ib % nb]!, fid, surface, sign); ib++; }
   }
+}
+
+/**
+ * Full-revolution band (a cylinder/cone hole wall, etc.) whose rims are separate FULL-PERIOD circle
+ * loops with no seam edges — how some kernels (Onshape/ST-DEVELOPER) represent a drilled hole. Each
+ * rim projects to an open horizontal line in (u,v) enclosing no area, so the param grid meshes
+ * nothing and the hole's edges open. Stitch the shared rim samples directly into a triangle band
+ * instead (intermediate rings for height), wrapping cyclically so no seam is needed. Returns false
+ * WITHOUT emitting if the loops aren't all full-period rims, so the caller falls back to the grid.
+ */
+function tessellateRevolutionBand(
+  surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
+): boolean {
+  const period = surface.uPeriod || TWO_PI;
+  const angleOf = (p: Vec3): number => surface.project(p)[0];
+  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const rims: { pts: Vec3[]; v: number }[] = [];
+  for (const lp of loops) {
+    const pts: Vec3[] = [];
+    for (const oe of lp.edges) {
+      const base = sampled.get(oe.edgeId); if (!base) continue;
+      const poly = oe.orient ? base : base.slice().reverse();
+      for (let i = 0; i < poly.length - 1; i++) pts.push(poly[i]!);
+    }
+    if (pts.length < 3) return false;
+    let umin = Infinity, umax = -Infinity, vsum = 0;
+    for (const p of pts) { const [u, v] = surface.project(p); if (u < umin) umin = u; if (u > umax) umax = u; vsum += v; }
+    if (umax - umin < 0.9 * period) return false; // a partial arc, not a full-period rim
+    rims.push({ pts, v: vsum / pts.length });
+  }
+  if (rims.length < 2) return false;
+  rims.sort((a, b) => a.v - b.v);
+
+  const wrap = (d: number): number => { while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; return d; };
+  // Rotate/flip `ring` so it starts at `ref[0]`'s angle and runs the same rotational direction.
+  const align = (ref: Vec3[], ring: Vec3[]): Vec3[] => {
+    const a0 = angleOf(ref[0]!);
+    const dirRef = wrap(angleOf(ref[1]!) - a0) >= 0 ? 1 : -1;
+    const r = ring.slice();
+    if ((wrap(angleOf(r[1]!) - angleOf(r[0]!)) >= 0 ? 1 : -1) !== dirRef) r.reverse();
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < r.length; i++) { const dd = Math.abs(wrap(angleOf(r[i]!) - a0)); if (dd < bd) { bd = dd; bi = i; } }
+    return [...r.slice(bi), ...r.slice(0, bi)];
+  };
+
+  for (let r = 0; r + 1 < rims.length; r++) {
+    const bottom = rims[r]!.pts, top = align(bottom, rims[r + 1]!.pts);
+    const angs = bottom.map(angleOf);
+    const v0 = rims[r]!.v, v1 = rims[r + 1]!.v;
+    const target = faceTarget(surface, targetEdge, chordTol, normalDev, angs[0]!, (v0 + v1) / 2);
+    const nRings = Math.max(1, Math.min(400, Math.ceil(d3(bottom[0]!, surface.evaluate(angs[0]!, v1)) / target)));
+    let prev = bottom;
+    for (let k = 1; k < nRings; k++) {
+      const vk = v0 + (v1 - v0) * (k / nRings);
+      const ring = angs.map((a) => surface.evaluate(a, vk));
+      stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
+      prev = ring;
+    }
+    stitchRings(verts, faceIds, prev, top, fid, surface, sign);
+  }
+  return true;
 }
 
 /** Distance from point q to a polyline (its nearest segment). */
@@ -549,7 +627,11 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           ? tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)
           : (!!outer && tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign));
       } else if (outer) {
-        ok = tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+        // Cylinders, cone frustums, etc. A full-revolution band whose rims are bare full-period
+        // circles (no seam edges, e.g. Onshape) can't be meshed by the param grid -> ribbon-stitch
+        // the rims; the band mesher returns false (and emits nothing) for any other case.
+        ok = (surface.periodicU && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
       }
       if (ok) facesTessellated++; else bump(skipped, "untriangulated");
     }
