@@ -343,6 +343,18 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   }
   if (missing === 0) return flood;
 
+  // Constraints unrealised — the (u,v) embedding collapsed (a thin-sliver B-spline parameter domain
+  // where distinct 3D points coincide / fall collinear, so the CDT triangulated across the boundary
+  // and shattered the face internally). For a single loop with no holes, discard the CDT result and
+  // re-triangulate the boundary ring directly by ear-clipping: this guarantees every boundary edge is
+  // a triangle edge — hence watertight with the neighbour, which shares those exact samples —
+  // regardless of how degenerate the embedding is. Interior points are dropped (the isotropic remesh
+  // re-adds density). Falls through to the geometric classification if the ring isn't ear-clippable.
+  if (loops.length === 1 && (loops[0]?.length ?? 0) >= 3) {
+    const ec: [number, number, number][] = [];
+    if (earClip(points, loops[0]!, ec) && ec.length > 0) return ec;
+  }
+
   // Some seam edge is unrealisable — a metric-collapsed boundary on a skewed B-spline patch. The
   // flood fill leaks through that gap and flips a whole connected region to "outside", opening half
   // the face's seam (one unenforced edge => hundreds of open edges). A GEOMETRIC classification
