@@ -355,9 +355,6 @@ export function makeSurface(t: Table, id: number, s: number): Surface | null {
     case "SPHERICAL_SURFACE":
       return new Sphere(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s);
     case "TOROIDAL_SURFACE":
-    // A degenerate (self-intersecting "apple/lemon") torus has the same fields; the trim loops keep the
-    // meshed region to the valid part, so the ordinary torus parametrisation serves.
-    case "DEGENERATE_TOROIDAL_SURFACE":
       return new Torus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s);
     case "OFFSET_SURFACE": {
       const base = makeSurface(t, ref(r.params[1]!), s);
