@@ -139,6 +139,31 @@ class Torus implements Surface {
   curvatureRadius(): number { return this.rMin; } // tube radius dominates
 }
 
+/** OFFSET_SURFACE: the basis surface pushed `dist` mm along its (unit) normal. Shares the basis
+ * parametrisation, so the boundary projects through the basis solver; the normal is unchanged and the
+ * point is shifted. project(p) maps to the basis (p sits one offset out along the normal — exact for a
+ * plane, a close seed for curved bases, which is all the boundary projection needs). */
+class OffsetSurface implements Surface {
+  kind = "OFFSET_SURFACE";
+  base: Surface; dist: number;
+  periodicU: boolean; periodicV?: boolean; uPeriod?: number; vPeriod?: number;
+  constructor(base: Surface, dist: number) {
+    this.base = base; this.dist = dist;
+    this.periodicU = base.periodicU; this.periodicV = base.periodicV;
+    this.uPeriod = base.uPeriod; this.vPeriod = base.vPeriod;
+  }
+  evaluate(u: number, v: number): Vec3 {
+    const p = this.base.evaluate(u, v), n = this.base.normal(u, v);
+    return [p[0] + n[0] * this.dist, p[1] + n[1] * this.dist, p[2] + n[2] * this.dist];
+  }
+  project(p: Vec3, hu?: number, hv?: number): [number, number] { return this.base.project(p, hu, hv); }
+  normal(u: number, v: number): Vec3 { return this.base.normal(u, v); }
+  curvatureRadius(u: number, v: number): number {
+    const r = this.base.curvatureRadius(u, v);
+    return Number.isFinite(r) ? Math.max(1e-3, r + this.dist) : Infinity;
+  }
+}
+
 // ---- B-spline (NURBS) surface --------------------------------------------------------------
 // Tensor-product de Boor on a single control row of homogeneous (wx,wy,wz,w) 4-vectors.
 function deBoorH(degree: number, ctrl: number[][], knots: number[], u: number): number[] {
@@ -330,9 +355,16 @@ export function makeSurface(t: Table, id: number, s: number): Surface | null {
     case "SPHERICAL_SURFACE":
       return new Sphere(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s);
     case "TOROIDAL_SURFACE":
+    // A degenerate (self-intersecting "apple/lemon") torus has the same fields; the trim loops keep the
+    // meshed region to the valid part, so the ordinary torus parametrisation serves.
+    case "DEGENERATE_TOROIDAL_SURFACE":
       return new Torus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s);
+    case "OFFSET_SURFACE": {
+      const base = makeSurface(t, ref(r.params[1]!), s);
+      return base ? new OffsetSurface(base, num(r.params[2]!) * s) : null;
+    }
     default:
-      return null; // swept / b-spline — phase 2
+      return null; // SURFACE_OF_LINEAR_EXTRUSION and other swept surfaces — phase 2
   }
 }
 
