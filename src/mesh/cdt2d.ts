@@ -390,9 +390,10 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // flood fill leaks through that gap and flips a whole connected region to "outside", opening half
   // the face's seam (one unenforced edge => hundreds of open edges). A GEOMETRIC classification
   // (centroid inside outer, outside holes) can't be leaked: a miss costs at most one triangle. But on
-  // a boundary that genuinely self-intersects in scaled (u,v) the even-odd rule keeps overlapping
-  // triangles that double-cover the seam against the neighbour (non-manifold), so there we keep the
-  // flood fill. Decide by testing the outer loop for a proper self-crossing.
+  // a boundary that genuinely self-intersects in scaled (u,v) — a closed-v B-spline patch whose seam
+  // unwrap tangled the loop — there is NO non-overlapping triangulation of that polygon: keeping
+  // either the flood or the geometric fill leaves a knot of double-covered (non-manifold) triangles.
+  // That chaos reads worse than a clean hole, so emit NOTHING and let the face be a small gap.
   const outerLoop = loops[0] ?? [];
   let selfCross = false;
   for (let i = 0; i < outerLoop.length && !selfCross; i++) {
@@ -403,7 +404,15 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
       if (segCross(a0, a1, b0, b1)) { selfCross = true; break; }
     }
   }
-  if (selfCross) return flood;
+  if (selfCross) {
+    // If the flood fill itself is manifold, keep it — a benign self-cross. Only when it double-covers
+    // (an edge shared by >2 triangles, i.e. an unavoidable knot on a tangled closed-v seam) is the
+    // chaos worse than a clean hole, so emit nothing for those.
+    const fe = new Map<number, number>();
+    for (const [a, b, cc] of flood) for (const [x, y] of [[a, b], [b, cc], [cc, a]] as const) fe.set(ckey(x, y), (fe.get(ckey(x, y)) ?? 0) + 1);
+    let floodNm = 0; for (const v of fe.values()) if (v > 2) floodNm++;
+    return floodNm > 0 ? [] : flood;
+  }
 
   const outerPoly = outerLoop.map((i) => points[i]!);
   const holePolys = loops.slice(1).map((l) => l.map((i) => points[i]!));
