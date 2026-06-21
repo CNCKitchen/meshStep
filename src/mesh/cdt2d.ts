@@ -198,6 +198,37 @@ function earClip(pts: P2[], ring: number[], out: [number, number, number][]): bo
 }
 
 /**
+ * Watertight fallback when the CDT can't realise a face's boundary constraints: ear-clip the outer
+ * ring (every boundary edge guaranteed present => watertight with the neighbour), THEN re-insert the
+ * interior points so the patch still follows the surface instead of spanning flat chords across a
+ * curved boundary. Each interior point splits its containing triangle into three — the original three
+ * edges survive as triangle edges, so neighbours stay matched (no T-junctions for strictly-interior
+ * points; points that miss every triangle, e.g. just outside the trimmed region, are skipped).
+ * Returns null if the ring isn't a clean simple polygon (caller keeps its other fallback).
+ */
+function boundaryFillWithInterior(pts: P2[], ring: number[], interior: number[]): [number, number, number][] | null {
+  const out: [number, number, number][] = [];
+  if (!earClip(pts, ring, out) || out.length === 0) return null;
+  for (const pi of interior) {
+    const p = pts[pi]!;
+    // Split only the triangle that STRICTLY contains pi (a clear margin from every edge). A point on
+    // (or hugging) a shared edge would split one side only and leave a T-junction = non-manifold; such
+    // points are simply skipped, costing a little interior density, never watertightness.
+    let found = -1;
+    for (let k = 0; k < out.length; k++) {
+      const [a, b, c] = out[k]!, A = pts[a]!, B = pts[b]!, C = pts[c]!;
+      const m = 1e-3 * Math.abs(orient(A, B, C));
+      if (orient(A, B, p) > m && orient(B, C, p) > m && orient(C, A, p) > m) { found = k; break; }
+    }
+    if (found < 0) continue;
+    const [a, b, c] = out[found]!;
+    out[found] = [a, b, pi];
+    out.push([b, c, pi], [c, a, pi]);
+  }
+  return out;
+}
+
+/**
  * Robustly enforce constraint edge a-b when flips couldn't: delete every triangle the segment
  * crosses, then ear-clip the two simple sub-polygons that the segment splits the cavity into.
  * Returns false (leaving the triangulation unchanged) if the cavity isn't a clean single loop.
@@ -346,13 +377,13 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // Constraints unrealised — the (u,v) embedding collapsed (a thin-sliver B-spline parameter domain
   // where distinct 3D points coincide / fall collinear, so the CDT triangulated across the boundary
   // and shattered the face internally). For a single loop with no holes, discard the CDT result and
-  // re-triangulate the boundary ring directly by ear-clipping: this guarantees every boundary edge is
-  // a triangle edge — hence watertight with the neighbour, which shares those exact samples —
-  // regardless of how degenerate the embedding is. Interior points are dropped (the isotropic remesh
-  // re-adds density). Falls through to the geometric classification if the ring isn't ear-clippable.
+  // re-triangulate from the boundary ring directly (ear-clip + interior re-insertion): this
+  // guarantees every boundary edge is a triangle edge — hence watertight with the neighbour, which
+  // shares those exact samples — while still following the surface through the interior points.
+  // Falls through to the geometric classification if the ring isn't a clean simple polygon.
   if (loops.length === 1 && (loops[0]?.length ?? 0) >= 3) {
-    const ec: [number, number, number][] = [];
-    if (earClip(points, loops[0]!, ec) && ec.length > 0) return ec;
+    const filled = boundaryFillWithInterior(points, loops[0]!, interior);
+    if (filled && filled.length > 0) return filled;
   }
 
   // Some seam edge is unrealisable — a metric-collapsed boundary on a skewed B-spline patch. The
