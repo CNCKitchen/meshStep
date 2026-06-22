@@ -1,0 +1,144 @@
+:root {
+  --bg: #0f1216;
+  --panel: #171c22;
+  --panel-2: #1d242c;
+  --line: #2a323b;
+  --text: #d7dee6;
+  --muted: #8b97a4;
+  --accent: #4a9eff;
+  --accent-2: #33dd88;
+  --danger: #ff3b30;
+  --radius: 8px;
+  font-family: ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); }
+#app { display: grid; grid-template-columns: 320px 1fr; height: 100vh; }
+
+/* ---- sidebar ---- */
+#sidebar {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.brand .logo { font-size: 26px; color: var(--accent); }
+.brand h1 { font-size: 18px; margin: 0; letter-spacing: 0.5px; }
+.brand p { margin: 0; font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 1.5px; }
+
+.panel {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.panel h2 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--muted); margin: 0 0 10px;
+}
+
+.field { margin-bottom: 10px; }
+.field label { display: block; font-size: 12px; margin-bottom: 4px; color: var(--text); }
+.unit { color: var(--muted); font-size: 11px; }
+input[type="number"] {
+  width: 100%; background: var(--bg); border: 1px solid var(--line);
+  color: var(--text); border-radius: 6px; padding: 7px 9px; font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+input[type="number"]:focus { outline: none; border-color: var(--accent); }
+
+.file { display: block; cursor: pointer; }
+.file input { display: none; }
+.file-btn {
+  display: block; text-align: center; background: var(--bg);
+  border: 1px dashed var(--line); border-radius: 6px; padding: 10px;
+  font-size: 13px; color: var(--muted); transition: 0.15s;
+}
+.file:hover .file-btn { border-color: var(--accent); color: var(--text); }
+.file input:disabled + .file-btn { opacity: 0.4; cursor: not-allowed; }
+.filename { font-size: 12px; color: var(--accent-2); margin: 8px 0 0; word-break: break-all; }
+
+button.primary {
+  width: 100%; background: var(--accent); color: #fff; border: none;
+  border-radius: 6px; padding: 10px; font-size: 14px; font-weight: 600;
+  cursor: pointer; margin-top: 4px; transition: 0.15s;
+}
+button.primary:hover { filter: brightness(1.1); }
+button.primary:disabled { background: var(--line); color: var(--muted); cursor: not-allowed; }
+
+.status { font-size: 12px; color: var(--muted); margin: 8px 0 0; min-height: 14px; }
+.status.error { color: var(--danger); }
+
+.toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; padding: 5px 0; cursor: pointer; }
+.toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
+.toggle input:disabled { opacity: 0.4; }
+
+.mini {
+  background: var(--bg); border: 1px solid var(--line); color: var(--muted);
+  font-size: 10px; border-radius: 4px; padding: 1px 6px; cursor: pointer; margin-left: 6px;
+}
+.mini:hover { color: var(--text); border-color: var(--accent); }
+
+/* legend */
+.legend { margin-top: 10px; }
+.legend-bar {
+  height: 12px; border-radius: 3px;
+  background: linear-gradient(to right, #4a4aff, #ffffff, #ff4a4a);
+}
+.legend-labels { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 3px; font-variant-numeric: tabular-nums; }
+.legend-meta { font-size: 11px; color: var(--muted); margin-top: 4px; font-variant-numeric: tabular-nums; }
+
+/* ---- stage ---- */
+#stage { position: relative; overflow: hidden; }
+#viewport { position: absolute; inset: 0; }
+#viewport canvas { display: block; }
+#viewport::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
+  width: 1px; background: var(--line); pointer-events: none;
+}
+.vp-label {
+  position: absolute; top: 12px; font-size: 12px; font-weight: 600;
+  background: rgba(0,0,0,0.45); padding: 5px 10px; border-radius: 5px;
+  color: var(--text); pointer-events: none; backdrop-filter: blur(4px);
+}
+.vp-left { left: 12px; }
+.vp-right { left: calc(50% + 12px); }
+.vp-stats {
+  position: absolute; bottom: 12px; font-size: 11px; color: var(--muted);
+  background: rgba(0,0,0,0.45); padding: 6px 10px; border-radius: 5px;
+  pointer-events: none; font-variant-numeric: tabular-nums; line-height: 1.5;
+  backdrop-filter: blur(4px); white-space: pre;
+}
+.vp-stats-left { left: 12px; }
+.vp-stats-right { left: calc(50% + 12px); }
+.hint {
+  position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
+  font-size: 11px; color: var(--muted); background: rgba(0,0,0,0.4);
+  padding: 4px 10px; border-radius: 5px; pointer-events: none;
+}
+.fit {
+  position: absolute; top: 12px; right: 12px; background: var(--panel-2);
+  border: 1px solid var(--line); color: var(--text); border-radius: 6px;
+  padding: 7px 12px; font-size: 12px; cursor: pointer;
+}
+.fit:hover { border-color: var(--accent); }
+
+.overlay {
+  position: absolute; inset: 0; background: rgba(10,12,15,0.78);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; z-index: 5; backdrop-filter: blur(2px);
+}
+/* `display: flex` above would otherwise override the [hidden] attribute. */
+.overlay[hidden] { display: none; }
+.overlay p { color: var(--text); font-size: 14px; }
+.spinner {
+  width: 38px; height: 38px; border: 3px solid var(--line);
+  border-top-color: var(--accent); border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }

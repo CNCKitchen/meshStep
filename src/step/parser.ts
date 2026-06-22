@@ -101,4 +101,4 @@ export function parseStep(src: string): StepModel {
 }
 
 // re-export for callers that only want the token kind type
-import type { TokKind } from "./tokenizer.ts";
+export type { TokKind } from "./tokenizer.ts";

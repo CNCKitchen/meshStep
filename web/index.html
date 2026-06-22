@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>meshStep · verification studio</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <header class="brand">
+          <span class="logo">▣</span>
+          <div>
+            <h1>meshStep</h1>
+            <p>verification studio</p>
+          </div>
+        </header>
+
+        <section class="panel">
+          <h2>1 · Input</h2>
+          <label class="file">
+            <input type="file" id="stepFile" accept=".step,.stp" />
+            <span class="file-btn">Choose STEP file…</span>
+          </label>
+          <p class="filename" id="stepName">No file loaded</p>
+        </section>
+
+        <section class="panel">
+          <h2>2 · Mesh settings</h2>
+          <div class="field">
+            <label for="surfaceDeviation">Surface deviation <span class="unit">mm</span></label>
+            <input type="number" id="surfaceDeviation" value="0.01" step="0.001" min="0.0001" />
+          </div>
+          <div class="field">
+            <label for="normalDeviation">Normal deviation <span class="unit">°</span></label>
+            <input type="number" id="normalDeviation" value="15" step="1" min="1" max="179" />
+          </div>
+          <div class="field">
+            <label for="maxEdge">Max edge length <span class="unit">mm</span></label>
+            <input type="number" id="maxEdge" value="1" step="0.1" min="0.01" />
+          </div>
+          <div class="field">
+            <label for="remeshIterations">Remesh iterations</label>
+            <input type="number" id="remeshIterations" value="8" step="1" min="1" max="40" />
+          </div>
+          <button id="convertBtn" class="primary" disabled>Convert</button>
+          <p class="status" id="status"></p>
+        </section>
+
+        <section class="panel">
+          <h2>3 · Display</h2>
+          <label class="toggle"><input type="checkbox" id="tWire" /> Wireframe (mesh)</label>
+          <label class="toggle"><input type="checkbox" id="tEdges" /> Highlight open edges</label>
+        </section>
+
+        <section class="panel">
+          <h2>4 · Reference STL</h2>
+          <label class="file">
+            <input type="file" id="refFile" accept=".stl" />
+            <span class="file-btn">Choose reference STL…</span>
+          </label>
+          <p class="filename" id="refName">No reference</p>
+          <label class="toggle"><input type="checkbox" id="tRef" disabled /> Overlay reference</label>
+          <label class="toggle"><input type="checkbox" id="tDev" disabled /> Color by deviation</label>
+          <div class="field" id="rangeField" hidden>
+            <label for="devRange">Color range ± <span class="unit">mm</span> <button id="autoRange" class="mini">auto</button></label>
+            <input type="number" id="devRange" step="0.01" min="0.001" />
+          </div>
+          <div class="legend" id="legend" hidden>
+            <div class="legend-bar"></div>
+            <div class="legend-labels">
+              <span id="legNeg">-</span><span>0</span><span id="legPos">+</span>
+            </div>
+            <div class="legend-meta" id="legMeta"></div>
+          </div>
+        </section>
+      </aside>
+
+      <main id="stage">
+        <div id="viewport"></div>
+        <div class="vp-label vp-left">Tessellated</div>
+        <div class="vp-label vp-right">Tessellated + Remeshed</div>
+        <div class="vp-stats vp-stats-left" id="statsLeft"></div>
+        <div class="vp-stats vp-stats-right" id="statsRight"></div>
+        <div class="hint">drag to orbit · scroll to zoom · views are synced</div>
+        <button id="fitBtn" class="fit">Fit view</button>
+        <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p></div>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
