@@ -652,6 +652,10 @@ function tessellateThinFace(
  * samples, so the ribbon stays watertight with its neighbours; the strip is thin enough that straight
  * rulings across it faithfully fill it. Returns false (emitting nothing) unless the boundary reduces to
  * exactly two rails — the caller then keeps its clean gap rather than a wrong fill.
+ *
+ * Deliberately NOT extended to chain >2 half-rails into inner/outer rings: an annulus whose two rings
+ * are far apart (a hole in a wide face) then lofts a spurious CAP across the hole, which is much worse
+ * than a clean gap. Only the unambiguous two-rail strip is filled.
  */
 function tessellateRibbon(
   surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
