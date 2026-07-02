@@ -411,7 +411,10 @@ export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface 
     case "CYLINDRICAL_SURFACE":
       return new Cylinder(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s);
     case "CONICAL_SURFACE":
-      return new Cone(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!));
+      // params: (name, placement, radius, semi_angle). The semi-angle is a PLANE ANGLE — scale it by
+      // the file's angle unit (aRad); degree-unit files (e.g. inch/ASME parts) otherwise get a cone
+      // half-angle ~57x too large, bulging every chamfer/taper far off its true boundary.
+      return new Cone(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * aRad);
     case "SPHERICAL_SURFACE":
       return new Sphere(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s);
     case "TOROIDAL_SURFACE":
