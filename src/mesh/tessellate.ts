@@ -641,6 +641,65 @@ function tessellateThinFace(
   return true;
 }
 
+/**
+ * Rail-ribbon fallback for a thin curved strip whose loops are DEGENERATE in parameter space — a
+ * counterbore/hole rim, a rounded-corner blend, a lens between two nearly-parallel curves. The param
+ * grid bails on these (the boundary projects to a ~zero-area sliver) and leaves a hole; the multi-loop
+ * ones never reach tessellateThinFace either (it only takes a single loop). Such a face's boundary
+ * reduces to exactly two distinct RAIL curves, however they are packaged: two edges of one loop (a
+ * lens), or two loops each doubled "there and back" (a pinched strip, as some kernels emit a fillet
+ * rim). We recover the two rails and loft a triangle ribbon between them. The rails ARE the shared edge
+ * samples, so the ribbon stays watertight with its neighbours; the strip is thin enough that straight
+ * rulings across it faithfully fill it. Returns false (emitting nothing) unless the boundary reduces to
+ * exactly two rails — the caller then keeps its clean gap rather than a wrong fill.
+ */
+function tessellateRibbon(
+  surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], sign: number,
+): boolean {
+  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const polys: Vec3[][] = [];
+  for (const lp of loops) for (const oe of lp.edges) {
+    const base = sampled.get(oe.edgeId);
+    if (!base || base.length < 2) continue;
+    polys.push(oe.orient ? base.slice() : base.slice().reverse());
+  }
+  if (polys.length < 2) return false;
+  // Merge edges that trace the SAME curve twice (a pinched seam: same endpoints AND same midpoint) —
+  // that doubled pair is one rail. Two edges sharing only endpoints but bowing apart (a lens) stay
+  // distinct: the midpoint test is what tells a zero-width seam from a real thin strip.
+  const mid = (p: Vec3[]): Vec3 => p[p.length >> 1]!;
+  const rails: Vec3[][] = [];
+  const used = new Array(polys.length).fill(false);
+  for (let i = 0; i < polys.length; i++) {
+    if (used[i]) continue;
+    used[i] = true;
+    const pi = polys[i]!;
+    for (let j = i + 1; j < polys.length; j++) {
+      if (used[j]) continue;
+      const pj = polys[j]!;
+      const reversed = d3(pi[0]!, pj[pj.length - 1]!) < 1e-6 && d3(pi[pi.length - 1]!, pj[0]!) < 1e-6;
+      if (reversed && d3(mid(pi), mid(pj)) < 1e-6) { used[j] = true; break; }
+    }
+    rails.push(pi);
+  }
+  if (rails.length !== 2) return false;
+  let c1 = rails[0]!, c2 = rails[1]!;
+  // Align so both rails run the same direction (c1[0] near c2[0]); stitch by arc-length fraction.
+  if (d3(c1[0]!, c2[0]!) > d3(c1[0]!, c2[c2.length - 1]!)) c2 = c2.slice().reverse();
+  const na = c1.length, nb = c2.length;
+  if (na < 2 || nb < 2) return false;
+  let i = 0, j = 0, emitted = 0;
+  while (i < na - 1 || j < nb - 1) {
+    if (j >= nb - 1 || (i < na - 1 && (i + 1) / na <= (j + 1) / nb)) {
+      emitTri(verts, faceIds, c1[i]!, c1[i + 1]!, c2[j]!, fid, surface, sign); i++; emitted++;
+    } else {
+      emitTri(verts, faceIds, c1[i]!, c2[j + 1]!, c2[j]!, fid, surface, sign); j++; emitted++;
+    }
+  }
+  return emitted > 0;
+}
+
 /** Cone: stack concentric rings from the shared base circle to the apex (cone is ruled by lines). */
 function tessellateCone(
   surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, brep: BrepModel, fid: number,
@@ -1058,7 +1117,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         // uses the SHARED edge samples (independent grids would crack against their neighbours).
         ok = (solid.faces.length === 1 && (surface.closedU || surface.closedV))
           ? tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)
-          : (!!outer && tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign));
+          : (!!outer && (tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)
+            || tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign)));
       } else if (outer) {
         // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
         //  1. band: rims are bare full-period circles (no seam edges, e.g. Onshape) with NO other
@@ -1069,7 +1129,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         const periodic = surface.periodicU || surface.periodicV;
         ok = (periodic && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
           || (periodic && tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-          || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+          || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)
+          || tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign);
       }
       if (ok) facesTessellated++; else bump(skipped, "untriangulated");
     }
