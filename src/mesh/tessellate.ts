@@ -161,6 +161,20 @@ function tessellateParamGrid(
   const holes = projected.filter((_, i) => i !== oi).map((p) => p.lp);
   if (surface.periodicU) for (const h of holes) shiftIntoRange(h.p2, (umin + umax) / 2, 0, surface.uPeriod || TWO_PI);
   if (surface.periodicV) for (const h of holes) shiftIntoRange(h.p2, (vmin + vmax) / 2, 1, surface.vPeriod || TWO_PI);
+  return gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+}
+
+/** CDT core shared by the trimmed-patch and seam-split meshers: interior grid + graded size field +
+ * Delaunay refinement over an explicit outer/hole boundary in continuous (u,v) coordinates. */
+function gridCDT(
+  surface: Surface, outer: { p3: Vec3[]; p2: P2[] }, holes: { p3: Vec3[]; p2: P2[] }[], fid: number,
+  verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
+): boolean {
+  let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
+  for (const q of outer.p2) {
+    if (q[0] < umin) umin = q[0]; if (q[0] > umax) umax = q[0];
+    if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1];
+  }
   const holeP2 = holes.map((h) => h.p2);
   const inRegion = (p: P2): boolean => pointInPoly(p, outer.p2) && !holeP2.some((h) => pointInPoly(p, h));
 
@@ -283,6 +297,98 @@ function tessellateParamGrid(
 }
 
 /**
+ * Seam-split ("unroll") mesher for a PERIODIC surface whose full-period rims arrive as SEPARATE
+ * loops (no seam edge joining them) AND which also carries interior window holes — a cylindrical /
+ * conical pocket wall with cut-outs, as some kernels emit. The band mesher bails (it can't subtract
+ * the windows) and the param grid bails (each bare rim projects to a zero-area horizontal line, so
+ * there's no enclosing outer loop). Here the periodic domain is cut at a seam chosen to miss every
+ * window, giving a rectangular (u,v) region: bottom rim along v=vlo, top rim along v=vhi, the two
+ * seam sides identical in 3D (so they weld into a watertight seam), windows as ordinary holes. The
+ * shared rim samples are reused verbatim, so the seam with the neighbouring cap/plane stays tight.
+ * Returns false (emitting nothing) unless there are exactly two full-period rims.
+ */
+function tessellatePeriodicUnroll(
+  surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
+): boolean {
+  const collect = (lp: BLoop): Vec3[] => {
+    const p3: Vec3[] = [];
+    for (const oe of lp.edges) {
+      const base = sampled.get(oe.edgeId); if (!base) continue;
+      const poly = oe.orient ? base : base.slice().reverse();
+      for (let i = 0; i < poly.length - 1; i++) p3.push(poly[i]!);
+    }
+    return p3;
+  };
+  // c = the wrapping ("around") coordinate; stackC = the one the rims are stacked along.
+  const attempt = (c: 0 | 1): boolean => {
+    const stackC: 0 | 1 = c === 0 ? 1 : 0;
+    const period = (c === 0 ? surface.uPeriod : surface.vPeriod) || TWO_PI;
+    const proj = loops.map((lp) => {
+      const p3 = collect(lp);
+      if (p3.length < 2) return null;
+      const p2: P2[] = [];
+      let hu: number | undefined, hv: number | undefined;
+      for (const pt of p3) { const q = surface.project(pt, hu, hv); p2.push(q); hu = q[0]; hv = q[1]; }
+      let wind = 0;
+      for (let i = 0; i < p2.length; i++) {
+        let d = p2[(i + 1) % p2.length]![c] - p2[i]![c];
+        while (d > period / 2) d -= period; while (d < -period / 2) d += period;
+        wind += d;
+      }
+      return { p3, p2, wind };
+    });
+    if (proj.some((p) => p === null)) return false;
+    const rims = proj.filter((p): p is NonNullable<typeof p> => Math.abs(p!.wind) >= 0.9 * period);
+    const holes = proj.filter((p): p is NonNullable<typeof p> => Math.abs(p!.wind) < 0.9 * period);
+    if (rims.length !== 2) return false;
+    const meanStack = (p: { p2: P2[] }): number => { let s = 0; for (const q of p.p2) s += q[stackC]; return s / p.p2.length; };
+    rims.sort((a, b) => meanStack(a) - meanStack(b));
+
+    // Seam in the widest window-free gap of the around-coordinate so no hole straddles the cut.
+    const norm = (x: number): number => ((x % period) + period) % period;
+    let seam: number;
+    const angs: number[] = [];
+    for (const h of holes) for (const q of h.p2) angs.push(norm(q[c]));
+    if (angs.length) {
+      angs.sort((a, b) => a - b);
+      let bestGap = -1; seam = 0;
+      for (let i = 0; i < angs.length; i++) {
+        const a = angs[i]!, b = i + 1 < angs.length ? angs[i + 1]! : angs[0]! + period;
+        if (b - a > bestGap) { bestGap = b - a; seam = (a + b) / 2; }
+      }
+    } else {
+      seam = norm(rims[0]!.p2[0]![c]);
+    }
+    const normTo = (x: number): number => { let d = (x - seam) % period; if (d < 0) d += period; return seam + d; };
+    const toP2 = (a: number, s: number): P2 => (c === 0 ? [a, s] : [s, a]);
+
+    // Rim -> polyline spanning [seam, seam+period], ascending in the around-coord, with a closing
+    // duplicate at seam+period (3D-identical to the start; it becomes the far seam corner).
+    const buildRim = (rim: { p3: Vec3[]; p2: P2[] }): { p3: Vec3[]; p2: P2[] } => {
+      const items = rim.p2.map((q, i) => ({ a: normTo(q[c]), s: q[stackC], p3: rim.p3[i]! }));
+      items.sort((x, y) => x.a - y.a);
+      const first = items[0]!;
+      items.push({ a: first.a + period, s: first.s, p3: first.p3 });
+      return { p3: items.map((it) => it.p3), p2: items.map((it) => toP2(it.a, it.s)) };
+    };
+    const bottom = buildRim(rims[0]!), top = buildRim(rims[1]!);
+    // Outer boundary: bottom left->right, then top right->left. The two vertical sides are the seam
+    // (same 3D line at seam and seam+period) -> weld closes it.
+    const outer = {
+      p3: [...bottom.p3, ...top.p3.slice().reverse()],
+      p2: [...bottom.p2, ...top.p2.slice().reverse()],
+    };
+    const holeLoops = holes.map((h) => ({
+      p3: h.p3,
+      p2: h.p2.map((q) => toP2(normTo(q[c]), q[stackC])),
+    }));
+    return gridCDT(surface, outer, holeLoops, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+  };
+  return (!!surface.periodicU && attempt(0)) || (!!surface.periodicV && attempt(1));
+}
+
+/**
  * Stitch two concentric (closed) rings of unequal point counts into a triangle band, advancing
  * whichever ring is behind in its angular fraction. Both rings must start at the same angle and run
  * the same way; a count-1 ring is a pole (fan). Shared by the cone / sphere / B-spline pole meshers.
@@ -395,18 +501,51 @@ function tessellateRevolutionBand(
       const bottom = band.bottom, top = align(bottom, band.top);
       const angs = bottom.map(angleOf);
       const h0 = band.from, h1 = band.from + band.width;
+      // Rims need not sit at constant stack height — a cylinder crossed by another cylinder has a
+      // WAVY intersection-curve rim. Loft PER ANGLE between the rims' true heights (blending only
+      // the stack coordinate keeps every ring on the surface); constant-height interior rings would
+      // fold across a wavy rim and leave open seams. Rims are matched by angular progress so
+      // unequal point counts interpolate cleanly; heights unwrap near the band for a periodic stack.
+      const hOf = (p: Vec3): number => surface.project(p)[1 - c]!;
+      const nearTo = (h: number, ref: number): number => {
+        if (!stackPeriodic) return h;
+        while (h - ref > stackPeriod / 2) h -= stackPeriod;
+        while (h - ref < -stackPeriod / 2) h += stackPeriod;
+        return h;
+      };
+      const progressOf = (pts: Vec3[]): number[] => {
+        const out = [0];
+        for (let i = 1; i < pts.length; i++) out.push(out[i - 1]! + Math.abs(wrap(angleOf(pts[i]!) - angleOf(pts[i - 1]!))));
+        return out;
+      };
+      const hB = bottom.map((p) => nearTo(hOf(p), h0));
+      const hT = top.map((p) => nearTo(hOf(p), h1));
+      const progB = progressOf(bottom), progT = progressOf(top);
+      const scaleT = progB[progB.length - 1]! > 1e-12 ? progT[progT.length - 1]! / progB[progB.length - 1]! : 1;
+      let ti = 0;
+      const hTopAt = (s: number): number => {
+        s *= scaleT; // map bottom progress into top progress domain
+        while (ti > 0 && progT[ti]! > s) ti--;
+        while (ti + 1 < progT.length && progT[ti + 1]! < s) ti++;
+        if (ti + 1 >= progT.length) return hT[hT.length - 1]!;
+        const d = progT[ti + 1]! - progT[ti]!;
+        const f = d > 1e-12 ? (s - progT[ti]!) / d : 0;
+        return hT[ti]! + (hT[(ti + 1) % hT.length]! - hT[ti]!) * Math.max(0, Math.min(1, f));
+      };
       const target = faceTarget(surface, targetEdge, chordTol, normalDev, c === 0 ? angs[0]! : (h0 + h1) / 2, c === 0 ? (h0 + h1) / 2 : angs[0]!);
       // Ring count from the LONGEST stack traverse over a few sample angles (a torus elbow's outer
       // side is much longer than its inner side).
       let span = 0;
       for (let j = 0; j < angs.length; j += Math.max(1, angs.length >> 3)) {
-        span = Math.max(span, d3(bottom[j]!, evalAt(c, angs[j]!, h1)));
+        ti = 0;
+        span = Math.max(span, d3(bottom[j]!, evalAt(c, angs[j]!, hTopAt(progB[j]!))));
       }
       const nRings = Math.max(1, Math.min(400, Math.ceil(span / target)));
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
-        const hk = h0 + band.width * (k / nRings);
-        const ring = angs.map((a) => evalAt(c, a, hk));
+        ti = 0;
+        const f = k / nRings;
+        const ring = angs.map((a, j) => evalAt(c, a, hB[j]! + (hTopAt(progB[j]!) - hB[j]!) * f));
         stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
         prev = ring;
       }
@@ -820,10 +959,15 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           ? tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)
           : (!!outer && tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign));
       } else if (outer) {
-        // Cylinders, cone frustums, etc. A full-revolution band whose rims are bare full-period
-        // circles (no seam edges, e.g. Onshape) can't be meshed by the param grid -> ribbon-stitch
-        // the rims; the band mesher returns false (and emits nothing) for any other case.
-        ok = (surface.periodicU && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+        // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
+        //  1. band: rims are bare full-period circles (no seam edges, e.g. Onshape) with NO other
+        //     loops -> ribbon-stitch the rims directly. Bails on anything else.
+        //  2. unroll: bare full-period rims PLUS window holes -> seam-split into a rectangular (u,v)
+        //     domain and CDT with the windows as holes. Bails unless there are exactly two rims.
+        //  3. param grid: everything with a proper seam-bounded outer loop (the common case).
+        const periodic = surface.periodicU || surface.periodicV;
+        ok = (periodic && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || (periodic && tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
           || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
       }
       if (ok) facesTessellated++; else bump(skipped, "untriangulated");
