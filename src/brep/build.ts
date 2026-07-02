@@ -7,6 +7,7 @@ import { Table, ref, refList, enumOf } from "../step/entities.ts";
 import { parseStep } from "../step/parser.ts";
 import { detectUnits, type Units } from "../step/units.ts";
 import { readPoint, readPlacement, type Frame } from "../geom/placement.ts";
+import { makeCurve } from "../geom/curves.ts";
 
 export interface BEdge {
   v0: Vec3;
@@ -155,7 +156,13 @@ export function buildBrep(src: string): BrepModel {
     return refList(rec.params[1]!).map((fid) => ({ fid, flip }));
   };
   const buildFace = (fid: number, flip: boolean): BFace => {
-    const f = table.record(fid); // ADVANCED_FACE(name, (bound#...), surface#, sameSense)
+    let f = table.record(fid); // ADVANCED_FACE(name, (bound#...), surface#, sameSense)
+    // ORIENTED_FACE(name, *, face#, orient) wraps a base face; orient=.F. reverses it.
+    while (f.type === "ORIENTED_FACE") {
+      flip = flip !== (enumOf(f.params[3]!) !== "T");
+      fid = ref(f.params[2]!);
+      f = table.record(fid);
+    }
     const surfaceId = ref(f.params[2]!);
     const loops: BLoop[] = [];
     for (const bId of refList(f.params[1]!)) {
@@ -172,12 +179,55 @@ export function buildBrep(src: string): BrepModel {
   const solids: BSolid[] = [];
   const addSolid = (sid: number, shellIds: number[]): void => {
     const faces: BFace[] = [];
-    for (const shellId of shellIds) for (const sf of resolveShellFaces(shellId, false)) faces.push(buildFace(sf.fid, sf.flip));
+    // A malformed face (unexpected record layout from an exotic kernel) must not kill the whole
+    // file — drop it and let the tessellator report the gap via stats.
+    for (const shellId of shellIds) for (const sf of resolveShellFaces(shellId, false)) {
+      try { faces.push(buildFace(sf.fid, sf.flip)); } catch { /* skipped face */ }
+    }
     if (faces.length > 0) solids.push({ id: sid, faces });
   };
   // MANIFOLD_SOLID_BREP(name, outer_shell); BREP_WITH_VOIDS(name, outer_shell, (void_shells)).
   for (const [sid, msb] of table.byType("MANIFOLD_SOLID_BREP")) addSolid(sid, [ref(msb.params[1]!)]);
   for (const [sid, bwv] of table.byType("BREP_WITH_VOIDS")) addSolid(sid, [ref(bwv.params[1]!), ...refList(bwv.params[2]!)]);
+
+  // Shell-based surface models: SHELL_BASED_SURFACE_MODEL(name, (shell#...)) — open/closed shells of
+  // ADVANCED_FACEs without a solid wrapper. Same face machinery, one synthetic solid per model.
+  if (solids.length === 0) {
+    for (const [sid, sbsm] of table.byType("SHELL_BASED_SURFACE_MODEL")) addSolid(sid, refList(sbsm.params[1]!));
+  }
+
+  // AP203-era bounded-surface models (GEOMETRIC_SET): CURVE_BOUNDED_SURFACE(name, basis#,
+  // (boundary#...), implicit_outer) has no EDGE_CURVE topology; each boundary is a composite curve
+  // of trimmed segments. Synthesize one edge per segment so the shared pipeline (sample once ->
+  // param-grid tessellation) applies unchanged. Only consulted when the file has no solid B-rep.
+  if (solids.length === 0) {
+    const faces: BFace[] = [];
+    for (const [cbsId, cbs] of table.byType("CURVE_BOUNDED_SURFACE")) {
+      try {
+        const surfaceId = ref(cbs.params[1]!);
+        const loops: BLoop[] = [];
+        for (const bId of refList(cbs.params[2]!)) {
+          const b = table.record(bId); // (OUTER_)BOUNDARY_CURVE(name, (segment#...), self_intersect)
+          const oedges: OrientedEdge[] = [];
+          for (const segId of refList(b.params[1]!)) {
+            const seg = table.record(segId); // COMPOSITE_CURVE_SEGMENT(transition, same_sense, curve#)
+            const curveId = ref(seg.params[2]!);
+            const c = makeCurve(table, curveId, s, units.radPerAngle);
+            if (!c) continue;
+            const sameSense = enumOf(seg.params[1]!) === "T";
+            const a = c.evaluate(c.t0), z = c.evaluate(c.t1);
+            edges.set(segId, { v0: sameSense ? a : z, v1: sameSense ? z : a, curveId, sameSense });
+            oedges.push({ edgeId: segId, orient: true });
+          }
+          if (oedges.length > 0) loops.push({ outer: b.type === "OUTER_BOUNDARY_CURVE", edges: oedges });
+        }
+        if (loops.length > 0) {
+          faces.push({ faceId: cbsId, surfaceId, sameSense: true, surfaceKind: table.typeOf(surfaceId) ?? "(complex)", loops });
+        }
+      } catch { /* skip malformed surface */ }
+    }
+    if (faces.length > 0) solids.push({ id: 0, faces });
+  }
 
   // Position each part by its STEP assembly placement (identity for a single-part file).
   const xforms = assemblyTransforms(table, s);

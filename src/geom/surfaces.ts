@@ -4,8 +4,9 @@
 // erasable TypeScript so Node's native type-stripping can run these files.)
 import type { Vec3 } from "./vec.ts";
 import { add, cross, dot, normalize, scale, sub } from "./vec.ts";
-import { readPlacement, readPoint, type Frame } from "./placement.ts";
+import { readPlacement, readPoint, readDirection, type Frame } from "./placement.ts";
 import { Table, num, ref, list, numList } from "../step/entities.ts";
+import { makeCurve, type Curve3 } from "./curves.ts";
 
 export interface Surface {
   kind: string;
@@ -162,6 +163,56 @@ class OffsetSurface implements Surface {
     const r = this.base.curvatureRadius(u, v);
     return Number.isFinite(r) ? Math.max(1e-3, r + this.dist) : Infinity;
   }
+}
+
+/** SURFACE_OF_LINEAR_EXTRUSION: the basis curve swept along a vector, S(u,v) = C(u) + v·axis.
+ * u is the curve parameter, v the (unitless) multiple of the extrusion vector. */
+class ExtrusionSurface implements Surface {
+  kind = "SURFACE_OF_LINEAR_EXTRUSION";
+  curve: Curve3;
+  axis: Vec3;        // full extrusion vector (direction · magnitude, mm)
+  axisUnit: Vec3;
+  axisLen: number;
+  periodicU: boolean;
+  uPeriod?: number;
+  constructor(curve: Curve3, axis: Vec3) {
+    this.curve = curve; this.axis = axis;
+    this.axisLen = Math.max(1e-12, Math.hypot(axis[0], axis[1], axis[2]));
+    this.axisUnit = [axis[0] / this.axisLen, axis[1] / this.axisLen, axis[2] / this.axisLen];
+    this.periodicU = curve.closed;
+    if (curve.closed) this.uPeriod = curve.t1 - curve.t0;
+  }
+  evaluate(u: number, v: number): Vec3 {
+    if (this.periodicU && this.uPeriod) {
+      u = this.curve.t0 + (((u - this.curve.t0) % this.uPeriod) + this.uPeriod) % this.uPeriod;
+    }
+    const p = this.curve.evaluate(u);
+    return [p[0] + this.axis[0] * v, p[1] + this.axis[1] * v, p[2] + this.axis[2] * v];
+  }
+  project(p: Vec3): [number, number] {
+    // Alternate the two 1D solves; converges immediately when the axis is normal to the curve
+    // plane (the usual case) and in a few rounds for oblique sweeps.
+    let u = this.curve.project(p);
+    let v = 0;
+    for (let it = 0; it < 3; it++) {
+      const c = this.curve.evaluate(u);
+      v = ((p[0] - c[0]) * this.axisUnit[0] + (p[1] - c[1]) * this.axisUnit[1] + (p[2] - c[2]) * this.axisUnit[2]) / this.axisLen;
+      const q: Vec3 = [p[0] - this.axis[0] * v, p[1] - this.axis[1] * v, p[2] - this.axis[2] * v];
+      const u2 = this.curve.project(q);
+      if (Math.abs(u2 - u) < 1e-10) { u = u2; break; }
+      u = u2;
+    }
+    return [u, v];
+  }
+  normal(u: number, v: number): Vec3 {
+    const e = 1e-5 * Math.max(1, this.curve.t1 - this.curve.t0);
+    const a = this.curve.evaluate(u - e), b = this.curve.evaluate(u + e);
+    const tang: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    const n = cross(tang, this.axis);
+    const len = Math.hypot(n[0], n[1], n[2]);
+    return len > 1e-12 ? [n[0] / len, n[1] / len, n[2] / len] : [0, 0, 1];
+  }
+  curvatureRadius(): number { return this.curve.minRadius(); }
 }
 
 // ---- B-spline (NURBS) surface --------------------------------------------------------------
@@ -339,11 +390,20 @@ function makeBSplineSurface(t: Table, id: number, s: number): BSplineSurface | n
 }
 
 /** Construct a Surface from a STEP surface entity; returns null for unsupported. */
-export function makeSurface(t: Table, id: number, s: number): Surface | null {
+export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface | null {
   const kind = t.typeOf(id);
   if (!kind) return makeBSplineSurface(t, id, s); // complex (rational B-spline) surface
   const r = t.record(id);
   switch (kind) {
+    case "SURFACE_OF_LINEAR_EXTRUSION": {
+      // (name, swept_curve#, extrusion_axis#) — the axis is a VECTOR(name, direction#, magnitude).
+      const curve = makeCurve(t, ref(r.params[1]!), s, aRad);
+      if (!curve) return null;
+      const vec = t.record(ref(r.params[2]!));
+      const dir = readDirection(t, ref(vec.params[1]!));
+      const mag = num(vec.params[2]!) * s;
+      return new ExtrusionSurface(curve, [dir[0] * mag, dir[1] * mag, dir[2] * mag]);
+    }
     case "B_SPLINE_SURFACE_WITH_KNOTS":
       return makeBSplineSurface(t, id, s);
     case "PLANE":

@@ -67,7 +67,7 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   const solidOfFace = new Map<number, number>();
   for (const solid of brep.solids) {
     for (const face of solid.faces) {
-      surf.set(face.faceId, makeSurface(brep.table, face.surfaceId, brep.scale));
+      surf.set(face.faceId, makeSurface(brep.table, face.surfaceId, brep.scale, brep.units.radPerAngle));
       solidOfFace.set(face.faceId, solid.id);
     }
   }

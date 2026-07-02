@@ -312,54 +312,110 @@ function tessellateRevolutionBand(
   surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
 ): boolean {
-  const period = surface.uPeriod || TWO_PI;
-  const angleOf = (p: Vec3): number => surface.project(p)[0];
   const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-  const rims: { pts: Vec3[]; v: number }[] = [];
-  for (const lp of loops) {
-    const pts: Vec3[] = [];
-    for (const oe of lp.edges) {
-      const base = sampled.get(oe.edgeId); if (!base) continue;
-      const poly = oe.orient ? base : base.slice().reverse();
-      for (let i = 0; i < poly.length - 1; i++) pts.push(poly[i]!);
-    }
-    if (pts.length < 3) return false;
-    let umin = Infinity, umax = -Infinity, vsum = 0;
-    for (const p of pts) { const [u, v] = surface.project(p); if (u < umin) umin = u; if (u > umax) umax = u; vsum += v; }
-    if (umax - umin < 0.9 * period) return false; // a partial arc, not a full-period rim
-    rims.push({ pts, v: vsum / pts.length });
-  }
-  if (rims.length < 2) return false;
-  rims.sort((a, b) => a.v - b.v);
+  // c = the coordinate the rims WIND in (0: u-rims stacked along v, e.g. a drilled hole; 1: v-rims
+  // stacked along u, e.g. a torus tube segment — a pipe elbow's ends are tube cross-sections).
+  const evalAt = (c: 0 | 1, ang: number, h: number): Vec3 => (c === 0 ? surface.evaluate(ang, h) : surface.evaluate(h, ang));
 
-  const wrap = (d: number): number => { while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; return d; };
-  // Rotate/flip `ring` so it starts at `ref[0]`'s angle and runs the same rotational direction.
-  const align = (ref: Vec3[], ring: Vec3[]): Vec3[] => {
-    const a0 = angleOf(ref[0]!);
-    const dirRef = wrap(angleOf(ref[1]!) - a0) >= 0 ? 1 : -1;
-    const r = ring.slice();
-    if ((wrap(angleOf(r[1]!) - angleOf(r[0]!)) >= 0 ? 1 : -1) !== dirRef) r.reverse();
-    let bi = 0, bd = Infinity;
-    for (let i = 0; i < r.length; i++) { const dd = Math.abs(wrap(angleOf(r[i]!) - a0)); if (dd < bd) { bd = dd; bi = i; } }
-    return [...r.slice(bi), ...r.slice(0, bi)];
+  const bandAlong = (c: 0 | 1): boolean => {
+    const period = (c === 0 ? surface.uPeriod : surface.vPeriod) || TWO_PI;
+    const stackPeriodic = c === 0 ? !!surface.periodicV : !!surface.periodicU;
+    const stackPeriod = (c === 0 ? surface.vPeriod : surface.uPeriod) || TWO_PI;
+    const angleOf = (p: Vec3): number => surface.project(p)[c];
+    const rims: { pts: Vec3[]; h: number; wind: number }[] = [];
+    for (const lp of loops) {
+      const pts: Vec3[] = [];
+      for (const oe of lp.edges) {
+        const base = sampled.get(oe.edgeId); if (!base) continue;
+        const poly = oe.orient ? base : base.slice().reverse();
+        for (let i = 0; i < poly.length - 1; i++) pts.push(poly[i]!);
+      }
+      if (pts.length < 3) return false;
+      // Full-period rim by WINDING NUMBER (sum of wrapped angular steps around the closed loop) OR
+      // by span. Winding catches coarsely sampled rims — 8 points around a tiny circle span only
+      // 7π/4, failing the span test, yet wind exactly ±period. Span catches rims that carry seam
+      // edges and double back (net winding 0) which the old mesher still stitched acceptably.
+      let wind = 0, amin = Infinity, amax = -Infinity, hcos = 0, hsin = 0, hsum = 0;
+      const as: number[] = [];
+      for (const p of pts) {
+        const uv = surface.project(p);
+        const a = uv[c], h = uv[1 - c]!;
+        as.push(a); hsum += h;
+        // Circular mean for a periodic stack coordinate (rim points may straddle its seam).
+        hcos += Math.cos((h * TWO_PI) / stackPeriod); hsin += Math.sin((h * TWO_PI) / stackPeriod);
+        if (a < amin) amin = a; if (a > amax) amax = a;
+      }
+      for (let i = 0; i < as.length; i++) {
+        let d = as[(i + 1) % as.length]! - as[i]!;
+        while (d > period / 2) d -= period; while (d < -period / 2) d += period;
+        wind += d;
+      }
+      if (Math.abs(wind) < 0.9 * period && amax - amin < 0.9 * period) return false; // partial arc
+      const h = stackPeriodic ? (Math.atan2(hsin, hcos) * stackPeriod) / TWO_PI : hsum / pts.length;
+      rims.push({ pts, h, wind });
+    }
+    if (rims.length < 2) return false;
+
+    // Order the rims along the stack coordinate. Non-periodic stack (cylinder/cone v): plain sort.
+    // Periodic stack (torus): "between h0 and h1" is ambiguous (two arcs) — use the boundary
+    // orientation: a CCW face in (u,v) travels its v0 rim in +u and its v1 rim in -u (c=0), and its
+    // u1 rim in +v and u0 rim in -v (c=1), so the winding SIGN says which rim starts the stack.
+    let stack: { from: number; width: number; bottom: Vec3[]; top: Vec3[] }[] = [];
+    if (!stackPeriodic) {
+      rims.sort((a, b) => a.h - b.h);
+      for (let r = 0; r + 1 < rims.length; r++) {
+        stack.push({ from: rims[r]!.h, width: rims[r + 1]!.h - rims[r]!.h, bottom: rims[r]!.pts, top: rims[r + 1]!.pts });
+      }
+    } else {
+      if (rims.length !== 2) return false;
+      const want = c === 0 ? 1 : -1; // winding sign (after sameSense) of the rim the stack STARTS at
+      const A = rims.find((r) => Math.sign(r.wind) * sign === want);
+      const B = rims.find((r) => r !== A);
+      if (!A || !B) return false;
+      let width = (B.h - A.h) % stackPeriod;
+      if (width <= 1e-9) width += stackPeriod;
+      if (width >= stackPeriod - 1e-9) return false; // degenerate: rims coincide in stack coordinate
+      stack.push({ from: A.h, width, bottom: A.pts, top: B.pts });
+    }
+
+    const half = period / 2;
+    const wrap = (d: number): number => { while (d > half) d -= period; while (d < -half) d += period; return d; };
+    // Rotate/flip `ring` so it starts at `ref[0]`'s angle and runs the same rotational direction.
+    const align = (ref: Vec3[], ring: Vec3[]): Vec3[] => {
+      const a0 = angleOf(ref[0]!);
+      const dirRef = wrap(angleOf(ref[1]!) - a0) >= 0 ? 1 : -1;
+      const r = ring.slice();
+      if ((wrap(angleOf(r[1]!) - angleOf(r[0]!)) >= 0 ? 1 : -1) !== dirRef) r.reverse();
+      let bi = 0, bd = Infinity;
+      for (let i = 0; i < r.length; i++) { const dd = Math.abs(wrap(angleOf(r[i]!) - a0)); if (dd < bd) { bd = dd; bi = i; } }
+      return [...r.slice(bi), ...r.slice(0, bi)];
+    };
+
+    for (const band of stack) {
+      const bottom = band.bottom, top = align(bottom, band.top);
+      const angs = bottom.map(angleOf);
+      const h0 = band.from, h1 = band.from + band.width;
+      const target = faceTarget(surface, targetEdge, chordTol, normalDev, c === 0 ? angs[0]! : (h0 + h1) / 2, c === 0 ? (h0 + h1) / 2 : angs[0]!);
+      // Ring count from the LONGEST stack traverse over a few sample angles (a torus elbow's outer
+      // side is much longer than its inner side).
+      let span = 0;
+      for (let j = 0; j < angs.length; j += Math.max(1, angs.length >> 3)) {
+        span = Math.max(span, d3(bottom[j]!, evalAt(c, angs[j]!, h1)));
+      }
+      const nRings = Math.max(1, Math.min(400, Math.ceil(span / target)));
+      let prev = bottom;
+      for (let k = 1; k < nRings; k++) {
+        const hk = h0 + band.width * (k / nRings);
+        const ring = angs.map((a) => evalAt(c, a, hk));
+        stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
+        prev = ring;
+      }
+      stitchRings(verts, faceIds, prev, top, fid, surface, sign);
+    }
+    return true;
   };
 
-  for (let r = 0; r + 1 < rims.length; r++) {
-    const bottom = rims[r]!.pts, top = align(bottom, rims[r + 1]!.pts);
-    const angs = bottom.map(angleOf);
-    const v0 = rims[r]!.v, v1 = rims[r + 1]!.v;
-    const target = faceTarget(surface, targetEdge, chordTol, normalDev, angs[0]!, (v0 + v1) / 2);
-    const nRings = Math.max(1, Math.min(400, Math.ceil(d3(bottom[0]!, surface.evaluate(angs[0]!, v1)) / target)));
-    let prev = bottom;
-    for (let k = 1; k < nRings; k++) {
-      const vk = v0 + (v1 - v0) * (k / nRings);
-      const ring = angs.map((a) => surface.evaluate(a, vk));
-      stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
-      prev = ring;
-    }
-    stitchRings(verts, faceIds, prev, top, fid, surface, sign);
-  }
-  return true;
+  return (!!surface.periodicU && bandAlong(0)) || (!!surface.periodicV && bandAlong(1));
 }
 
 /** Distance from point q to a polyline (its nearest segment). */
@@ -440,9 +496,15 @@ function tessellateCone(
   // Only a genuine apex cone (exactly one circle rim, tapering to a point) is handled here; a
   // frustum / trimmed cone has 2+ circle rims or straight sides and must go through the param grid
   // (which uses the shared edge samples on every side, so it stays watertight with its neighbours).
+  // A rim is a CIRCLE edge or any closed sampled loop (e.g. an INTERSECTION_CURVE wrapping a
+  // circle in legacy AP203 files) — the curve TYPE doesn't matter, the closed ring does.
   const circleEdges = loop.edges.filter((oe) => {
     const e = brep.edges.get(oe.edgeId);
-    return e && brep.table.typeOf(e.curveId) === "CIRCLE";
+    if (!e) return false;
+    if (brep.table.typeOf(e.curveId) === "CIRCLE") return true;
+    const p = sampled.get(oe.edgeId);
+    return !!p && p.length >= 4
+      && Math.hypot(e.v0[0] - e.v1[0], e.v0[1] - e.v1[1], e.v0[2] - e.v1[2]) < 1e-9;
   });
   if (circleEdges.length !== 1) return false;
   const oe0 = circleEdges[0]!;
@@ -692,7 +754,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // Cache each face's surface (used to dispatch tessellation).
   const faceSurf = new Map<number, Surface | null>();
   for (const solid of brep.solids) for (const face of solid.faces) {
-    faceSurf.set(face.faceId, makeSurface(brep.table, face.surfaceId, brep.scale));
+    faceSurf.set(face.faceId, makeSurface(brep.table, face.surfaceId, brep.scale, brep.units.radPerAngle));
   }
   // Sample each edge to the FINEST interior target of its adjacent faces — not just its own curve
   // curvature. A curved face's straight seam / side edges (lines carry no curvature, so they'd be
@@ -711,7 +773,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const sampled = new Map<number, Vec3[]>();
   for (const [id, e] of brep.edges) {
     const te = edgeMaxLen.get(id) ?? targetEdge;
-    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, brep.scale, chordTol, te));
+    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, brep.scale, chordTol, te, brep.units.radPerAngle));
   }
 
   // Weld each body independently so touching bodies don't merge into non-manifold edges.
@@ -815,7 +877,19 @@ function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; 
   const use = new Map<number, number>();
   for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) { const k = ek(I[i + e]!, I[i + (e + 1) % 3]!); use.set(k, (use.get(k) ?? 0) + 1); }
   const openV = new Set<number>();
-  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) { const a = I[i + e]!, b = I[i + (e + 1) % 3]!; if (use.get(ek(a, b)) === 1) { openV.add(a); openV.add(b); } }
+  // Per-vertex weld cap = half its shortest incident open-edge segment: on a part with
+  // sub-tolerance features (micro-fillets, fine threads) the fixed tol exceeds real feature
+  // spacing and would weld distinct geometry into non-manifold garbage. A sliver gap is always
+  // far narrower than its rails' own segment length, so this cap never blocks a genuine zip.
+  const vCap = new Map<number, number>();
+  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+    const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
+    if (use.get(ek(a, b)) === 1) {
+      openV.add(a); openV.add(b);
+      const L = Math.hypot(P[a * 3]! - P[b * 3]!, P[a * 3 + 1]! - P[b * 3 + 1]!, P[a * 3 + 2]! - P[b * 3 + 2]!);
+      vCap.set(a, Math.min(vCap.get(a) ?? Infinity, L)); vCap.set(b, Math.min(vCap.get(b) ?? Infinity, L));
+    }
+  }
   if (!openV.size) return { positions: P, indices: I, keep: keepAll() };
 
   // Union-find; representative = lowest index (keeps a stable surviving vertex).
@@ -831,7 +905,8 @@ function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; 
   // Weld each open vertex to its nearest open vertex within tol that it does NOT already share a
   // triangle edge with (across-gap partners are unconnected; along-rail neighbours are connected).
   for (const v of openV) {
-    let best = -1, bestD = tol * tol;
+    const cap = Math.min(tol, 0.5 * (vCap.get(v) ?? Infinity));
+    let best = -1, bestD = cap * cap;
     const cx = Math.round(px(v) / cell), cy = Math.round(py(v) / cell), cz = Math.round(pz(v) / cell);
     for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) for (let gz = -1; gz <= 1; gz++) {
       for (const w of hash.get(`${cx + gx},${cy + gy},${cz + gz}`) ?? []) {
