@@ -17,6 +17,12 @@ mkdirSync(outDir, { recursive: true });
 const only = process.argv[2];
 const files = readdirSync(inDir).filter((x) => /\.(stp|step)$/i.test(x)).filter((x) => !only || x.includes(only)).sort();
 
+// Optional overrides to match a CAD tessellation export (else a part-relative heuristic is used):
+//   MESH_CHORD=0.0015 MESH_NORMDEV=10 MESH_MAXEDGE=85 node test/export-corpus-stl.ts OpenVessel
+const envChord = process.env.MESH_CHORD ? Number(process.env.MESH_CHORD) : null;
+const envNormDev = process.env.MESH_NORMDEV ? Number(process.env.MESH_NORMDEV) : null;
+const envMaxEdge = process.env.MESH_MAXEDGE ? Number(process.env.MESH_MAXEDGE) : null;
+
 let ok = 0, fail = 0;
 for (const f of files) {
   const base = f.replace(/\.[^.]+$/, "");
@@ -27,10 +33,11 @@ for (const f of files) {
     let lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
     for (const e of brep.edges.values()) for (const v of [e.v0, e.v1]) for (let k = 0; k < 3; k++) { if (v[k]! < lo[k]!) lo[k] = v[k]!; if (v[k]! > hi[k]!) hi[k] = v[k]!; }
     const diag = Number.isFinite(hi[0]!) ? Math.hypot(hi[0]! - lo[0]!, hi[1]! - lo[1]!, hi[2]! - lo[2]!) : 0;
-    const maxEdge = Math.max(0.5, diag / 120);
-    const surfaceDev = Math.max(0.01, diag / 4000);
+    const maxEdge = envMaxEdge ?? Math.max(0.5, diag / 120);
+    const surfaceDev = envChord ?? Math.max(0.01, diag / 4000);
+    const normalDev = (envNormDev ?? 15) * Math.PI / 180;
     const t0 = Date.now();
-    const res = tessellate(brep, { chordTol: surfaceDev, targetEdge: maxEdge, normalDev: 15 * Math.PI / 180 });
+    const res = tessellate(brep, { chordTol: surfaceDev, targetEdge: maxEdge, normalDev });
     const nt = res.mesh.indices.length / 3;
     writeFileSync(join(outDir, `${base}.stl`), writeBinarySTL(res.mesh));
     console.log(`OK   ${f.padEnd(38)} ${String(nt).padStart(8)} tris -> stl_out/${base}.stl (${Date.now() - t0}ms)`);

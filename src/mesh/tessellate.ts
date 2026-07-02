@@ -123,11 +123,17 @@ function shiftIntoRange(p2: P2[], target: number, c: 0 | 1, period = TWO_PI): vo
 }
 
 /** Isotropic interior edge target (mm) for a face: capped by curvature (chord + normal deviation)
- * so curved faces are finely sampled, by targetEdge on flat ones, with a floor to bound density. */
+ * so curved faces are finely sampled, by targetEdge on flat ones, with a floor to bound density.
+ * The floor must NOT scale with targetEdge alone: a CAD-style export sets a huge max edge (85 mm) to
+ * mean "don't cap by length, follow curvature", and targetEdge/40 would then be ~2 mm and coarsen
+ * every fillet. Floor at the finer of targetEdge/40 and 30·chordTol so curvature drives the density
+ * whenever the max edge is large, while small-target corpus runs (30·chordTol ≫ targetEdge/40) keep
+ * their existing floor unchanged. */
 function faceTarget(surface: Surface, targetEdge: number, chordTol: number, normalDev: number, u = 0, v = 0): number {
   const Rc = surface.curvatureRadius(u, v);
+  const floor = Math.min(targetEdge / 40, 30 * chordTol);
   return Number.isFinite(Rc)
-    ? Math.max(targetEdge / 40, Math.min(targetEdge, Math.sqrt(8 * Rc * chordTol), Rc * normalDev))
+    ? Math.max(floor, Math.min(targetEdge, Math.sqrt(8 * Rc * chordTol), Rc * normalDev))
     : targetEdge;
 }
 
