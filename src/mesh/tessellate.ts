@@ -815,8 +815,14 @@ function tessellateSphereCap(
   s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
   verts: number[], faceIds: number[], chordTol: number, targetEdge: number, sign: number,
 ): boolean {
+  // Separate the constant-latitude RIM from a SEAM meridian: a hemisphere/cap often carries a seam
+  // edge from the pole to the rim, traversed twice (down one side, back the other). Those doubled
+  // edges are the degenerate seam — exclude them; the remaining once-used edges form the true rim.
+  const count = new Map<number, number>();
+  for (const oe of loop.edges) count.set(oe.edgeId, (count.get(oe.edgeId) ?? 0) + 1);
+  const rimEdges = loop.edges.filter((oe) => (count.get(oe.edgeId) ?? 0) === 1);
   const rim: Vec3[] = [];
-  for (const oe of loop.edges) {
+  for (const oe of rimEdges) {
     const base = sampled.get(oe.edgeId); if (!base) return false;
     const poly = oe.orient ? base : base.slice().reverse();
     for (let i = 0; i < poly.length - 1; i++) rim.push(poly[i]!);
