@@ -635,15 +635,18 @@ function tessellateCone(
   // Only a genuine apex cone (exactly one circle rim, tapering to a point) is handled here; a
   // frustum / trimmed cone has 2+ circle rims or straight sides and must go through the param grid
   // (which uses the shared edge samples on every side, so it stays watertight with its neighbours).
-  // A rim is a CIRCLE edge or any closed sampled loop (e.g. an INTERSECTION_CURVE wrapping a
-  // circle in legacy AP203 files) — the curve TYPE doesn't matter, the closed ring does.
+  // A rim is a FULL closed circle (start vertex == end vertex): a CIRCLE-typed edge or any closed
+  // sampled loop (e.g. an INTERSECTION_CURVE wrapping a circle in legacy AP203 files). The closure
+  // test is essential — a CIRCLE edge that is only a partial arc bounds a cone SLICE (a wedge cut by
+  // two ruling seams), which must NOT be marched as a full revolution; it goes to tessellateConeSlice.
   const circleEdges = loop.edges.filter((oe) => {
     const e = brep.edges.get(oe.edgeId);
     if (!e) return false;
+    const closed = Math.hypot(e.v0[0] - e.v1[0], e.v0[1] - e.v1[1], e.v0[2] - e.v1[2]) < 1e-9;
+    if (!closed) return false;
     if (brep.table.typeOf(e.curveId) === "CIRCLE") return true;
     const p = sampled.get(oe.edgeId);
-    return !!p && p.length >= 4
-      && Math.hypot(e.v0[0] - e.v1[0], e.v0[1] - e.v1[1], e.v0[2] - e.v1[2]) < 1e-9;
+    return !!p && p.length >= 4;
   });
   if (circleEdges.length !== 1) return false;
   const oe0 = circleEdges[0]!;
@@ -690,6 +693,82 @@ function tessellateCone(
     const ring: Vec3[] = [];
     for (let k = 0; k < M; k++) ring.push(surface.evaluate(theta0 + (dir * TWO_PI * k) / M, vf));
     stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
+    prev = ring;
+  }
+  return true;
+}
+
+/**
+ * Cone SLICE: an apex cone cut to a wedge by two straight ruling seams meeting at the apex, bounded
+ * by one partial-arc rim (how AP242-e2 exporters split a cone that isn't a full revolution). In
+ * (u,v) the rim projects to a horizontal collinear line and the wedge is a triangle-with-collinear-
+ * base, which the flat CDT can't triangulate (it chords the whole rim, opening the seam). Mesh it
+ * instead as rings marching from the rim down to the apex, laid out along the ARC's own angles at
+ * each seam sample's v-level: every ring endpoint then lands exactly on a shared seam sample and the
+ * rim ring is exactly the shared arc, so the wedge stays watertight with all three neighbours.
+ * Returns false WITHOUT emitting unless the loop is exactly {2 ruling LINEs through the apex + 1
+ * partial arc}; full apex cones (tessellateCone) and frustums (param grid) are left alone.
+ */
+function tessellateConeSlice(
+  surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, brep: BrepModel, fid: number,
+  verts: number[], faceIds: number[], sign: number,
+): boolean {
+  const cone = surface as Surface & { r: number; sin: number };
+  const apex = surface.evaluate(0, -cone.r / cone.sin);
+  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const arcs: number[] = [], seams: number[] = [];
+  for (const oe of loop.edges) {
+    const e = brep.edges.get(oe.edgeId); if (!e) return false;
+    const kind = brep.table.typeOf(e.curveId);
+    if (kind === "CIRCLE") arcs.push(oe.edgeId);
+    else if (kind === "LINE") seams.push(oe.edgeId);
+    else return false; // some other boundary curve — not a clean cone slice
+  }
+  if (arcs.length !== 1 || seams.length !== 2) return false;
+  const arcEdge = brep.edges.get(arcs[0]!)!;
+  if (d3(arcEdge.v0, arcEdge.v1) < 1e-9) return false; // full circle -> tessellateCone / band
+  // Both seams must run to the apex.
+  const apexTol = 1e-6 * Math.max(1, d3(apex, arcEdge.v0));
+  const seamCol = (id: number): Vec3[] | null => {
+    const s = sampled.get(id); if (!s || s.length < 2) return null;
+    const col = d3(s[0]!, apex) <= d3(s[s.length - 1]!, apex) ? s.slice() : s.slice().reverse();
+    return d3(col[0]!, apex) <= apexTol ? col : null; // must start AT the apex
+  };
+  let Lc = seamCol(seams[0]!), Rc = seamCol(seams[1]!);
+  if (!Lc || !Rc || Lc.length !== Rc.length) return false; // asymmetric sampling -> param grid
+  const n = Lc.length;
+  // Arc samples, oriented so index 0 is at the left seam's rim end.
+  let arc = sampled.get(arcs[0]!)!.slice();
+  const Lrim = Lc[n - 1]!, Rrim = Rc[n - 1]!;
+  if (d3(arc[0]!, Lrim) > d3(arc[arc.length - 1]!, Lrim)) arc = arc.reverse();
+  if (d3(arc[0]!, Lrim) > d3(arc[0]!, Rrim)) { const t = Lc; Lc = Rc; Rc = t; }
+  const M = arc.length;
+  if (M < 2) return false;
+  // Arc angles, unwrapped monotonic so the intermediate rings don't fold at the ±π seam.
+  const angs: number[] = arc.map((p) => surface.project(p)[0]);
+  for (let i = 1; i < M; i++) { let d = angs[i]! - angs[i - 1]!; while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; angs[i] = angs[i - 1]! + d; }
+  // v-level of each seam sample (same on both seams by the length/tol checks above).
+  const vAt = Lc.map((p) => surface.project(p)[1]);
+  const ringAt = (k: number): Vec3[] => {
+    if (k === 0) return [apex];
+    const v = vAt[k]!;
+    const r: Vec3[] = [];
+    for (let j = 0; j < M; j++) r.push(surface.evaluate(angs[j]!, v));
+    return r;
+  };
+  // OPEN stitch (the wedge is not a full revolution, so rings must NOT wrap left-to-right).
+  const openStitch = (A: Vec3[], B: Vec3[]): void => {
+    if (A.length === 1) { for (let j = 0; j + 1 < B.length; j++) emitTri(verts, faceIds, A[0]!, B[j]!, B[j + 1]!, fid, surface, sign); return; }
+    if (B.length === 1) { for (let j = 0; j + 1 < A.length; j++) emitTri(verts, faceIds, A[j]!, A[j + 1]!, B[0]!, fid, surface, sign); return; }
+    for (let j = 0; j + 1 < Math.min(A.length, B.length); j++) {
+      emitTri(verts, faceIds, A[j]!, A[j + 1]!, B[j]!, fid, surface, sign);
+      emitTri(verts, faceIds, A[j + 1]!, B[j + 1]!, B[j]!, fid, surface, sign);
+    }
+  };
+  let prev = ringAt(0);
+  for (let k = 1; k < n; k++) {
+    const ring = k === n - 1 ? arc : ringAt(k); // rim ring is exactly the shared arc samples
+    openStitch(prev, ring);
     prev = ring;
   }
   return true;
@@ -949,8 +1028,9 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
             || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
-        && tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length)) {
-        ok = true; // genuine apex cone (singular vertex); frustums/trimmed cones use the param grid
+        && (tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length)
+          || tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign))) {
+        ok = true; // genuine apex cone or apex wedge slice; frustums/trimmed cones use the param grid
       } else if (isBSpline(surface)) {
         // A standalone closed B-spline body (its solid's only face) has no usable trimming loop ->
         // full-patch grid. A patch that is one of many faces must use the param grid so its boundary
