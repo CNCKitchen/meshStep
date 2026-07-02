@@ -419,6 +419,12 @@ export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface 
       return new Sphere(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s);
     case "TOROIDAL_SURFACE":
       return new Torus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s);
+    case "DEGENERATE_TOROIDAL_SURFACE":
+      // Same parametrisation as a torus but minor_radius > major_radius, so the full surface self-
+      // intersects (a spindle/apple-lemon). The real face is a small trimmed fillet patch far from
+      // the degenerate axis circle, so the trim loop + param grid fill only the valid region; the
+      // select_outer flag (params[4]) just says which lobe, which the loop already encodes.
+      return new Torus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s);
     case "OFFSET_SURFACE": {
       const base = makeSurface(t, ref(r.params[1]!), s);
       return base ? new OffsetSurface(base, num(r.params[2]!) * s) : null;
