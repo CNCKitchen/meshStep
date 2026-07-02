@@ -229,6 +229,44 @@ function boundaryFillWithInterior(pts: P2[], ring: number[], interior: number[])
 }
 
 /**
+ * Fan-triangulate a simple polygon from a single apex vertex (every triangle is apex-edge_i). Works
+ * — where ear-clipping fails — on a polygon that is geometrically a triangle with COLLINEAR points
+ * along one side: a ruled/curved slice meeting at a singular vertex (a cone apex or a sphere pole)
+ * plus a curved rim whose samples project collinear. Ear-clip can only clip the apex ear, leaving a
+ * degenerate collinear remainder; a fan from the apex makes every rim segment a triangle edge (hence
+ * watertight with the neighbour). Tries each vertex as the star centre and accepts the first whose
+ * fan is a valid, non-overlapping, area-exact tiling.
+ */
+function fanFill(pts: P2[], ring: number[]): [number, number, number][] | null {
+  const n = ring.length;
+  if (n < 3) return null;
+  let polyArea = 0;
+  for (let i = 0; i < n; i++) { const p = pts[ring[i]!]!, q = pts[ring[(i + 1) % n]!]!; polyArea += p[0] * q[1] - q[0] * p[1]; }
+  polyArea = Math.abs(polyArea) / 2;
+  if (polyArea < 1e-12) return null;
+  for (let c = 0; c < n; c++) {
+    const out: [number, number, number][] = [];
+    let sumA = 0, ok = true;
+    for (let i = 0; i < n && ok; i++) {
+      const a = ring[i]!, b = ring[(i + 1) % n]!;
+      if (a === ring[c] || b === ring[c]) continue; // edge incident to the apex
+      const A = pts[ring[c]!]!, B = pts[a]!, C = pts[b]!;
+      const ar = orient(A, B, C);
+      if (ar <= 1e-12) { ok = false; break; } // reflex/degenerate from this centre -> not the kernel
+      for (let j = 0; j < n; j++) {
+        const vj = ring[j]!;
+        if (vj === ring[c]! || vj === a || vj === b) continue;
+        if (pointInTri(pts[vj]!, A, B, C)) { ok = false; break; }
+      }
+      sumA += ar / 2;
+      out.push([ring[c]!, a, b]);
+    }
+    if (ok && Math.abs(sumA - polyArea) < 1e-6 * polyArea) return out;
+  }
+  return null;
+}
+
+/**
  * Robustly enforce constraint edge a-b when flips couldn't: delete every triangle the segment
  * crosses, then ear-clip the two simple sub-polygons that the segment splits the cavity into.
  * Returns false (leaving the triangulation unchanged) if the cavity isn't a clean single loop.
@@ -384,6 +422,10 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   if (loops.length === 1 && (loops[0]?.length ?? 0) >= 3) {
     const filled = boundaryFillWithInterior(points, loops[0]!, interior);
     if (filled && filled.length > 0) return filled;
+    // Ear-clip failed — the loop is a triangle with a collinear side (a curved slice meeting at a
+    // cone apex / sphere pole). Fan from the apex, making every rim segment a triangle edge.
+    const fan = fanFill(points, loops[0]!);
+    if (fan && fan.length > 0) return fan;
   }
 
   // Some seam edge is unrealisable — a metric-collapsed boundary on a skewed B-spline patch. The
