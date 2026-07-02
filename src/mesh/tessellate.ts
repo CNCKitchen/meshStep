@@ -144,14 +144,29 @@ function tessellateParamGrid(
   // outer loop is whichever encloses the largest area in parameter space; the rest are holes. Without
   // this an annular face picks a hole as its boundary and meshes the wrong region (open seams).
   const projected = loops.map((l) => ({ outer: l.outer, lp: loopParam(surface, l, sampled) }));
+  const bboxExtent = (p2: P2[]): number => {
+    let umn = Infinity, umx = -Infinity, vmn = Infinity, vmx = -Infinity;
+    for (const q of p2) { if (q[0] < umn) umn = q[0]; if (q[0] > umx) umx = q[0]; if (q[1] < vmn) vmn = q[1]; if (q[1] > vmx) vmx = q[1]; }
+    return Math.hypot(umx - umn, vmx - vmn);
+  };
+  // Pick the outer boundary. Prefer the STEP FACE_OUTER_BOUND flag; otherwise the outer is the loop
+  // with the largest parameter-space EXTENT (a hole always sits inside the outer). Extent beats
+  // signed area here: the true outer sometimes projects to near-zero signed area (a collapsed /
+  // self-cancelling seam boundary) while still being the largest loop — max-area would then wrongly
+  // pick an interior hole as the boundary and mesh a spurious cap across it.
   let oi = projected.findIndex((p) => p.outer);
   if (oi < 0) {
     let best = -Infinity;
-    for (let i = 0; i < projected.length; i++) { const a = Math.abs(polyArea(projected[i]!.lp.p2)); if (a > best) { best = a; oi = i; } }
+    for (let i = 0; i < projected.length; i++) { const e = bboxExtent(projected[i]!.lp.p2); if (e > best) { best = e; oi = i; } }
   }
   if (oi < 0) return false;
   const outer = projected[oi]!.lp;
   if (outer.p3.length < 3) return false;
+  // Malformed trimming: the enclosing loop collapsed to ~zero area in parameter space (a degenerate
+  // boundary a CAD kernel left, or two edges that trace back over each other). There's no valid
+  // region — emit nothing. A clean gap reads far better than a spurious cap sealing a hole shut.
+  const ext = bboxExtent(outer.p2);
+  if (Math.abs(polyArea(outer.p2)) < 1e-4 * ext * ext) return false;
 
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
   for (const q of outer.p2) {
