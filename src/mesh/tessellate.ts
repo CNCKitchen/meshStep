@@ -1038,11 +1038,11 @@ function tessellateRevolutionBand(
       // 7π/4, failing the span test, yet wind exactly ±period. Span catches rims that carry seam
       // edges and double back (net winding 0) which the old mesher still stitched acceptably.
       let wind = 0, amin = Infinity, amax = -Infinity, hcos = 0, hsin = 0, hsum = 0;
-      const as: number[] = [];
+      const as: number[] = [], hs: number[] = [];
       for (const p of pts) {
         const uv = surface.project(p);
         const a = uv[c], h = uv[1 - c]!;
-        as.push(a); hsum += h;
+        as.push(a); hs.push(h); hsum += h;
         // Circular mean for a periodic stack coordinate (rim points may straddle its seam).
         hcos += Math.cos((h * TWO_PI) / stackPeriod); hsin += Math.sin((h * TWO_PI) / stackPeriod);
         if (a < amin) amin = a; if (a > amax) amax = a;
@@ -1051,6 +1051,15 @@ function tessellateRevolutionBand(
         let d = as[(i + 1) % as.length]! - as[i]!;
         while (d > period / 2) d -= period; while (d < -period / 2) d += period;
         wind += d;
+        // A rim that is MULTIVALUED in angle — an axial STEP, e.g. a staircase rim's constant-angle
+        // riser — breaks the per-angle loft below: the interior rings inherit BOTH heights at that
+        // angle, the zero-width "wall" quads between the doubled columns are dropped as degenerate,
+        // and the two column ladders subdivide the shared meridian differently (T-junction opens).
+        // Per-angle lofting is only well-defined for a single-valued height-vs-angle rim; bail and
+        // let the CDT-based unroll take the face (its rim builder handles staircases).
+        let dh = hs[(i + 1) % hs.length]! - hs[i]!;
+        if (stackPeriodic) { while (dh > stackPeriod / 2) dh -= stackPeriod; while (dh < -stackPeriod / 2) dh += stackPeriod; }
+        if (Math.abs(d) < 1e-8 && Math.abs(dh) > 1e-8) return false;
       }
       if (Math.abs(wind) < 0.9 * period && amax - amin < 0.9 * period) return false; // partial arc
       const h = stackPeriodic ? (Math.atan2(hsin, hcos) * stackPeriod) / TWO_PI : hsum / pts.length;
