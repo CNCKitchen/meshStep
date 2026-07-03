@@ -10,13 +10,13 @@
 // Every triangle is oriented outward using the STEP face's same_sense flag and the analytic
 // surface normal. Inner-loop holes / B-spline curves land in M3b; isotropic remesh is M4.
 import type { Vec3 } from "../geom/vec.ts";
-import { cross, dot, lerp } from "../geom/vec.ts";
+import { cross, dot, lerp, normalize } from "../geom/vec.ts";
 import { ref, refList, list, num, numList } from "../step/entities.ts";
 import type { Param } from "../step/parser.ts";
 import type { BrepModel, BLoop } from "../brep/build.ts";
 import type { IndexedMesh } from "../io/stl.ts";
 import type { Surface } from "../geom/surfaces.ts";
-import { makeSurface, isSphere, isBSpline, type Sphere, type BSplineSurface } from "../geom/surfaces.ts";
+import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
 import { sampleEdgePolyline } from "../geom/curves.ts";
 import { constrainedTriangulate } from "./cdt2d.ts";
 
@@ -785,6 +785,42 @@ function stitchRings(
 }
 
 /**
+ * Reparametrise a trimmed sphere patch so the pole and seam lie AWAY from the patch. A corner-blend
+ * patch often runs straight THROUGH the sphere's parametrisation pole (three fillets meet at the
+ * axis point): u is undefined there, atan2 flips by π across it, the projected loop fake-winds a
+ * full period and the CDT meshes a degenerate strip — a coarse flat corner. The parametrisation is
+ * OURS to choose: aim the new x-axis at the patch's mean direction and the new pole perpendicular
+ * to it, so the patch sits in a clean window around (u,v)=(0,0), clear of pole and seam. Only valid
+ * when the patch fits a spherical cap well inside ±90° (always true for corner blends); anything
+ * larger (a sphere minus a small cap) keeps the original frame.
+ */
+function reorientSphere(s: Sphere, loops: BLoop[], sampled: Map<number, Vec3[]>): Sphere {
+  const c = s.f.o;
+  const dirs: Vec3[] = [];
+  let mx = 0, my = 0, mz = 0;
+  for (const lp of loops) for (const oe of lp.edges) {
+    const base = sampled.get(oe.edgeId);
+    if (!base) continue;
+    for (const p of base) {
+      const dx = p[0] - c[0], dy = p[1] - c[1], dz = p[2] - c[2];
+      const L = Math.hypot(dx, dy, dz);
+      if (L < 1e-12) continue;
+      dirs.push([dx / L, dy / L, dz / L]);
+      mx += dx / L; my += dy / L; mz += dz / L;
+    }
+  }
+  const mL = Math.hypot(mx, my, mz);
+  if (dirs.length < 3 || mL < 1e-9 * dirs.length) return s; // no privileged centre (band-like patch)
+  const m: Vec3 = [mx / mL, my / mL, mz / mL];
+  let minDot = 1;
+  for (const d of dirs) minDot = Math.min(minDot, dot(d, m));
+  if (minDot < Math.cos(1.31)) return s; // a point sits > ~75° from the centre — can't clear the poles
+  const up: Vec3 = Math.abs(m[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+  const z = normalize(cross(m, up));
+  return new Sphere({ o: [c[0], c[1], c[2]], x: m, y: cross(z, m), z }, s.r);
+}
+
+/**
  * Full-revolution band (a cylinder/cone hole wall, etc.) whose rims are separate FULL-PERIOD circle
  * loops with no seam edges — how some kernels (Onshape/ST-DEVELOPER) represent a drilled hole. Each
  * rim projects to an open horizontal line in (u,v) enclosing no area, so the param grid meshes
@@ -1470,9 +1506,11 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           ok = true;
         } else if (outer) {
           // A cap closing to a pole (sole full-longitude parallel rim) fans to the pole; any other
-          // spherical patch returns false from the cap mesher and uses the param grid.
+          // spherical patch returns false from the cap mesher and uses the param grid — with the
+          // sphere REPARAMETRISED so pole and seam sit away from the patch (a corner blend often
+          // runs straight through the default pole, which degenerates the projected loop).
           ok = tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, sign)
-            || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+            || tessellateParamGrid(reorientSphere(surface, face.loops, sampled), face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
         && (tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length)
