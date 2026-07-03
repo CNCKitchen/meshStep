@@ -17,6 +17,11 @@ export interface Surface {
   /** Parameter period in u / v (2π for the analytic surfaces; v1-v0 for a closed B-spline). */
   uPeriod?: number;
   vPeriod?: number;
+  /** Parameter value of the periodic branch cut ("seam") in u / v: where project() wraps — ±π for
+   *  the analytic atan2 surfaces, the knot-domain start for a closed B-spline / extrusion. The
+   *  seam-aware boundary projector needs it to spot edges that lie ON the seam (ambiguous side). */
+  uSeam?: number;
+  vSeam?: number;
   evaluate(u: number, v: number): Vec3;
   /** Inverse-map p to (u,v). Optional (hu,hv) seeds an iterative solver so a boundary projects
    *  continuously across a seam (used by the B-spline surface; ignored by the analytic ones). */
@@ -45,6 +50,7 @@ class Plane implements Surface {
 class Cylinder implements Surface {
   kind = "CYLINDRICAL_SURFACE";
   periodicU = true;
+  uSeam = Math.PI;
   f: Frame;
   r: number;
   constructor(f: Frame, r: number) { this.f = f; this.r = r; }
@@ -65,6 +71,7 @@ class Cylinder implements Surface {
 class Cone implements Surface {
   kind = "CONICAL_SURFACE";
   periodicU = true;
+  uSeam = Math.PI;
   f: Frame;
   r: number;
   sin: number;
@@ -96,6 +103,7 @@ class Cone implements Surface {
 class Sphere implements Surface {
   kind = "SPHERICAL_SURFACE";
   periodicU = true;
+  uSeam = Math.PI;
   f: Frame;
   r: number;
   constructor(f: Frame, r: number) { this.f = f; this.r = r; }
@@ -119,6 +127,8 @@ class Torus implements Surface {
   kind = "TOROIDAL_SURFACE";
   periodicU = true;
   periodicV = true;
+  uSeam = Math.PI;
+  vSeam = Math.PI;
   f: Frame;
   rMaj: number;
   rMin: number;
@@ -147,11 +157,12 @@ class Torus implements Surface {
 class OffsetSurface implements Surface {
   kind = "OFFSET_SURFACE";
   base: Surface; dist: number;
-  periodicU: boolean; periodicV?: boolean; uPeriod?: number; vPeriod?: number;
+  periodicU: boolean; periodicV?: boolean; uPeriod?: number; vPeriod?: number; uSeam?: number; vSeam?: number;
   constructor(base: Surface, dist: number) {
     this.base = base; this.dist = dist;
     this.periodicU = base.periodicU; this.periodicV = base.periodicV;
     this.uPeriod = base.uPeriod; this.vPeriod = base.vPeriod;
+    this.uSeam = base.uSeam; this.vSeam = base.vSeam;
   }
   evaluate(u: number, v: number): Vec3 {
     const p = this.base.evaluate(u, v), n = this.base.normal(u, v);
@@ -175,12 +186,13 @@ class ExtrusionSurface implements Surface {
   axisLen: number;
   periodicU: boolean;
   uPeriod?: number;
+  uSeam?: number;
   constructor(curve: Curve3, axis: Vec3) {
     this.curve = curve; this.axis = axis;
     this.axisLen = Math.max(1e-12, Math.hypot(axis[0], axis[1], axis[2]));
     this.axisUnit = [axis[0] / this.axisLen, axis[1] / this.axisLen, axis[2] / this.axisLen];
     this.periodicU = curve.closed;
-    if (curve.closed) this.uPeriod = curve.t1 - curve.t0;
+    if (curve.closed) { this.uPeriod = curve.t1 - curve.t0; this.uSeam = curve.t0; }
   }
   evaluate(u: number, v: number): Vec3 {
     if (this.periodicU && this.uPeriod) {
@@ -246,6 +258,7 @@ class BSplineSurface implements Surface {
   periodicU = false;
   periodicV = false;
   uPeriod = 0; vPeriod = 0;
+  uSeam = 0; vSeam = 0;
   uDeg: number; vDeg: number;
   cps: number[][][]; // [iu][iv] -> homogeneous (wx,wy,wz,w)
   uKnots: number[]; vKnots: number[];
@@ -268,6 +281,7 @@ class BSplineSurface implements Surface {
     // polygon stays simple and the CDT can enforce it — otherwise the seam tangles -> cracks.
     this.periodicU = this.closedU; this.periodicV = this.closedV;
     this.uPeriod = this.u1 - this.u0; this.vPeriod = this.v1 - this.v0;
+    this.uSeam = this.u0; this.vSeam = this.v0; // knot-domain start = where a closed patch wraps
     this.buildGrid();
   }
   private buildGrid(): void {

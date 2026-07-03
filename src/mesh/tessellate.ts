@@ -67,30 +67,324 @@ function unwrap(p2: P2[], c: 0 | 1, period = TWO_PI): void {
   }
 }
 
-function loopParam(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>): { p3: Vec3[]; p2: P2[] } {
+/** One boundary edge's pcurve: the oriented shared polyline's (u,v) image, continuous within the
+ * edge (each periodic axis unwrapped independently), plus which periodic seam it hugs. The 3D
+ * samples are the SHARED edge polyline verbatim — only their 2D images are computed here. */
+interface EdgePC {
+  p3: Vec3[];
+  p2: P2[];
+  hugU: boolean;
+  hugV: boolean;
+}
+
+/** The projected loop boundary. windU/windV: closure drift in whole periods on the universal cover
+ * — non-zero means the loop WINDS the periodic surface (a bare rim), so it bounds no trimmed patch
+ * and must go to the band/unroll meshers instead. tangled: the loop still self-intersects after the
+ * phase-C repair (gates the tolerant-CDT path). */
+interface LoopUV { p3: Vec3[]; p2: P2[]; windU: number; windV: number; tangled: boolean }
+
+/** Hint-chained pointwise projection of a 3D polyline with two guards per point: (a) the existing
+ * large-residual → stateless-reproject fallback (the chained hint sent the solver astray), and (b)
+ * a METRIC step check — the (u,v) step (shortest representative modulo each period) mapped through
+ * the local surface scale must be commensurate with the 3D chord between the samples. A
+ * near-self-touching surface (a pinched Shapr3D freeform, residual ~1e-4 on the wrong fold) passes
+ * a residual-only test yet jumps folds in parameter, folding the boundary over itself — the metric
+ * check catches exactly that and retries statelessly, keeping whichever candidate steps
+ * consistently; a legitimate seam crossing wraps to a SMALL step and stays untouched. */
+function chainProject(surface: Surface, poly: Vec3[], hint?: P2): P2[] {
+  const resid = (q: P2, pt: Vec3): number => { const e = surface.evaluate(q[0], q[1]); return Math.hypot(e[0] - pt[0], e[1] - pt[1], e[2] - pt[2]); };
+  const uP = surface.periodicU ? surface.uPeriod || TWO_PI : 0;
+  const vP = surface.periodicV ? surface.vPeriod || TWO_PI : 0;
+  const wrapd = (d: number, P: number): number => { if (!P) return d; d %= P; if (d > P / 2) d -= P; else if (d < -P / 2) d += P; return d; };
+  const p2: P2[] = [];
+  let hu: number | undefined = hint?.[0], hv: number | undefined = hint?.[1];
+  let uScale = 1, vScale = 1, haveScale = false;
+  for (let i = 0; i < poly.length; i++) {
+    const pt = poly[i]!;
+    let q = surface.project(pt, hu, hv);
+    if (i === 0) {
+      if (resid(q, pt) > 1e-3) { const g = surface.project(pt); if (resid(g, pt) < resid(q, pt)) q = g; }
+    } else {
+      if (!haveScale) {
+        const q0 = p2[0]!, eu = 1e-3 * (uP || 1), ev = 1e-3 * (vP || 1);
+        const a = surface.evaluate(q0[0] + eu, q0[1]), b = surface.evaluate(q0[0] - eu, q0[1]);
+        const c = surface.evaluate(q0[0], q0[1] + ev), d = surface.evaluate(q0[0], q0[1] - ev);
+        uScale = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / (2 * eu);
+        vScale = Math.hypot(c[0] - d[0], c[1] - d[1], c[2] - d[2]) / (2 * ev);
+        haveScale = true;
+      }
+      const prev = p2[i - 1]!, pp = poly[i - 1]!;
+      const d3 = Math.hypot(pt[0] - pp[0], pt[1] - pp[1], pt[2] - pp[2]);
+      const mstep = (c: P2): number => Math.hypot(wrapd(c[0] - prev[0], uP) * uScale, wrapd(c[1] - prev[1], vP) * vScale);
+      const rq = resid(q, pt);
+      if (rq > 1e-3 || mstep(q) > 3 * d3 + 1e-6) {
+        const g = surface.project(pt);
+        const rg = resid(g, pt);
+        const qOk = rq <= 1e-3, gOk = rg <= 1e-3;
+        if (gOk && (!qOk || mstep(g) < mstep(q))) q = g;
+        else if (!qOk && rg < rq) q = g;
+      }
+    }
+    p2.push([q[0], q[1]]); hu = q[0]; hv = q[1];
+  }
+  return p2;
+}
+
+/** A SLIT edge walks out and back along (nearly) the same 3D curve — a pinched zero-width cut,
+ * e.g. the drill-point slit at a counterbore's bottom in a Shapr3D export. On a pinched surface the
+ * two legs may project to DIFFERENT folds (both 3D-valid to ~1e-4, so no pointwise or metric test
+ * can tell them apart) and the boundary grows a fold-lobe that double-covers the face in 3D while
+ * staying simple in (u,v). Coincident 3D points must get coincident (u,v): copy each return-leg
+ * point's image from its nearest outbound sample. The pcurve becomes a zero-width parametric spike,
+ * which the CDT's ring sanitizer then collapses cleanly. */
+function slitCollapse(poly: Vec3[], p2: P2[]): void {
+  const n = poly.length;
+  if (n < 5) return;
+  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  let k = 0, far = 0;
+  for (let i = 0; i < n; i++) { const di = d3(poly[i]!, poly[0]!); if (di > far) { far = di; k = i; } }
+  if (k < 2 || k > n - 3 || far < 1e-9) return;      // turn point must be interior
+  if (d3(poly[0]!, poly[n - 1]!) > 0.25 * far) return; // doesn't come back to its start
+  const out = poly.slice(0, k + 1);
+  const tol = Math.max(2e-3, 0.02 * far);            // slit width: pinched, not a genuine thin U
+  for (let i = k + 1; i < n; i++) if (distToPolyline(poly[i]!, out) > tol) return;
+  for (let i = k + 1; i < n; i++) {
+    let bj = 0, bd = Infinity;
+    for (let j = 0; j <= k; j++) { const dd = d3(poly[i]!, poly[j]!); if (dd < bd) { bd = dd; bj = j; } }
+    p2[i] = [p2[bj]![0], p2[bj]![1]];
+  }
+}
+
+/** Phase A — per-edge pcurve: project one edge's shared polyline independently (a projection
+ * failure in one edge then can't corrupt the rest of the loop), then unwrap each periodic axis so
+ * the pcurve is continuous across the seam — a point ON the seam legitimately projects to either
+ * side, and both lifts are valid; assembly (phase B) picks the loop-consistent representative. */
+function edgePcurve(surface: Surface, poly: Vec3[]): EdgePC {
+  const p2 = chainProject(surface, poly);
+  slitCollapse(poly, p2);
+  if (surface.periodicU) unwrap(p2, 0, surface.uPeriod || TWO_PI);
+  if (surface.periodicV) unwrap(p2, 1, surface.vPeriod || TWO_PI);
+  return { p3: poly, p2, hugU: hugsSeam(surface, p2, 0), hugV: hugsSeam(surface, p2, 1) };
+}
+
+/** True when every point of an edge pcurve lies metrically ON the periodic seam iso-line of axis c.
+ * Such an edge is the ambiguous kind: it is equally valid at the seam and at seam+period, and
+ * junction continuity alone cannot tell the sides apart (its junction vertices are on the seam
+ * too), so phase C may need to flip it. Tolerance is METRIC (mm via the local surface scale), never
+ * a blind parameter epsilon — parameter units differ wildly between surfaces. */
+function hugsSeam(surface: Surface, p2: P2[], c: 0 | 1): boolean {
+  const periodic = c === 0 ? surface.periodicU : surface.periodicV;
+  if (!periodic || p2.length === 0) return false;
+  const period = (c === 0 ? surface.uPeriod : surface.vPeriod) || TWO_PI;
+  const seam = (c === 0 ? surface.uSeam : surface.vSeam) ?? Math.PI;
+  const q = p2[p2.length >> 1]!;
+  const e = 1e-3 * period;
+  const a = surface.evaluate(q[0] + (c === 0 ? e : 0), q[1] + (c === 1 ? e : 0));
+  const b = surface.evaluate(q[0] - (c === 0 ? e : 0), q[1] - (c === 1 ? e : 0));
+  const scale = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / (2 * e);
+  const tol = Math.max(1e-3, 1e-3 * period * scale); // mm; ~0.1% of the metric period
+  const half = period / 2;
+  for (const p of p2) {
+    let d = (p[c] - seam) % period;
+    if (d > half) d -= period; else if (d < -half) d += period;
+    if (Math.abs(d) * scale > tol) return false;
+  }
+  return true;
+}
+
+/** Phase B — wire assembly: lift the loop to the universal cover. Walk the edges in loop order and
+ * place edge k shifted by whole periods (each periodic axis independently) so its start meets edge
+ * k-1's end — the junction is the same 3D vertex, so its two projections agree modulo the period
+ * and the minimal-gap shift is exact. A seam edge traversed twice in one loop automatically lands
+ * one period apart (the edges between the traversals walked the loop across the domain). `forced`
+ * (whole periods per edge index & axis) overrides continuity for flagged edges — phase C's knob.
+ * Returns the concatenated boundary in gridCDT's layout (per-edge closing vertex dropped; p2/p3
+ * stay 1:1) plus the closure drift in whole periods. */
+function assembleWire(surface: Surface, pcs: EdgePC[], forced?: Int8Array): { p3: Vec3[]; p2: P2[]; windU: number; windV: number } {
+  const uP = surface.periodicU ? surface.uPeriod || TWO_PI : 0;
+  const vP = surface.periodicV ? surface.vPeriod || TWO_PI : 0;
+  const p3: Vec3[] = [], p2: P2[] = [];
+  let eu = 0, ev = 0, su = 0, sv = 0;
+  for (let k = 0; k < pcs.length; k++) {
+    const e = pcs[k]!;
+    const q0 = e.p2[0]!;
+    let du = 0, dv = 0;
+    if (k > 0) {
+      if (uP) du = Math.round((eu - q0[0]) / uP) * uP;
+      if (vP) dv = Math.round((ev - q0[1]) / vP) * vP;
+    }
+    if (forced) { du += forced[2 * k]! * uP; dv += forced[2 * k + 1]! * vP; }
+    const m = e.p2.length;
+    for (let i = 0; i < m - 1; i++) { p2.push([e.p2[i]![0] + du, e.p2[i]![1] + dv]); p3.push(e.p3[i]!); }
+    eu = e.p2[m - 1]![0] + du; ev = e.p2[m - 1]![1] + dv;
+    if (k === 0) { su = q0[0] + du; sv = q0[1] + dv; }
+  }
+  return {
+    p3, p2,
+    windU: uP ? Math.round((eu - su) / uP) : 0,
+    windV: vP ? Math.round((ev - sv) / vP) : 0,
+  };
+}
+
+/** Count strict self-intersections of a closed 2D polygon (segments sharing a vertex don't count).
+ * Sorted-bbox sweep in x keeps it near-linear at boundary density; `cap` early-outs a hopeless
+ * candidate during the phase-C search. */
+function countSelfIntersections(pts: P2[], cap = 1 << 30): number {
+  const n = pts.length;
+  if (n < 4) return 0;
+  const x0 = new Float64Array(n), x1 = new Float64Array(n), y0 = new Float64Array(n), y1 = new Float64Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = pts[i]!, b = pts[(i + 1) % n]!;
+    x0[i] = Math.min(a[0], b[0]); x1[i] = Math.max(a[0], b[0]);
+    y0[i] = Math.min(a[1], b[1]); y1[i] = Math.max(a[1], b[1]);
+  }
+  const order = Array.from({ length: n }, (_, i) => i).sort((a, b) => x0[a]! - x0[b]!);
+  const orient2 = (a: P2, b: P2, c: P2): number => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  let count = 0;
+  for (let oi = 0; oi < n && count < cap; oi++) {
+    const i = order[oi]!;
+    for (let oj = oi + 1; oj < n; oj++) {
+      const j = order[oj]!;
+      if (x0[j]! > x1[i]!) break; // sweep past i's extent — no later j can overlap
+      if (y0[j]! > y1[i]! || y1[j]! < y0[i]!) continue;
+      if ((i + 1) % n === j || (j + 1) % n === i) continue; // adjacent segments share a vertex
+      const p = pts[i]!, q = pts[(i + 1) % n]!, r = pts[j]!, s = pts[(j + 1) % n]!;
+      const d1 = orient2(r, s, p), d2 = orient2(r, s, q), d3 = orient2(p, q, r), d4 = orient2(p, q, s);
+      if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+        if (++count >= cap) break;
+      }
+    }
+  }
+  return count;
+}
+
+/**
+ * Phase C — repair: the assembled loop self-intersects, so search the bounded space of
+ * seam-representative choices. Only seam-hugging edges are ambiguous (both period lifts are
+ * geometrically valid for them), so few edges have candidates and the combinations stay small
+ * (offsets {0,±1} per hugging axis, capped). Edge 0's lift is fixed — shifting it just translates
+ * the whole loop. Each combination re-chains the remaining edges by continuity and is scored
+ * lexicographically: fewer self-intersections, then exact closure, then the expected winding sign
+ * (STEP bound orientation: outer runs CW in this codebase's (u,v) when same_sense holds), then the
+ * larger |area| (the un-tangled lift of a seam-split band spans the period; the tangled one nearly
+ * cancels). Returns the best assembly — the caller's baseline is in the running, so this never
+ * makes the loop worse.
+ */
+function repairWire(
+  surface: Surface, pcs: EdgePC[], base: ReturnType<typeof assembleWire>, baseInts: number, expectSign: number,
+): { asm: ReturnType<typeof assembleWire>; selfInts: number } {
+  const slots: number[] = []; // flat (edgeIndex, axis) pairs, axis 0=u 1=v
+  for (let k = 1; k < pcs.length; k++) {
+    if (surface.periodicU && pcs[k]!.hugU) slots.push(2 * k);
+    if (surface.periodicV && pcs[k]!.hugV) slots.push(2 * k + 1);
+    if (slots.length >= 5) break; // 3^5 = 243 combinations — bounded
+  }
+  let best = { asm: base, selfInts: baseInts };
+  let bestScore = score(base, baseInts);
+  if (slots.length === 0) return best;
+  const forced = new Int8Array(2 * pcs.length);
+  const offsets = [0, 1, -1];
+  const total = Math.pow(3, slots.length);
+  for (let combo = 1; combo < total; combo++) {
+    let c = combo;
+    for (const s of slots) { forced[s] = offsets[c % 3]!; c = (c / 3) | 0; }
+    const asm = assembleWire(surface, pcs, forced);
+    const ints = countSelfIntersections(asm.p2, best.selfInts + 1);
+    const sc = score(asm, ints);
+    if (sc[0] < bestScore[0] || (sc[0] === bestScore[0] && (sc[1] < bestScore[1]
+      || (sc[1] === bestScore[1] && (sc[2] < bestScore[2] || (sc[2] === bestScore[2] && sc[3] < bestScore[3])))))) {
+      best = { asm, selfInts: ints }; bestScore = sc;
+    }
+  }
+  return best;
+
+  function score(asm: ReturnType<typeof assembleWire>, ints: number): [number, number, number, number] {
+    const area = polyArea(asm.p2);
+    const signOk = expectSign === 0 || Math.sign(area) === expectSign ? 0 : 1;
+    return [ints, Math.abs(asm.windU) + Math.abs(asm.windV), signOk, -Math.abs(area)];
+  }
+}
+
+/** The original whole-loop projection: every boundary point hint-chained from the previous one,
+ * then the concatenated loop unwrapped per periodic axis. On a well-behaved surface this is exact;
+ * on a PINCHED surface (a flattened tube whose opposite folds coincide within ~1e-4, as Shapr3D
+ * emits around counterbore rims) the global chain is actually the most robust pointwise scheme —
+ * both folds contain the junction vertices, and only fold-continuity through the whole loop keeps
+ * every edge on the loop-consistent fold. It stays the fast path; the per-edge cover assembly below
+ * only takes over when this result is measurably tangled. */
+function legacyLoopParam(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>): { p3: Vec3[]; p2: P2[] } {
   const p3: Vec3[] = [];
+  const p2: P2[] = [];
+  // Chained per edge with the hint carried across the junction (the junction is the same 3D
+  // vertex, so this is the whole-loop chain), which lets each edge get the slit treatment.
+  let hint: P2 | undefined;
   for (const oe of loop.edges) {
     const base = sampled.get(oe.edgeId);
     if (!base) continue;
     const poly = oe.orient ? base : base.slice().reverse();
-    for (let i = 0; i < poly.length - 1; i++) p3.push(poly[i]!);
-  }
-  // Project each boundary point seeded from the previous one's (u,v) so the boundary stays
-  // continuous in parameter space — across a seam too (the B-spline solver isn't clamped there). If
-  // the hint sends the solver astray (residual to the surface stays large, e.g. a coarse seed grid
-  // on a thin patch or a corner) fall back to the stateless nearest-grid projection. Analytic
-  // surfaces ignore the hint and land exactly, so they never fall back.
-  const resid = (q: P2, pt: Vec3): number => { const e = surface.evaluate(q[0], q[1]); return Math.hypot(e[0] - pt[0], e[1] - pt[1], e[2] - pt[2]); };
-  const p2: P2[] = [];
-  let hu: number | undefined, hv: number | undefined;
-  for (const pt of p3) {
-    let q = surface.project(pt, hu, hv);
-    if (resid(q, pt) > 1e-3) { const g = surface.project(pt); if (resid(g, pt) < resid(q, pt)) q = g; }
-    p2.push(q); hu = q[0]; hv = q[1];
+    const ep2 = chainProject(surface, poly, hint);
+    slitCollapse(poly, ep2);
+    hint = ep2[ep2.length - 1];
+    for (let i = 0; i < poly.length - 1; i++) { p3.push(poly[i]!); p2.push(ep2[i]!); }
   }
   if (surface.periodicU) unwrap(p2, 0, surface.uPeriod || TWO_PI);
   if (surface.periodicV) unwrap(p2, 1, surface.vPeriod || TWO_PI);
   return { p3, p2 };
+}
+
+/** Net winding of a closed cycle around periodic axis c: sum of shortest-representative steps,
+ * including the closing one, in whole periods. */
+function cycleWind(p2: P2[], c: 0 | 1, period: number): number {
+  if (!period) return 0;
+  let w = 0;
+  const half = period / 2;
+  for (let i = 0; i < p2.length; i++) {
+    let d = p2[(i + 1) % p2.length]![c] - p2[i]![c];
+    d %= period; if (d > half) d -= period; else if (d < -half) d += period;
+    w += d;
+  }
+  return Math.round(w / period);
+}
+
+/** Project a boundary loop to (u,v). The proven whole-loop chained projection is the fast path,
+ * kept bit-for-bit for every loop it handles cleanly. When its result SELF-INTERSECTS on a periodic
+ * surface (a seam-tangled loop), the seam-aware machinery takes over: per-edge pcurves (phase A)
+ * assembled on the universal cover (phase B), repaired over the bounded seam-representative choices
+ * (phase C) — and the better of the two candidates is returned. expectSign is the loop's expected
+ * winding sign in (u,v) (repair tiebreak; 0 = unknown). Exported for tests. */
+export function loopParam(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, expectSign = 0): LoopUV {
+  const uP = surface.periodicU ? surface.uPeriod || TWO_PI : 0;
+  const vP = surface.periodicV ? surface.vPeriod || TWO_PI : 0;
+  const leg = legacyLoopParam(surface, loop, sampled);
+  if ((!uP && !vP) || leg.p2.length < 4) return { ...leg, windU: 0, windV: 0, tangled: false };
+  const legInts = countSelfIntersections(leg.p2);
+  const legWind: [number, number] = [cycleWind(leg.p2, 0, uP), cycleWind(leg.p2, 1, vP)];
+  if (legInts === 0) return { ...leg, windU: legWind[0], windV: legWind[1], tangled: false };
+
+  const pcs: EdgePC[] = [];
+  for (const oe of loop.edges) {
+    const base = sampled.get(oe.edgeId);
+    if (!base) continue;
+    pcs.push(edgePcurve(surface, oe.orient ? base : base.slice().reverse()));
+  }
+  if (pcs.length === 0) return { ...leg, windU: legWind[0], windV: legWind[1], tangled: true };
+  let asm = assembleWire(surface, pcs);
+  let selfInts = countSelfIntersections(asm.p2);
+  if (selfInts > 0) ({ asm, selfInts } = repairWire(surface, pcs, asm, selfInts, expectSign));
+  // Choose between the legacy loop and the reassembled one by the same lexicographic score the
+  // repair search uses; the legacy result wins ties (bit-for-bit stability for everything the old
+  // projector already handled acceptably).
+  const scoreOf = (p2: P2[], ints: number, w: [number, number]): [number, number, number, number] => {
+    const area = polyArea(p2);
+    return [ints, Math.abs(w[0]) + Math.abs(w[1]), expectSign === 0 || Math.sign(area) === expectSign ? 0 : 1, -Math.abs(area)];
+  };
+  const sl = scoreOf(leg.p2, legInts, legWind);
+  const sn = scoreOf(asm.p2, selfInts, [asm.windU, asm.windV]);
+  const newBetter = sn[0] < sl[0] || (sn[0] === sl[0] && (sn[1] < sl[1]
+    || (sn[1] === sl[1] && (sn[2] < sl[2] || (sn[2] === sl[2] && sn[3] < sl[3])))));
+  return newBetter
+    ? { p3: asm.p3, p2: asm.p2, windU: asm.windU, windV: asm.windV, tangled: selfInts > 0 }
+    : { ...leg, windU: legWind[0], windV: legWind[1], tangled: true };
 }
 
 /** Signed area of a closed (u,v) polygon (shoelace); |area| ranks loops to find the outer boundary. */
@@ -149,7 +443,14 @@ function tessellateParamGrid(
   // kernels (e.g. Onshape via ST-DEVELOPER) mark EVERY bound FACE_BOUND and never set it — there the
   // outer loop is whichever encloses the largest area in parameter space; the rest are holes. Without
   // this an annular face picks a hole as its boundary and meshes the wrong region (open seams).
-  const projected = loops.map((l) => ({ outer: l.outer, lp: loopParam(surface, l, sampled) }));
+  // expectSign feeds the seam-repair tiebreak: in this codebase's parametrisations the outer bound
+  // runs CW (negative area) when same_sense holds, holes the other way; unknown (0) when no bound
+  // carries the FACE_OUTER_BOUND flag.
+  const outerFlagged = loops.some((l) => l.outer);
+  const projected = loops.map((l) => ({
+    outer: l.outer,
+    lp: loopParam(surface, l, sampled, outerFlagged ? (l.outer ? -sign : sign) : 0),
+  }));
   const bboxExtent = (p2: P2[]): number => {
     let umn = Infinity, umx = -Infinity, vmn = Infinity, vmx = -Infinity;
     for (const q of p2) { if (q[0] < umn) umn = q[0]; if (q[0] > umx) umx = q[0]; if (q[1] < vmn) vmn = q[1]; if (q[1] > vmx) vmx = q[1]; }
@@ -196,14 +497,70 @@ function gridCDT(
     if (q[0] < umin) umin = q[0]; if (q[0] > umax) umax = q[0];
     if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1];
   }
-  const holeP2 = holes.map((h) => h.p2);
-  const inRegion = (p: P2): boolean => pointInPoly(p, outer.p2) && !holeP2.some((h) => pointInPoly(p, h));
-
   const umid = (umin + umax) / 2, vmid = (vmin + vmax) / 2, eps = 1e-3;
   const dU = surface.evaluate(umid + eps, vmid), dU2 = surface.evaluate(umid - eps, vmid);
   const dV = surface.evaluate(umid, vmid + eps), dV2 = surface.evaluate(umid, vmid - eps);
   const uScale = Math.max(1e-9, Math.hypot(dU[0] - dU2[0], dU[1] - dU2[1], dU[2] - dU2[2]) / (2 * eps));
   const vScale = Math.max(1e-9, Math.hypot(dV[0] - dV2[0], dV[1] - dV2[1], dV[2] - dV2[2]) / (2 * eps));
+
+  // Sanitize each boundary ring: collapse zero-width "out-and-back" spikes. A pinched strip face
+  // (Shapr3D counterbore rims) traverses the same 3D curve twice through two edges whose (u,v)
+  // images COINCIDE within the pinch tolerance — coincident constraint vertices are unrealisable
+  // for the CDT (it shatters the face into unconstrained fragments). Two ring points count as the
+  // same vertex ONLY when their 3D samples are weld-equal (the same 1e-6 quantisation weld() uses,
+  // so both adjacent faces see the identical merge — a looser, per-face (u,v) tolerance would drop
+  // a sample one neighbour keeps and open a T-junction) AND their (u,v) images coincide (a seam
+  // vertex is 3D-equal but a period apart — not the same boundary vertex). An immediate backtrack
+  // a-b-a collapses to a, repeatedly, so a whole coincident spike vanishes and the ring around it
+  // stays intact; the enclosed region is unchanged (a spike bounds zero area). Clean loops have no
+  // weld-coincident boundary vertices, so this is a no-op for them.
+  const snapTol = 1e-3;
+  const sanitize = (lp: { p3: Vec3[]; p2: P2[] }): { p3: Vec3[]; p2: P2[] } => {
+    const n = lp.p2.length;
+    if (n < 4) return lp;
+    const ringKey = (i: number): string => {
+      const p = lp.p3[i]!, q = lp.p2[i]!;
+      return `${Math.round(p[0] / 1e-6)},${Math.round(p[1] / 1e-6)},${Math.round(p[2] / 1e-6)};${Math.round((q[0] * uScale) / snapTol)},${Math.round((q[1] * vScale) / snapTol)}`;
+    };
+    let keep: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const k = ringKey(i);
+      while (keep.length >= 2 && ringKey(keep[keep.length - 2]!) === k) keep.pop();
+      if (keep.length >= 1 && ringKey(keep[keep.length - 1]!) === k) continue;
+      keep.push(i);
+    }
+    // Same-direction repeats: a degenerate rim traversed TWICE (a "doubled loop", another Shapr3D
+    // pinch artefact — two edges tracing the same 3D circle). If (nearly) the whole stretch between
+    // two visits of one position repeats at that fixed offset, the loop walks the cycle twice —
+    // drop one period so it is traversed once; the region boundary is unchanged. A genuine simple
+    // boundary can pass NEAR itself but never retraces a whole stretch, so this cannot misfire.
+    for (let pass = 0; pass < 4; pass++) {
+      const m = keep.length;
+      if (m < 6) break;
+      const kOf = keep.map((i) => ringKey(i));
+      const firstAt = new Map<string, number>();
+      let cut: [number, number] | null = null;
+      for (let i = 0; i < m && !cut; i++) {
+        const j = firstAt.get(kOf[i]!);
+        if (j === undefined) { firstAt.set(kOf[i]!, i); continue; }
+        const r = i - j;
+        if (r < 2) continue;
+        let L = 0;
+        while (L < r && i + L < m && kOf[j + L] === kOf[i + L]) L++;
+        if (L >= Math.max(2, r - 1)) cut = [j, i]; // drop one full period [j, i)
+      }
+      if (!cut) break;
+      keep = [...keep.slice(0, cut[0]), ...keep.slice(cut[1])];
+    }
+    if (keep.length === n) return lp;
+    if (keep.length < 3) return lp;
+    return { p3: keep.map((i) => lp.p3[i]!), p2: keep.map((i) => lp.p2[i]!) };
+  };
+  outer = sanitize(outer);
+  holes = holes.map(sanitize);
+  const holeP2 = holes.map((h) => h.p2);
+  const inRegion = (p: P2): boolean => pointInPoly(p, outer.p2) && !holeP2.some((h) => pointInPoly(p, h));
+
   // Curvature-adaptive interior density so the initial mesh is already fine on curved faces.
   const target = faceTarget(surface, targetEdge, chordTol, normalDev, umid, vmid);
   const nU = Math.min(1200, Math.max(1, Math.round(((umax - umin) * uScale) / target)));
@@ -1147,10 +1504,15 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
 
     const { mesh } = weld(verts);
     const z = zipSlivers(mesh, 0.05);
+    const keptFaceIds: number[] = [];
+    for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) keptFaceIds.push(faceIds[t]!);
+    const fill = fillMicroHoles(z.positions, z.indices, keptFaceIds, 0.05);
     for (const x of z.positions) positions.push(x);
     for (const ix of z.indices) indices.push(ix + voff);
+    for (const ix of fill.indices) indices.push(ix + voff);
     voff += z.positions.length / 3;
-    for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) { faceOfTri.push(faceIds[t]!); solidOfTri.push(solid.id); }
+    for (const f of keptFaceIds) { faceOfTri.push(f); solidOfTri.push(solid.id); }
+    for (const f of fill.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
   }
 
   // No precise B-rep? Fall back to AP242 tessellated geometry (a pre-faceted body in the file).
@@ -1221,7 +1583,10 @@ function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; 
   // Weld each open vertex to its nearest open vertex within tol that it does NOT already share a
   // triangle edge with (across-gap partners are unconnected; along-rail neighbours are connected).
   for (const v of openV) {
-    const cap = Math.min(tol, 0.5 * (vCap.get(v) ?? Infinity));
+    // Absolute 3 µm floor on the cap: at a DEGENERATE tip (a B-spline sliver tapering to a pole)
+    // the rail segments themselves shrink to microns, so half-a-segment blocks the very zip the
+    // crack needs. No real CAD feature lives at 3 µm, so the floor cannot weld distinct geometry.
+    const cap = Math.min(tol, Math.max(0.5 * (vCap.get(v) ?? Infinity), 3e-3));
     let best = -1, bestD = cap * cap;
     const cx = Math.round(px(v) / cell), cy = Math.round(py(v) / cell), cz = Math.round(pz(v) / cell);
     for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) for (let gz = -1; gz <= 1; gz++) {
@@ -1246,6 +1611,51 @@ function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; 
     keep[t] = true; outI.push(a, b, c);
   }
   return { positions: Float64Array.from(pos), indices: Uint32Array.from(outI), keep };
+}
+
+/**
+ * Fill micro-holes left at degenerate tips: an open-edge loop whose whole perimeter is below the
+ * sliver tolerance is a pinhole (a few µm-scale triangles collapsed at a B-spline pole/tip, whose
+ * ring vertices are all mutually edge-connected, so the vertex zip can't close it) — not a real
+ * gap. Fan it shut, wound opposite the ring so it pairs manifold-consistently with the surrounding
+ * triangles. Real openings have perimeters orders of magnitude larger and are left alone.
+ */
+function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number): { indices: number[]; faceOf: number[] } {
+  const KEY = 2 ** 26;
+  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
+  const use = new Map<number, number>();
+  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) use.set(ek(I[i + e]!, I[i + (e + 1) % 3]!), (use.get(ek(I[i + e]!, I[i + (e + 1) % 3]!)) ?? 0) + 1);
+  // Directed boundary edges a->b (as traversed by their owning triangle) and the owning face.
+  const nxt = new Map<number, number>();
+  const faceAt = new Map<number, number>();
+  const multi = new Set<number>(); // boundary vertices with >1 outgoing edge — walking is ambiguous
+  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+    const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
+    if (use.get(ek(a, b)) !== 1) continue;
+    if (nxt.has(a)) multi.add(a);
+    nxt.set(a, b); faceAt.set(a, faceOf[i / 3]!);
+  }
+  const outI: number[] = [], outF: number[] = [];
+  const seen = new Set<number>();
+  for (const start of nxt.keys()) {
+    if (seen.has(start)) continue;
+    const ring: number[] = [];
+    let cur = start, per = 0, ok = true;
+    for (let g = 0; g <= 64; g++) {
+      ring.push(cur); seen.add(cur);
+      const n = nxt.get(cur);
+      if (n === undefined) { ok = false; break; }
+      per += Math.hypot(P[cur * 3]! - P[n * 3]!, P[cur * 3 + 1]! - P[n * 3 + 1]!, P[cur * 3 + 2]! - P[n * 3 + 2]!);
+      if (per > tol) { ok = false; break; }
+      cur = n;
+      if (cur === start) break;
+      if (g === 64 || seen.has(cur)) { ok = false; break; }
+    }
+    if (!ok || cur !== start || ring.length < 3 || ring.some((v) => multi.has(v))) continue;
+    // Fan, reversed relative to the directed ring so each ring edge is paired b->a.
+    for (let i = 1; i + 1 < ring.length; i++) { outI.push(ring[0]!, ring[i + 1]!, ring[i]!); outF.push(faceAt.get(ring[0]!)!); }
+  }
+  return { indices: outI, faceOf: outF };
 }
 
 /** Weld coincident triangle-soup vertices into an indexed mesh (positions quantised to eps). */
