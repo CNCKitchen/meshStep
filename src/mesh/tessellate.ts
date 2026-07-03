@@ -329,6 +329,31 @@ function legacyLoopParam(surface: Surface, loop: BLoop, sampled: Map<number, Vec
   }
   if (surface.periodicU) unwrap(p2, 0, surface.uPeriod || TWO_PI);
   if (surface.periodicV) unwrap(p2, 1, surface.vPeriod || TWO_PI);
+  // Repair ISOLATED (u,v) outliers. The loop's very first projection has no hint, and on a surface
+  // that passes close to itself (a helical thread: adjacent turns are microns apart in 3D) the
+  // nearest-grid-node seed can converge onto the WRONG TURN — one point whose (u,v) sits a dozen
+  // units from both neighbours while the neighbours agree with each other. That single zigzag
+  // self-intersects the polygon, inRegion then misclassifies the whole interior, and the CDT fills
+  // barrel-spanning garbage (furniture-leg's thread). The loop is cyclic, so every point has two
+  // CHAINED neighbours: re-project a flagged point hinted from its predecessor and accept only a
+  // result that actually lands between the neighbours AND stays on the surface at the sample.
+  const n = p2.length;
+  if (n >= 4) {
+    const d2 = (a: P2, b: P2): number => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    for (let i = 0; i < n; i++) {
+      const a = p2[(i + n - 1) % n]!, b = p2[i]!, c = p2[(i + 1) % n]!;
+      const dAC = d2(a, c), dAB = d2(a, b), dBC = d2(b, c);
+      if (dAB < 8 * dAC + 1e-9 || dBC < 8 * dAC + 1e-9) continue;
+      const q = surface.project(p3[i]!, a[0], a[1]);
+      if (d2(q, a) + d2(q, c) >= 0.5 * (dAB + dBC)) continue; // did not land between the neighbours
+      const s = surface.evaluate(q[0], q[1]);
+      const p = p3[i]!;
+      const sOld = surface.evaluate(b[0], b[1]);
+      const rNew = Math.hypot(s[0] - p[0], s[1] - p[1], s[2] - p[2]);
+      const rOld = Math.hypot(sOld[0] - p[0], sOld[1] - p[1], sOld[2] - p[2]);
+      if (rNew <= Math.max(2 * rOld, 1e-3)) p2[i] = q;
+    }
+  }
   return { p3, p2 };
 }
 
