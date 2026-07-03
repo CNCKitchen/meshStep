@@ -271,6 +271,7 @@ class BSplineSurface implements Surface {
   // projection lookup grid
   gU: number[] = []; gV: number[] = []; gP: Vec3[][] = [];
   rc = Infinity;
+  rcGrid: number[][] = []; // per grid CELL local min normal-turn radius (same estimate as rc)
   closedU = false; closedV = false; // patch wraps onto itself in u / v
   constructor(uDeg: number, vDeg: number, cps: number[][][], uKnots: number[], vKnots: number[]) {
     this.uDeg = uDeg; this.vDeg = vDeg; this.cps = cps; this.uKnots = uKnots; this.vKnots = vKnots;
@@ -298,17 +299,27 @@ class BSplineSurface implements Surface {
       for (let j = 0; j <= GV; j++) row.push(this.evaluate(this.gU[i]!, this.gV[j]!));
       this.gP.push(row);
     }
-    // Rough min curvature radius from normal turn across the grid (drives adaptive refinement).
+    // Rough min curvature radius from normal turn across the grid (drives adaptive refinement),
+    // kept PER CELL: one degenerate spot (a lens patch pinching to a needle tip) must not drag the
+    // whole surface's target down — a global minimum made gridCDT mesh a benign R≈2mm face at the
+    // needle-tip's 0.1mm "radius" everywhere (OpenVessel's bow lens: 14× too dense, needle fringe).
     let minR = Infinity;
-    for (let i = 0; i < GU; i++) for (let j = 0; j < GV; j++) {
-      const a = this.gP[i]![j]!, b = this.gP[i + 1]![j]!, c = this.gP[i]![j + 1]!;
-      const n1 = this.normalAt(this.gU[i]!, this.gV[j]!), n2 = this.normalAt(this.gU[i + 1]!, this.gV[j]!), n3 = this.normalAt(this.gU[i]!, this.gV[j + 1]!);
-      const du = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
-      const dv = Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
-      const tu = Math.acos(Math.max(-1, Math.min(1, dot(n1, n2))));
-      const tv = Math.acos(Math.max(-1, Math.min(1, dot(n1, n3))));
-      if (tu > 1e-4 && du > 1e-9) minR = Math.min(minR, du / tu);
-      if (tv > 1e-4 && dv > 1e-9) minR = Math.min(minR, dv / tv);
+    for (let i = 0; i < GU; i++) {
+      const row: number[] = [];
+      for (let j = 0; j < GV; j++) {
+        const a = this.gP[i]![j]!, b = this.gP[i + 1]![j]!, c = this.gP[i]![j + 1]!;
+        const n1 = this.normalAt(this.gU[i]!, this.gV[j]!), n2 = this.normalAt(this.gU[i + 1]!, this.gV[j]!), n3 = this.normalAt(this.gU[i]!, this.gV[j + 1]!);
+        const du = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+        const dv = Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
+        const tu = Math.acos(Math.max(-1, Math.min(1, dot(n1, n2))));
+        const tv = Math.acos(Math.max(-1, Math.min(1, dot(n1, n3))));
+        let r = Infinity;
+        if (tu > 1e-4 && du > 1e-9) r = Math.min(r, du / tu);
+        if (tv > 1e-4 && dv > 1e-9) r = Math.min(r, dv / tv);
+        row.push(r);
+        minR = Math.min(minR, r);
+      }
+      this.rcGrid.push(row);
     }
     this.rc = Number.isFinite(minR) ? Math.max(0.05, minR) : Infinity;
   }
@@ -340,7 +351,20 @@ class BSplineSurface implements Surface {
     return len > 1e-12 ? [n[0] / len, n[1] / len, n[2] / len] : [0, 0, 1];
   }
   normal(u: number, v: number): Vec3 { return this.normalAt(u, v); }
-  curvatureRadius(): number { return this.rc; }
+  curvatureRadius(u: number, v: number): number {
+    // Local lookup: min over the query's cell and its 8 neighbours (one cell of smoothing keeps the
+    // size field from jumping across cell borders). Falls back to the global rc off-grid.
+    const nu = this.rcGrid.length;
+    if (!nu) return this.rc;
+    const nv = this.rcGrid[0]!.length;
+    const ci = Math.min(nu - 1, Math.max(0, Math.floor(((u - this.u0) / Math.max(this.u1 - this.u0, 1e-30)) * nu)));
+    const cj = Math.min(nv - 1, Math.max(0, Math.floor(((v - this.v0) / Math.max(this.v1 - this.v0, 1e-30)) * nv)));
+    let r = Infinity;
+    for (let i = Math.max(0, ci - 1); i <= Math.min(nu - 1, ci + 1); i++) {
+      for (let j = Math.max(0, cj - 1); j <= Math.min(nv - 1, cj + 1); j++) r = Math.min(r, this.rcGrid[i]![j]!);
+    }
+    return Number.isFinite(r) ? Math.max(0.05, r) : Infinity;
+  }
   project(p: Vec3, hu?: number, hv?: number): [number, number] {
     // Seed from the caller's hint (continuous boundary projection) or the nearest grid node, then a
     // few Gauss-Newton steps minimising |S(u,v)-p|². In a CLOSED direction the coordinate is NOT
