@@ -282,6 +282,16 @@ export function sampleEdgePolyline(
 ): Vec3[] {
   const kind = t.typeOf(curveId); // undefined for complex entities (surface/seam curves)
 
+  // SURFACE_CURVE / SEAM_CURVE / INTERSECTION_CURVE(name, curve_3d#, (pcurves), rep) wrap their true
+  // geometry in the referenced 3D curve — dispatch on THAT so wrapped conics reach the arc samplers
+  // and wrapped LINEs the straight chord. Falling through to the generic path below is wrong for a
+  // wrapped LINE: LineCurve's domain is the anchor segment [o, o+d], unrelated to this edge's span,
+  // so endpoint snapping strands the interior samples there (legacy AP203 exporters wrap EVERY edge
+  // in INTERSECTION_CURVE — model-spanning sliver triangles on 2827056.stp).
+  if (kind === "SURFACE_CURVE" || kind === "SEAM_CURVE" || kind === "INTERSECTION_CURVE") {
+    return sampleEdgePolyline(t, ref(t.record(curveId).params[1]!), v0, v1, sameSense, s, chordTol, maxSegLen, aRad);
+  }
+
   if (kind === "CIRCLE") {
     const rec = t.record(curveId);
     const f = readPlacement(t, ref(rec.params[1]!), s);
