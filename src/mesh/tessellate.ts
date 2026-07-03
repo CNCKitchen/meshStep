@@ -741,14 +741,30 @@ function tessellatePeriodicUnroll(
     const normTo = (x: number): number => { let d = (x - seam) % period; if (d < 0) d += period; return seam + d; };
     const toP2 = (a: number, s: number): P2 => (c === 0 ? [a, s] : [s, a]);
 
-    // Rim -> polyline spanning [seam, seam+period], ascending in the around-coord, with a closing
-    // duplicate at seam+period (3D-identical to the start; it becomes the far seam corner).
-    const buildRim = (rim: { p3: Vec3[]; p2: P2[] }): { p3: Vec3[]; p2: P2[] } => {
-      const items = rim.p2.map((q, i) => ({ a: normTo(q[c]), s: q[stackC], p3: rim.p3[i]! }));
-      items.sort((x, y) => x.a - y.a);
-      const first = items[0]!;
-      items.push({ a: first.a + period, s: first.s, p3: first.p3 });
-      return { p3: items.map((it) => it.p3), p2: items.map((it) => toP2(it.a, it.s)) };
+    // Rim -> polyline spanning ~[seam, seam+period], net-ascending in the around-coord, with a
+    // closing duplicate at start+period (3D-identical to the start; it becomes the far seam corner).
+    // The loop is CUT at its vertex nearest the seam and UNWRAPPED in polyline order — never sorted.
+    // Sorting by the around-coord only works for a rim that is a single-valued profile s(a); a
+    // once-winding boundary can legally be a STAIRCASE (a half-buried cylinder boss: buried half
+    // ends at one axial station, exposed half at another, joined by two constant-a waterline
+    // segments). Sorting collapses each vertical segment into one a-slot in arbitrary order and
+    // zigzags the boundary, which tangles the CDT constraints into surface-crossing triangles.
+    const buildRim = (rim: { p3: Vec3[]; p2: P2[]; wind: number }): { p3: Vec3[]; p2: P2[] } => {
+      let p3 = rim.p3, p2 = rim.p2;
+      if (rim.wind < 0) { p3 = p3.slice().reverse(); p2 = p2.slice().reverse(); }
+      const n = p2.length;
+      let k = 0, best = Infinity;
+      for (let i = 0; i < n; i++) { const d = norm(p2[i]![c] - seam); if (d < best) { best = d; k = i; } }
+      const outP3: Vec3[] = [p3[k]!];
+      const auv: [number, number][] = [[seam + best, p2[k]![stackC]]];
+      for (let i = 1; i < n; i++) {
+        const j = (k + i) % n, pj = (k + i - 1) % n;
+        let d = p2[j]![c] - p2[pj]![c];
+        while (d > period / 2) d -= period; while (d < -period / 2) d += period;
+        outP3.push(p3[j]!); auv.push([auv[i - 1]![0] + d, p2[j]![stackC]]);
+      }
+      outP3.push(p3[k]!); auv.push([auv[0]![0] + period, auv[0]![1]]);
+      return { p3: outP3, p2: auv.map(([a, s]) => toP2(a, s)) };
     };
     const bottom = buildRim(rims[0]!), top = buildRim(rims[1]!);
     // Outer boundary: bottom left->right, then top right->left. The two vertical sides are the seam
@@ -770,16 +786,24 @@ function tessellatePeriodicUnroll(
  * Stitch two concentric (closed) rings of unequal point counts into a triangle band, advancing
  * whichever ring is behind in its angular fraction. Both rings must start at the same angle and run
  * the same way; a count-1 ring is a pole (fan). Shared by the cone / sphere / B-spline pole meshers.
+ * By default a point's angular fraction is its INDEX fraction — right for evenly spaced rings. A
+ * ring whose points are NOT evenly spaced in angle (a staircase rim: several boundary points share
+ * one angle along a constant-angle step) must pass explicit fractions (fracA/fracB, cumulative
+ * angular progress normalised to [0,1)); index pairing there skews partners by up to the step's
+ * index share of the ring — chords spanning ~100° of arc that cut straight through the surface.
  */
 function stitchRings(
   verts: number[], faceIds: number[], A: Vec3[], B: Vec3[], fid: number, surface: Surface, sign: number,
+  fracA?: number[], fracB?: number[],
 ): void {
   const na = A.length, nb = B.length;
   if (na === 1) { for (let j = 0; j < nb; j++) emitTri(verts, faceIds, A[0]!, B[j]!, B[(j + 1) % nb]!, fid, surface, sign); return; }
   if (nb === 1) { for (let k = 0; k < na; k++) emitTri(verts, faceIds, A[k]!, A[(k + 1) % na]!, B[0]!, fid, surface, sign); return; }
+  const fa = (i: number): number => (i >= na ? 1 : fracA ? fracA[i]! : i / na);
+  const fb = (i: number): number => (i >= nb ? 1 : fracB ? fracB[i]! : i / nb);
   let ia = 0, ib = 0;
   while (ia < na || ib < nb) {
-    if (ia < na && (ib >= nb || ia / na < ib / nb)) { emitTri(verts, faceIds, A[ia % na]!, A[(ia + 1) % na]!, B[ib % nb]!, fid, surface, sign); ia++; }
+    if (ia < na && (ib >= nb || fa(ia) < fb(ib))) { emitTri(verts, faceIds, A[ia % na]!, A[(ia + 1) % na]!, B[ib % nb]!, fid, surface, sign); ia++; }
     else { emitTri(verts, faceIds, A[ia % na]!, B[(ib + 1) % nb]!, B[ib % nb]!, fid, surface, sign); ib++; }
   }
 }
@@ -955,6 +979,15 @@ function tessellateRevolutionBand(
         span = Math.max(span, d3(bottom[j]!, evalAt(c, angs[j]!, hTopAt(progB[j]!))));
       }
       const nRings = Math.max(1, Math.min(400, Math.ceil(span / target)));
+      // Angular-progress fractions for the final stitch: the loft rings inherit bottom's angles
+      // (index-aligned 1:1 among themselves), but `top` may distribute its points unevenly in angle
+      // (a staircase rim parks many points on one constant-angle step), so the closing band must
+      // pair by TRUE angular progress, not index share. Fractions are normalised over the progress
+      // INCLUDING the closing segment back to the ring start.
+      const fracOf = (prog: number[], pts: Vec3[]): number[] => {
+        const tot = prog[prog.length - 1]! + Math.abs(wrap(angleOf(pts[0]!) - angleOf(pts[pts.length - 1]!)));
+        return prog.map((p) => (tot > 1e-12 ? p / tot : 0));
+      };
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
         ti = 0;
@@ -963,7 +996,7 @@ function tessellateRevolutionBand(
         stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
         prev = ring;
       }
-      stitchRings(verts, faceIds, prev, top, fid, surface, sign);
+      stitchRings(verts, faceIds, prev, top, fid, surface, sign, fracOf(progB, bottom), fracOf(progT, top));
     }
     return true;
   };
