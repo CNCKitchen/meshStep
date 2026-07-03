@@ -483,7 +483,10 @@ function tessellateParamGrid(
   const holes = projected.filter((_, i) => i !== oi).map((p) => p.lp);
   if (surface.periodicU) for (const h of holes) shiftIntoRange(h.p2, (umin + umax) / 2, 0, surface.uPeriod || TWO_PI);
   if (surface.periodicV) for (const h of holes) shiftIntoRange(h.p2, (vmin + vmax) / 2, 1, surface.vPeriod || TWO_PI);
-  return gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+  // Anisotropic ruling-aligned meshing needs a trustworthy parameter domain; a face whose boundary
+  // projection tangled (pinched tubes, fold-ambiguous patches) gets the conservative isotropic grid.
+  const clean = !projected.some((p) => p.lp.tangled);
+  return gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean);
 }
 
 /** CDT core shared by the trimmed-patch and seam-split meshers: interior grid + graded size field +
@@ -491,6 +494,7 @@ function tessellateParamGrid(
 function gridCDT(
   surface: Surface, outer: { p3: Vec3[]; p2: P2[] }, holes: { p3: Vec3[]; p2: P2[] }[], fid: number,
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
+  allowAniso = true,
 ): boolean {
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
   for (const q of outer.p2) {
@@ -502,6 +506,33 @@ function gridCDT(
   const dV = surface.evaluate(umid, vmid + eps), dV2 = surface.evaluate(umid, vmid - eps);
   const uScale = Math.max(1e-9, Math.hypot(dU[0] - dU2[0], dU[1] - dU2[1], dU[2] - dU2[2]) / (2 * eps));
   const vScale = Math.max(1e-9, Math.hypot(dV[0] - dV2[0], dV[1] - dV2[1], dV[2] - dV2[2]) / (2 * eps));
+
+  // Per-DIRECTION curvature bounds -> ANISOTROPIC scaling. A fillet bends across one parameter and
+  // is straight along the other; meshing it isotropically at the across-the-bend step makes every
+  // triangle span the full curvature step BOTH ways, and Delaunay's alternating diagonals shade
+  // that as diamond moiré creases. Kernel meshers look smooth because their fillet triangles are
+  // LONG along the ruling and short across it. Recover that: measure the normal curvature of each
+  // iso-direction at the domain midpoint and compress the flatter axis in the scaled plane by
+  // (its own allowed step / the face target), so near-unit Delaunay triangles map to
+  // ruling-aligned anisotropic 3D triangles. Planes and spheres measure equal bounds in both
+  // directions -> stretch 1 -> bit-identical isotropic behaviour.
+  const epsU = Math.max(1e-6, (umax - umin) / 64), epsV = Math.max(1e-6, (vmax - vmin) / 64);
+  const Pm = surface.evaluate(umid, vmid);
+  const uPp = surface.evaluate(umid + epsU, vmid), uPm = surface.evaluate(umid - epsU, vmid);
+  const vPp = surface.evaluate(umid, vmid + epsV), vPm = surface.evaluate(umid, vmid - epsV);
+  const d1u: Vec3 = [(uPp[0] - uPm[0]) / (2 * epsU), (uPp[1] - uPm[1]) / (2 * epsU), (uPp[2] - uPm[2]) / (2 * epsU)];
+  const d1v: Vec3 = [(vPp[0] - vPm[0]) / (2 * epsV), (vPp[1] - vPm[1]) / (2 * epsV), (vPp[2] - vPm[2]) / (2 * epsV)];
+  const nrm = normalize(cross(d1u, d1v));
+  const normCurv = (Pp: Vec3, Pn: Vec3, d1: Vec3, e: number): number => {
+    const d2: Vec3 = [(Pp[0] + Pn[0] - 2 * Pm[0]) / (e * e), (Pp[1] + Pn[1] - 2 * Pm[1]) / (e * e), (Pp[2] + Pn[2] - 2 * Pm[2]) / (e * e)];
+    return Math.abs(dot(d2, nrm)) / Math.max(d1[0] * d1[0] + d1[1] * d1[1] + d1[2] * d1[2], 1e-30);
+  };
+  const stepOf = (kappa: number): number => {
+    if (!(kappa > 1e-9)) return targetEdge;
+    const R = 1 / kappa;
+    return Math.max(targetEdge / 40, Math.min(targetEdge, Math.sqrt(8 * chordTol * R), R * normalDev));
+  };
+  const stepU = stepOf(normCurv(uPp, uPm, d1u, epsU)), stepV = stepOf(normCurv(vPp, vPm, d1v, epsV));
 
   // Sanitize each boundary ring: collapse zero-width "out-and-back" spikes. A pinched strip face
   // (Shapr3D counterbore rims) traverses the same 3D curve twice through two edges whose (u,v)
@@ -563,8 +594,22 @@ function gridCDT(
 
   // Curvature-adaptive interior density so the initial mesh is already fine on curved faces.
   const target = faceTarget(surface, targetEdge, chordTol, normalDev, umid, vmid);
-  const nU = Math.min(1200, Math.max(1, Math.round(((umax - umin) * uScale) / target)));
-  const nV = Math.min(1200, Math.max(1, Math.round(((vmax - vmin) * vScale) / target)));
+  // Anisotropy-adjusted axis scales for the CDT plane (capped so triangles never exceed ~6:1 —
+  // beyond that slivers start to cost more numerically than the shading gains). uScale/vScale stay
+  // the TRUE metric for anything with a physical tolerance (the sanitiser's snap key above).
+  // Gated to surfaces whose flat direction is flat EVERYWHERE (analytic single-curved kinds): the
+  // stretch factor is measured once at the domain midpoint, and a freeform/offset patch that is
+  // flat there can bend elsewhere — stretching it starves the bent region of points (measured as
+  // open/nm regressions on B-spline-heavy models). On the gated kinds the ruling direction is
+  // globally straight (or, for a torus tube, of uniformly bounded curvature), so the midpoint
+  // measurement holds across the whole face.
+  const anisoOk = allowAniso && (surface.kind === "CYLINDRICAL_SURFACE" || surface.kind === "CONICAL_SURFACE"
+    || surface.kind === "TOROIDAL_SURFACE" || surface.kind === "SURFACE_OF_LINEAR_EXTRUSION");
+  const ANISO_CAP = anisoOk ? 6 : 1;
+  const uSc = uScale / Math.min(ANISO_CAP, Math.max(1, stepU / target));
+  const vSc = vScale / Math.min(ANISO_CAP, Math.max(1, stepV / target));
+  const nU = Math.min(1200, Math.max(1, Math.round(((umax - umin) * uSc) / target)));
+  const nV = Math.min(1200, Math.max(1, Math.round(((vmax - vmin) * vSc) / target)));
 
   const allP2: P2[] = [];
   const allP3: Vec3[] = [];
@@ -577,17 +622,22 @@ function gridCDT(
   const holeIdx = holes.map(pushLoop);
 
   // Everything below works in METRIC-SCALED parameter space (scale u,v by the local surface metric
-  // so 2D distance ≈ 3D arc length): a plain Delaunay there yields near-isotropic 3D triangles — a
-  // cylinder (u spans 2π but R·2π in 3D) stops slivering at its seam; a plane is uScale=vScale=1.
-  const SX = (u: number): number => u * uScale, SY = (v: number): number => v * vScale;
+  // so 2D distance ≈ 3D arc length, then divide by the per-direction anisotropy): a plain Delaunay
+  // there yields 3D triangles isotropic in "allowed steps" — square on a plane, ruling-elongated on
+  // a fillet — and a cylinder (u spans 2π but R·2π in 3D) stops slivering at its seam.
+  const SX = (u: number): number => u * uSc, SY = (v: number): number => v * vSc;
   // Boundary segments in scaled space, hashed, drive (a) a graded SIZE FIELD — size grows from each
   // edge's own length outward (so a tight-fillet edge shared with this flat face stays small near it
   // and coarsens away), capped at the face target — and (b) a "too close to the boundary" test.
+  // Segment positions live in the (anisotropy-compressed) CDT space, but the grading LENGTH is the
+  // segment's TRUE metric length: a ruling-aligned boundary edge measures short in compressed
+  // space, and grading from that phantom "fine feature" would crowd micro-triangles along every
+  // fillet rail.
   const sseg: [number, number, number, number, number][] = [];
   for (const idx of [outerIdx, ...holeIdx]) for (let i = 0; i < idx.length; i++) {
     const a = allP2[idx[i]!]!, b = allP2[idx[(i + 1) % idx.length]!]!;
     const ax = SX(a[0]), ay = SY(a[1]), bx = SX(b[0]), by = SY(b[1]);
-    sseg.push([ax, ay, bx, by, Math.hypot(bx - ax, by - ay)]);
+    sseg.push([ax, ay, bx, by, Math.hypot((b[0] - a[0]) * uScale, (b[1] - a[1]) * vScale)]);
   }
   const csz = Math.max(target, 1e-6);
   const hkey = (ix: number, iy: number): number => Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663);
@@ -598,7 +648,7 @@ function gridCDT(
     // Size field = min of (a) the LOCAL curvature target — so a face whose curvature varies is
     // refined where it actually bends, not just at the patch midpoint — and (b) the boundary-graded
     // size, growing from each edge's own length outward. Capped at the face target, floored to bound.
-    let size = faceTarget(surface, targetEdge, chordTol, normalDev, sx / uScale, sy / vScale);
+    let size = faceTarget(surface, targetEdge, chordTol, normalDev, sx / uSc, sy / vSc);
     let dist = Infinity, cx = Math.floor(sx / csz), cy = Math.floor(sy / csz);
     for (let gx = cx - 2; gx <= cx + 2; gx++) for (let gy = cy - 2; gy <= cy + 2; gy++) {
       const arr = segHash.get(hkey(gx, gy)); if (!arr) continue;
@@ -646,8 +696,8 @@ function gridCDT(
       // fine boundary (fillet-into-chamfer), follows intra-face curvature the base grid under-sampled,
       // and improves Delaunay quality generally. The remesh later coarsens over-dense flat regions.
       if (r <= sz * 0.65) continue;
-      let u = px / uScale, v = py / vScale;
-      if (!inRegion([u, v])) { px = (A[0] + B[0] + C[0]) / 3; py = (A[1] + B[1] + C[1]) / 3; u = px / uScale; v = py / vScale; if (!inRegion([u, v])) continue; }
+      let u = px / uSc, v = py / vSc;
+      if (!inRegion([u, v])) { px = (A[0] + B[0] + C[0]) / 3; py = (A[1] + B[1] + C[1]) / 3; u = px / uSc; v = py / vSc; if (!inRegion([u, v])) continue; }
       const [sz2, dist2] = sizeDist(px, py);
       if (dist2 < 0.5 * sz2) continue;
       fresh.push([px, py]);
@@ -664,11 +714,81 @@ function gridCDT(
       }
       if (!ok) continue;
       (acc.get(hkey(hx, hy)) ?? acc.set(hkey(hx, hy), []).get(hkey(hx, hy))!).push([px, py]);
-      interiorIdx.push(allP2.length); allP2.push([px / uScale, py / vScale]); allP3.push(surface.evaluate(px / uScale, py / vScale)); cdtPts.push([px, py]);
+      interiorIdx.push(allP2.length); allP2.push([px / uSc, py / vSc]); allP3.push(surface.evaluate(px / uSc, py / vSc)); cdtPts.push([px, py]);
       added = true;
     }
     if (!added) break;
     tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx);
+  }
+  // Delaunay picks each quad's diagonal by circumcircle in the (flat) scaled plane, which on a
+  // curved face alternates diagonal direction from quad to quad — and every alternation is a
+  // shading crease (the diamond moiré on fillets). Kernel meshers look smooth because their
+  // diagonals run consistently ALONG the ruling. Recover that property without knowing where the
+  // rulings are: greedily flip interior diagonals whenever the flip brings the two adjacent
+  // triangles' 3D normals closer together. On a single-curved surface the dihedral is minimal
+  // exactly when the diagonal follows the ruling, so the flips converge to kernel-style rows; on a
+  // plane every choice ties (no-op); constraint/boundary edges are never flipped, so the shared
+  // edge samples — and watertightness — are untouched.
+  const triNormal = (a: number, b: number, c: number): [number, number, number, number] => {
+    const A = allP3[a]!, B = allP3[b]!, C = allP3[c]!;
+    const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2];
+    const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
+    const n: Vec3 = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
+    const l = Math.hypot(n[0], n[1], n[2]);
+    const s = l || 1;
+    return [n[0] / s, n[1] / s, n[2] / s, l];
+  };
+  const area2s = (a: number, b: number, c: number): number => {
+    const A = cdtPts[a]!, B = cdtPts[b]!, C = cdtPts[c]!;
+    return (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+  };
+  const NPTS = cdtPts.length;
+  const ekey = (i: number, j: number): number => (i < j ? i * NPTS + j : j * NPTS + i);
+  const constrained = new Set<number>();
+  for (const idx of [outerIdx, ...holeIdx]) for (let i = 0; i < idx.length; i++) constrained.add(ekey(idx[i]!, idx[(i + 1) % idx.length]!));
+  // Boundary vertices are pushed before any interior point, so "is boundary" is an index compare.
+  // A flipped diagonal may not connect two boundary vertices: on a welded seam both sides would
+  // make the same ruling-aligned choice and the coincident duplicated edge welds non-manifold.
+  const nBoundary = outerIdx.length + holeIdx.reduce((s, h) => s + h.length, 0);
+  for (let pass = 0; pass < 6; pass++) {
+    const use = new Map<number, [number, number][]>(); // edge -> [triIndex, oppositeVertex]
+    for (let ti = 0; ti < tris.length; ti++) {
+      const t = tris[ti]!;
+      for (let e = 0; e < 3; e++) {
+        const k = ekey(t[e]!, t[(e + 1) % 3]!);
+        (use.get(k) ?? use.set(k, []).get(k)!).push([ti, t[(e + 2) % 3]!]);
+      }
+    }
+    const dirty = new Set<number>();
+    let flips = 0;
+    for (const [k, ts] of use) {
+      if (ts.length !== 2 || constrained.has(k)) continue;
+      const [[t1, c1], [t2, c2]] = ts as [[number, number], [number, number]];
+      if (dirty.has(t1) || dirty.has(t2)) continue;
+      if (c1 < nBoundary && c2 < nBoundary) continue;
+      let a = Math.floor(k / NPTS), b = k % NPTS;
+      // The key sorts the edge's endpoints; recover the direction it runs in t1 (c1 sits to the
+      // LEFT of t1's directed edge, since triangles are CCW) so the flipped pair stays CCW.
+      if (area2s(a, b, c1) < 0) { const tmp = a; a = b; b = tmp; }
+      // Flip (a,b) -> (c1,c2). Both new triangles must stay CCW with non-vanishing area in the
+      // scaled plane (else the quad is non-convex and the flip would fold it).
+      const eps = 1e-9 * (Math.abs(area2s(...tris[t1]!)) + Math.abs(area2s(...tris[t2]!)));
+      const nA1 = area2s(c1, a, c2), nA2 = area2s(c2, b, c1);
+      if (nA1 <= eps || nA2 <= eps) continue;
+      const o1 = triNormal(...tris[t1]!), o2 = triNormal(...tris[t2]!);
+      const f1 = triNormal(c1, a, c2), f2 = triNormal(c2, b, c1);
+      // Fold guards: a quad can be convex in the 2D plane yet FOLD in 3D near a degenerate or
+      // pinched patch (zero-area triangles make the dihedral criterion pure noise, and a folded
+      // pair overlaps its neighbours into non-manifold edges after welding). Require the flipped
+      // triangles to be non-degenerate in 3D and their normals to stay on the originals' side.
+      if (f1[3]! < 1e-6 * (o1[3]! + o2[3]!) || f2[3]! < 1e-6 * (o1[3]! + o2[3]!)) continue;
+      if (f1[0] * o1[0] + f1[1] * o1[1] + f1[2] * o1[2] <= 0 || f2[0] * o2[0] + f2[1] * o2[1] + f2[2] * o2[2] <= 0) continue;
+      if (f1[0] * o2[0] + f1[1] * o2[1] + f1[2] * o2[2] <= 0 || f2[0] * o1[0] + f2[1] * o1[1] + f2[2] * o1[2] <= 0) continue;
+      if (f1[0] * f2[0] + f1[1] * f2[1] + f1[2] * f2[2] <= o1[0] * o2[0] + o1[1] * o2[1] + o1[2] * o2[2] + 1e-9) continue;
+      tris[t1] = [c1, a, c2]; tris[t2] = [c2, b, c1];
+      dirty.add(t1); dirty.add(t2); flips++;
+    }
+    if (!flips) break;
   }
   for (const [a, b, c] of tris) emitTri(verts, faceIds, allP3[a]!, allP3[b]!, allP3[c]!, fid, surface, sign);
   return tris.length > 0;
