@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// Export every part's generated mesh for inspection: out/<name>.meshStep.stl (fine, no-remesh) and
-// out/<name>.remesh.stl (uniform isotropic remesh — the default import pipeline).
+// Export every part's generated mesh for inspection: out/<name>.meshStep.stl (fine, no-remesh —
+// the default import pipeline) and out/<name>.remesh.stl (optional uniform isotropic remesh).
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";

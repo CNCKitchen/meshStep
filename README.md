@@ -20,8 +20,10 @@ geometry. The cylinder "twist" that disables STEP import elsewhere cannot occur 
 done in flat parameter space).
 
 Pipeline: STEP parse → BREP → parameter-space tessellation (shared-edge sampling, constrained
-Delaunay, seam unwrap) → isotropic remesh (split/collapse/flip/smooth + projection onto the
-analytic surface, with CAD feature edges frozen). See [DESIGN.md](DESIGN.md).
+Delaunay, seam unwrap, ruling-aligned fillet anisotropy + normal-smoothing diagonal flips). An
+optional isotropic remesh (split/collapse/flip/smooth + projection onto the analytic surface,
+with CAD feature edges frozen) is available via `remesh: true` for uniform-triangle output; the
+default is off — the raw tessellation is watertight and shades cleaner. See [DESIGN.md](DESIGN.md).
 
 **Remaining:** 3MF export + the controls/preset UI (M5/M6), and B-spline *surfaces*
 (`splineThing`, one body of `everything`) in phase 2.
@@ -36,7 +38,7 @@ node test/convert.ts        # import every test STEP, export STL to out/, report
 
 ```ts
 import { importStep, writeBinarySTL } from "./src/index.ts";
-const result = importStep(stepText, { remesh: true, targetEdge: 1.0 });
+const result = importStep(stepText, { surfaceDeviation: 0.01, maxEdge: 1.0 });
 // result.mesh (positions/indices), result.faceOfTri, result.solidOfTri
 writeFileSync("out.stl", writeBinarySTL(result.mesh));
 ```

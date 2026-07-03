@@ -29,7 +29,10 @@ export type { MeshResult, TessOptions } from "./mesh/tessellate.ts";
 export type { BrepModel } from "./brep/build.ts";
 
 export interface ImportOptions {
-  /** Run the curvature-adaptive isotropic remesh (default true). */
+  /** Run the curvature-adaptive isotropic remesh (default false). The raw tessellation is already
+   * watertight, curvature-adaptive and ruling-aligned on fillets; the isotropic pass predates that
+   * pipeline and now measurably degrades it (destroys the aligned diagonals, adds normal noise,
+   * +5% triangles, +30% time). Kept as an option for uniform-triangle output (e.g. simulation). */
   remesh?: boolean;
   /** Max chord deviation from the true surface, mm (Fusion "Surface Deviation"). Default 0.01. */
   surfaceDeviation?: number;
@@ -57,7 +60,7 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   for (const solid of brep.solids) if (solid.transform) solidXf.set(solid.id, solid.transform);
   // AP242 tessellated-geometry bodies have no analytic surfaces, so the curvature-adaptive remesh
   // can't project — return the (already watertight) faceted mesh as imported.
-  if (opts.remesh === false || brep.solids.length === 0) {
+  if (opts.remesh !== true || brep.solids.length === 0) {
     orientConsistent(result.mesh);
     applyAssemblyPlacement(result.mesh, result.solidOfTri, solidXf);
     return result;
