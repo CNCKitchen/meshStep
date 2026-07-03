@@ -18,8 +18,15 @@ const zoom = Number(process.argv[6] ?? 1);
 const target = process.argv[7] ? process.argv[7].split(",").map(Number) : null; // "x,y,z" to center+zoom on
 const W = 1100, H = 900;
 
+// Optional env overrides to render at a specific export tolerance (same knobs as export-corpus-stl):
+//   MESH_CHORD=0.09 MESH_MAXEDGE=2.9 node test/render.ts ...
 const src = readFileSync(join(root, "sourceModels", file), "utf8");
-const m = importStep(src, { remesh: false }).mesh;
+const m = importStep(src, {
+  remesh: false,
+  ...(process.env.MESH_CHORD ? { surfaceDeviation: Number(process.env.MESH_CHORD) } : {}),
+  ...(process.env.MESH_NORMDEV ? { normalDeviation: Number(process.env.MESH_NORMDEV) } : {}),
+  ...(process.env.MESH_MAXEDGE ? { maxEdge: Number(process.env.MESH_MAXEDGE) } : {}),
+}).mesh;
 const P = m.positions, I = m.indices, nt = I.length / 3;
 
 // Edge incidence -> classify open (1) / non-manifold (>2).
