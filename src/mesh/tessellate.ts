@@ -841,6 +841,23 @@ function gridCDT(
       if (f1[3]! < 1e-6 * (o1[3]! + o2[3]!) || f2[3]! < 1e-6 * (o1[3]! + o2[3]!)) continue;
       if (f1[0] * o1[0] + f1[1] * o1[1] + f1[2] * o1[2] <= 0 || f2[0] * o2[0] + f2[1] * o2[1] + f2[2] * o2[2] <= 0) continue;
       if (f1[0] * o2[0] + f1[1] * o2[1] + f1[2] * o2[2] <= 0 || f2[0] * o1[0] + f2[1] * o1[1] + f2[2] * o1[2] <= 0) continue;
+      // SHAPE GUARD: a flip may choose the smoother diagonal of a quad, but it may not butcher
+      // triangle quality for it. The greedy normal criterion alone happily un-Delaunays a gently
+      // curved patch into needle fans — the normal gain is microscopic (dihedrals there are near
+      // zero) while the 2D aspect explodes 1000-fold, which reads as sliver stripes in a slicer's
+      // wireframe. Allow a flip only while the flipped pair's worst aspect (in the scaled CDT
+      // plane, where near-unit is ideal) stays below 4, or does not worsen an already-bad quad.
+      const asp2 = (i: number, j: number, l: number): number => {
+        const A = cdtPts[i]!, B = cdtPts[j]!, C = cdtPts[l]!;
+        const e1 = (B[0] - A[0]) ** 2 + (B[1] - A[1]) ** 2;
+        const e2 = (C[0] - B[0]) ** 2 + (C[1] - B[1]) ** 2;
+        const e3 = (A[0] - C[0]) ** 2 + (A[1] - C[1]) ** 2;
+        const ar = Math.abs((B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]));
+        return ar > 1e-30 ? Math.max(e1, e2, e3) / ar : 1e9;
+      };
+      const curAsp = Math.max(asp2(...tris[t1]!), asp2(...tris[t2]!));
+      const flpAsp = Math.max(asp2(c1, a, c2), asp2(c2, b, c1));
+      if (flpAsp > Math.max(4, curAsp)) continue;
       // Score the WHOLE 1-ring, not just the flipped pair against each other: each configuration's
       // smoothness is the summed normal agreement across the diagonal AND the quad's four outer
       // edges (whose neighbour triangles stay fixed). A pair-only criterion happily makes two
