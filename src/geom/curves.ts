@@ -272,6 +272,42 @@ function arcSegments(radius: number, sweepAbs: number, chordTol: number): number
 }
 
 /**
+ * Cut an OPEN sampled polyline down to the sub-arc between an edge's vertices. Some exporters share
+ * ONE curve between several EDGE_CURVEs (Shapr3D: a rim's 0.3mm closing sliver and its 5mm dip are
+ * arcs of the same open B-spline), so a whole-domain polyline with its endpoints snapped to v0/v1
+ * RETRACES the neighbouring edges and teleports back — the CDT then faithfully double-covers that
+ * region. Locate both vertices by nearest-segment projection and keep only the span between them,
+ * reversed when the edge runs against the curve's parametrisation. Returns v0..v1 inclusive.
+ */
+function cutOpenPolyline(pts: Vec3[], v0: Vec3, v1: Vec3): Vec3[] | null {
+  const pos = (q: Vec3): number => {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const a = pts[i]!, b = pts[i + 1]!;
+      const ex = b[0] - a[0], ey = b[1] - a[1], ez = b[2] - a[2];
+      const l2 = ex * ex + ey * ey + ez * ez;
+      let w = l2 > 0 ? ((q[0] - a[0]) * ex + (q[1] - a[1]) * ey + (q[2] - a[2]) * ez) / l2 : 0;
+      w = w < 0 ? 0 : w > 1 ? 1 : w;
+      const dx = q[0] - a[0] - w * ex, dy = q[1] - a[1] - w * ey, dz = q[2] - a[2] - w * ez;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d < bd) { bd = d; best = i + w; }
+    }
+    return best;
+  };
+  const p0 = pos(v0), p1 = pos(v1);
+  const lo = Math.min(p0, p1), hi = Math.max(p0, p1);
+  const out: Vec3[] = [p0 <= p1 ? v0 : v1];
+  for (let i = Math.floor(lo) + 1; i <= Math.floor(hi); i++) {
+    if (i > lo && i < hi && dist(pts[i]!, out[out.length - 1]!) > 1e-9) out.push(pts[i]!);
+  }
+  const tail = p0 <= p1 ? v1 : v0;
+  if (dist(tail, out[out.length - 1]!) > 1e-9) out.push(tail);
+  else out[out.length - 1] = tail;
+  if (p0 > p1) out.reverse();
+  return out.length >= 2 ? out : null;
+}
+
+/**
  * Sample the curve of an EDGE_CURVE from vertex v0 to v1.
  * `sameSense` is the EDGE_CURVE flag (edge direction agrees with the curve's parametrisation).
  * Returns points from v0 to v1 inclusive (≥ 2 points).
@@ -371,12 +407,12 @@ export function sampleEdgePolyline(
     let clen = 0;
     for (let i = 1; i < cps.length; i++) clen += dist(cps[i - 1]!, cps[i]!);
     const n = Math.max(2, Math.ceil(clen / Math.max(maxSegLen, 1e-9)));
-    let pts: Vec3[] = [];
+    const pts: Vec3[] = [];
     for (let i = 0; i <= n; i++) pts.push(deBoor(degree, cps, knots, u0 + ((u1 - u0) * i) / n, weights));
-    if (dist(pts[0]!, v0) > dist(pts[0]!, v1)) pts = pts.reverse(); // orient v0 -> v1
-    pts[0] = v0;
-    pts[pts.length - 1] = v1;
-    return pts;
+    // The edge may cover only PART of the curve (exporters share one curve between edges) — cut the
+    // whole-domain polyline to the v0..v1 span instead of blindly snapping the domain endpoints.
+    const cut = cutOpenPolyline(pts, v0, v1);
+    if (cut) return cut;
   }
 
   // Any other curve type makeCurve understands (TRIMMED_CURVE, SURFACE_CURVE/SEAM_CURVE wrapping a
@@ -389,33 +425,53 @@ export function sampleEdgePolyline(
       if (ringClosed) {
         // Closed curve (full circle/intersection ring): its seam start is unrelated to the edge's
         // vertices, so blind endpoint-snapping would fold the polyline back on itself and destroy
-        // its winding. Orient by sameSense, then cut the ring at the samples nearest v0/v1 (for a
-        // full-period edge v0==v1: rotate so the cycle starts at the vertex).
+        // its winding. Orient by sameSense, then cut the ring at the vertices' nearest-SEGMENT
+        // projections (for a full-period edge v0==v1: rotate so the cycle starts at the vertex).
+        // Cutting at nearest SAMPLES is not enough: an edge covering an arc SHORTER than the ring's
+        // sample spacing (three edges partition a rim, one is a 0.3mm sliver) can land its two cut
+        // samples in the wrong order, and the forward walk then returns the entire ring MINUS the
+        // sliver — a boundary that retraces its neighbour edge and teleports back, which the CDT
+        // faithfully double-covers (OpenVessel's counterbore rims).
         const ring = pts.slice(0, -1);
         if (!sameSense) ring.reverse();
-        const nearest = (q: Vec3): number => {
-          let bi = 0, bd = Infinity;
-          for (let i = 0; i < ring.length; i++) { const d = dist(ring[i]!, q); if (d < bd) { bd = d; bi = i; } }
-          return bi;
+        const nearestSeg = (q: Vec3): { seg: number; t: number } => {
+          let bs = 0, bt = 0, bd = Infinity;
+          for (let i = 0; i < ring.length; i++) {
+            const a = ring[i]!, b = ring[(i + 1) % ring.length]!;
+            const ex = b[0] - a[0], ey = b[1] - a[1], ez = b[2] - a[2];
+            const l2 = ex * ex + ey * ey + ez * ez;
+            let w = l2 > 0 ? ((q[0] - a[0]) * ex + (q[1] - a[1]) * ey + (q[2] - a[2]) * ez) / l2 : 0;
+            w = w < 0 ? 0 : w > 1 ? 1 : w;
+            const dx = q[0] - a[0] - w * ex, dy = q[1] - a[1] - w * ey, dz = q[2] - a[2] - w * ez;
+            const d = dx * dx + dy * dy + dz * dz;
+            if (d < bd) { bd = d; bs = i; bt = w; }
+          }
+          return { seg: bs, t: bt };
         };
-        const i0 = nearest(v0);
         if (dist(v0, v1) < Math.max(1e-7, chordTol * 1e-3)) {
+          const i0 = nearestSeg(v0).seg;
           pts = [...ring.slice(i0), ...ring.slice(0, i0), v1];
           pts[0] = v0;
           return pts;
         }
-        const i1 = nearest(v1);
-        if (i0 !== i1) { // partial arc from v0 forward (in curve direction) to v1
-          const arc: Vec3[] = [];
-          for (let i = i0; ; i = (i + 1) % ring.length) { arc.push(ring[i]!); if (i === i1) break; }
-          arc[0] = v0; arc[arc.length - 1] = v1;
-          if (arc.length >= 2) return arc;
+        const s0 = nearestSeg(v0), s1 = nearestSeg(v1);
+        const arc: Vec3[] = [v0];
+        if (!(s0.seg === s1.seg && s0.t <= s1.t)) {
+          // v1 is not ahead of v0 within the same segment: walk forward sample by sample, from the
+          // sample after v0's projection up to the start sample of v1's segment (inclusive).
+          for (let i = (s0.seg + 1) % ring.length; ; i = (i + 1) % ring.length) {
+            const p = ring[i]!;
+            if (dist(p, arc[arc.length - 1]!) > 1e-9) arc.push(p);
+            if (i === s1.seg) break;
+          }
         }
+        if (dist(v1, arc[arc.length - 1]!) > 1e-9) arc.push(v1);
+        else arc[arc.length - 1] = v1;
+        if (arc.length >= 2) return arc;
       } else if (pts.length >= 2) {
-        if (dist(pts[0]!, v0) > dist(pts[0]!, v1)) pts = pts.slice().reverse();
-        pts[0] = v0;
-        pts[pts.length - 1] = v1;
-        return pts;
+        // Same shared-curve hazard as the B-spline path above: keep only the v0..v1 span.
+        const cut = cutOpenPolyline(pts, v0, v1);
+        if (cut) return cut;
       }
     }
   }
