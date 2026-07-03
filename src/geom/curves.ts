@@ -350,8 +350,13 @@ export function sampleEdgePolyline(
   // B-spline curve — simple (non-rational) OR a complex/rational instance (e.g. a conic from a
   // chamfer ∩ cylinder). Without this a complex curve falls through to the straight chord below and
   // the surrounding triangles snap to that secant instead of following the arc.
+  // A CLOSED ring B-spline (a full circle exported as one periodic curve) is excluded: an edge may
+  // cover only an ARC of it (e.g. two half-rim edges sharing one ring curve, as Shapr3D emits), and
+  // sampling the whole knot domain would hand that edge the ENTIRE ring with the endpoints snapped
+  // to its vertices — a boundary that walks the whole rim and teleports back. The generic sampler
+  // below cuts the ring at the edge's vertices instead.
   const bs = bsplineData(t, curveId, s);
-  if (bs) {
+  if (bs && dist(deBoor(bs.degree, bs.cps, bs.knots, bs.u0, bs.weights), deBoor(bs.degree, bs.cps, bs.knots, bs.u1, bs.weights)) >= 1e-6) {
     const { degree, cps, knots, weights, u0, u1 } = bs;
     let clen = 0;
     for (let i = 1; i < cps.length; i++) clen += dist(cps[i - 1]!, cps[i]!);
