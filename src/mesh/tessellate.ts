@@ -486,7 +486,43 @@ function tessellateParamGrid(
   // Anisotropic ruling-aligned meshing needs a trustworthy parameter domain; a face whose boundary
   // projection tangled (pinched tubes, fold-ambiguous patches) gets the conservative isotropic grid.
   const clean = !projected.some((p) => p.lp.tangled);
-  return gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean);
+  const v0 = verts.length, f0 = faceIds.length;
+  if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean)) return false;
+  // FOLD AUDIT. A correct triangulation of a trimmed patch covers each boundary segment exactly as
+  // often as the boundary itself traverses it (once normally, twice along an out-and-back slit). On
+  // a fold-degenerate surface — a flattened tube whose opposite folds coincide in 3D — the chained
+  // projection can wander between folds without any pointwise signal, and the CDT then lays a second
+  // sheet over part of the region; the extra sheet lands exactly on boundary segments (OpenVessel's
+  // counterbore tubes: the face's own rim segments get TWO of its triangles, the neighbour's third
+  // makes them non-manifold, and a fold chord is left open). Boundary OVER-coverage on the welded 3D
+  // grid is therefore a proof of a folded result: roll the face back and let the caller's rail-ribbon
+  // fallback mesh between the shared rails directly. UNDER-coverage is deliberately not flagged —
+  // dropped 3D-degenerate slivers legitimately leave segments uncovered (the ftc-slot family).
+  const qz = (x: number): number => Math.round(x * 1e6);
+  const skey = (a: Vec3, b: Vec3): string => {
+    const ka = `${qz(a[0])},${qz(a[1])},${qz(a[2])}`, kb = `${qz(b[0])},${qz(b[1])},${qz(b[2])}`;
+    return ka < kb ? ka + "|" + kb : kb + "|" + ka;
+  };
+  const bound = new Map<string, number>();
+  for (const lp of [outer, ...holes]) {
+    const n = lp.p3.length;
+    for (let i = 0; i < n; i++) {
+      const k = skey(lp.p3[i]!, lp.p3[(i + 1) % n]!);
+      bound.set(k, (bound.get(k) ?? 0) + 1);
+    }
+  }
+  const used = new Map<string, number>();
+  for (let t = v0; t < verts.length; t += 9) {
+    for (let e = 0; e < 3; e++) {
+      const i1 = t + e * 3, i2 = t + ((e + 1) % 3) * 3;
+      const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
+      if (bound.has(k)) used.set(k, (used.get(k) ?? 0) + 1);
+    }
+  }
+  for (const [k, m] of bound) {
+    if ((used.get(k) ?? 0) > m) { verts.length = v0; faceIds.length = f0; return false; }
+  }
+  return true;
 }
 
 /** CDT core shared by the trimmed-patch and seam-split meshers: interior grid + graded size field +
@@ -1252,55 +1288,175 @@ function tessellateThinFace(
  * rulings across it faithfully fill it. Returns false (emitting nothing) unless the boundary reduces to
  * exactly two rails — the caller then keeps its clean gap rather than a wrong fill.
  *
- * Deliberately NOT extended to chain >2 half-rails into inner/outer rings: an annulus whose two rings
- * are far apart (a hole in a wide face) then lofts a spurious CAP across the hole, which is much worse
- * than a clean gap. Only the unambiguous two-rail strip is filled.
+ * Two packagings are recognised. (A) Each rail is a single edge — a lens, or a pinched seam whose
+ * doubled edge pair merges to one rail. (B) An annulus cut open by a SLIT: one loop traversing the
+ * same edge twice, ring on one side of the cut, rim on the other (a fold-degenerate counterbore
+ * tube whose param-grid result failed the fold audit) — dropping the slit splits the loop into
+ * exactly two chains, lofted with wrap-around. Anything else (plain hole loops, >2 chains) is
+ * ambiguous — lofting rings of a WIDE annulus would cut straight through 3D — and stays unmeshed:
+ * a clean gap reads far better than a wrong fill.
  */
 function tessellateRibbon(
   surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
   verts: number[], faceIds: number[], sign: number,
 ): boolean {
   const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-  const polys: Vec3[][] = [];
-  for (const lp of loops) for (const oe of lp.edges) {
-    const base = sampled.get(oe.edgeId);
-    if (!base || base.length < 2) continue;
-    polys.push(oe.orient ? base.slice() : base.slice().reverse());
+  type Entry = { id: number; poly: Vec3[] };
+  const loopEntries: Entry[][] = [];
+  for (const lp of loops) {
+    const es: Entry[] = [];
+    for (const oe of lp.edges) {
+      const base = sampled.get(oe.edgeId);
+      if (!base || base.length < 2) continue;
+      es.push({ id: oe.edgeId, poly: oe.orient ? base.slice() : base.slice().reverse() });
+    }
+    if (es.length) loopEntries.push(es);
   }
-  if (polys.length < 2) return false;
-  // Merge edges that trace the SAME curve twice (a pinched seam: same endpoints AND same midpoint) —
-  // that doubled pair is one rail. Two edges sharing only endpoints but bowing apart (a lens) stay
-  // distinct: the midpoint test is what tells a zero-width seam from a real thin strip.
+  const flat = loopEntries.flat();
+  if (flat.length < 2) return false;
+
+  // Stitch an OPEN two-rail strip end-to-end by arc-length fraction (the original ribbon).
+  const loftOpen = (c1: Vec3[], c2in: Vec3[]): boolean => {
+    let c2 = c2in;
+    if (d3(c1[0]!, c2[0]!) > d3(c1[0]!, c2[c2.length - 1]!)) c2 = c2.slice().reverse();
+    const na = c1.length, nb = c2.length;
+    if (na < 2 || nb < 2) return false;
+    let i = 0, j = 0, emitted = 0;
+    while (i < na - 1 || j < nb - 1) {
+      if (j >= nb - 1 || (i < na - 1 && (i + 1) / na <= (j + 1) / nb)) {
+        emitTri(verts, faceIds, c1[i]!, c1[i + 1]!, c2[j]!, fid, surface, sign); i++; emitted++;
+      } else {
+        emitTri(verts, faceIds, c1[i]!, c2[j + 1]!, c2[j]!, fid, surface, sign); j++; emitted++;
+      }
+    }
+    return emitted > 0;
+  };
+
+  // Loft two CLOSED rails (an annulus strip: counterbore ring to its outer rim) with wrap-around,
+  // paired by arc-length fraction. Winding is fixed by RAIL ORDER with one global flip decided by a
+  // magnitude-weighted vote against the surface normal — emitTri's per-triangle projection would
+  // checkerboard on a fold-degenerate surface (the two coincident folds carry OPPOSITE normals).
+  const loftClosed = (c1in: Vec3[], c2in: Vec3[]): boolean => {
+    const c1 = c1in.slice(0, -1);
+    let c2 = c2in.slice(0, -1);
+    if (c1.length < 3 || c2.length < 3) return false;
+    // Rotate c2 to start nearest c1's start.
+    let bi = 0, bd = Infinity;
+    for (let i = 0; i < c2.length; i++) { const d = d3(c1[0]!, c2[i]!); if (d < bd) { bd = d; bi = i; } }
+    c2 = [...c2.slice(bi), ...c2.slice(0, bi)];
+    // Cumulative arc-length fractions including the closing segment (length n+1, last = 1).
+    const fracOf = (c: Vec3[]): number[] => {
+      const f = [0];
+      for (let i = 1; i <= c.length; i++) f.push(f[i - 1]! + d3(c[i - 1]!, c[i % c.length]!));
+      const tot = f[f.length - 1]! || 1;
+      return f.map((x) => x / tot);
+    };
+    // The loop walks the two rails of a slit annulus in opposite senses; pick c2's direction by
+    // which orientation tracks c1 more closely at matched fractions (nearest-point pairing).
+    const at = (c: Vec3[], f: number[], t: number): Vec3 => {
+      let i = 0;
+      while (i + 1 < f.length && f[i + 1]! < t) i++;
+      const d = f[i + 1]! - f[i]!;
+      const w = d > 1e-12 ? (t - f[i]!) / d : 0;
+      const a = c[i % c.length]!, b = c[(i + 1) % c.length]!;
+      return [a[0] + (b[0] - a[0]) * w, a[1] + (b[1] - a[1]) * w, a[2] + (b[2] - a[2]) * w];
+    };
+    const track = (cc: Vec3[]): number => {
+      const f1 = fracOf(c1), f2 = fracOf(cc);
+      let s = 0;
+      for (let k = 0; k < 16; k++) { const t = k / 16; s += d3(at(c1, f1, t), at(cc, f2, t)); }
+      return s;
+    };
+    const rev = [c2[0]!, ...c2.slice(1).reverse()];
+    if (track(rev) < track(c2)) c2 = rev;
+    const f1 = fracOf(c1), f2 = fracOf(c2);
+    const na = c1.length, nb = c2.length;
+    const tris: [Vec3, Vec3, Vec3][] = [];
+    let i = 0, j = 0;
+    while (i < na || j < nb) {
+      if (i < na && (j >= nb || f1[i + 1]! <= f2[j + 1]!)) { tris.push([c1[i % na]!, c1[(i + 1) % na]!, c2[j % nb]!]); i++; }
+      else { tris.push([c1[i % na]!, c2[(j + 1) % nb]!, c2[j % nb]!]); j++; }
+    }
+    let vote = 0;
+    for (const [a, b, c] of tris) {
+      const ng = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+      const cen: Vec3 = [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
+      const [u, v] = surface.project(cen);
+      vote += dot(ng, surface.normal(u, v)) * sign;
+    }
+    let emitted = 0;
+    for (const [a, b, c] of tris) {
+      const ng = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+      if (ng[0] * ng[0] + ng[1] * ng[1] + ng[2] * ng[2] < 1e-18) continue;
+      if (vote >= 0) verts.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
+      else verts.push(a[0], a[1], a[2], c[0], c[1], c[2], b[0], b[1], b[2]);
+      faceIds.push(fid);
+      emitted++;
+    }
+    return emitted > 0;
+  };
+
+  const isClosed = (c: Vec3[]): boolean => d3(c[0]!, c[c.length - 1]!) < 1e-6;
+  const tryLoft = (rails: Vec3[][] | null): boolean => {
+    if (!rails || rails.length !== 2) return false;
+    const [r1, r2] = [rails[0]!, rails[1]!];
+    if (isClosed(r1) && isClosed(r2)) return loftClosed(r1, r2);
+    return loftOpen(r1, r2);
+  };
+
+  // Packaging A — each rail is a single edge. Merge edges that trace the SAME curve twice (a pinched
+  // seam: same endpoints AND same midpoint) — that doubled pair is one rail. Two edges sharing only
+  // endpoints but bowing apart (a lens) stay distinct: the midpoint test is what tells a zero-width
+  // seam from a real thin strip.
   const mid = (p: Vec3[]): Vec3 => p[p.length >> 1]!;
-  const rails: Vec3[][] = [];
-  const used = new Array(polys.length).fill(false);
-  for (let i = 0; i < polys.length; i++) {
-    if (used[i]) continue;
-    used[i] = true;
-    const pi = polys[i]!;
-    for (let j = i + 1; j < polys.length; j++) {
-      if (used[j]) continue;
-      const pj = polys[j]!;
-      const reversed = d3(pi[0]!, pj[pj.length - 1]!) < 1e-6 && d3(pi[pi.length - 1]!, pj[0]!) < 1e-6;
-      if (reversed && d3(mid(pi), mid(pj)) < 1e-6) { used[j] = true; break; }
+  const railsA = (): Vec3[][] => {
+    const rails: Vec3[][] = [];
+    const used = new Array(flat.length).fill(false);
+    for (let i = 0; i < flat.length; i++) {
+      if (used[i]) continue;
+      used[i] = true;
+      const pi = flat[i]!.poly;
+      for (let j = i + 1; j < flat.length; j++) {
+        if (used[j]) continue;
+        const pj = flat[j]!.poly;
+        const reversed = d3(pi[0]!, pj[pj.length - 1]!) < 1e-6 && d3(pi[pi.length - 1]!, pj[0]!) < 1e-6;
+        if (reversed && d3(mid(pi), mid(pj)) < 1e-6) { used[j] = true; break; }
+      }
+      rails.push(pi);
     }
-    rails.push(pi);
-  }
-  if (rails.length !== 2) return false;
-  let c1 = rails[0]!, c2 = rails[1]!;
-  // Align so both rails run the same direction (c1[0] near c2[0]); stitch by arc-length fraction.
-  if (d3(c1[0]!, c2[0]!) > d3(c1[0]!, c2[c2.length - 1]!)) c2 = c2.slice().reverse();
-  const na = c1.length, nb = c2.length;
-  if (na < 2 || nb < 2) return false;
-  let i = 0, j = 0, emitted = 0;
-  while (i < na - 1 || j < nb - 1) {
-    if (j >= nb - 1 || (i < na - 1 && (i + 1) / na <= (j + 1) / nb)) {
-      emitTri(verts, faceIds, c1[i]!, c1[i + 1]!, c2[j]!, fid, surface, sign); i++; emitted++;
-    } else {
-      emitTri(verts, faceIds, c1[i]!, c2[j + 1]!, c2[j]!, fid, surface, sign); j++; emitted++;
+    return rails;
+  };
+
+  // Packaging B — an annulus cut open by a SLIT: one loop that traverses the same edge twice (out
+  // and back), with the ring on one side of the cut and the rim on the other (Shapr3D counterbore
+  // tubes). Dropping both slit traversals splits the cyclic edge sequence into runs; each run
+  // concatenates into one rail. Only loops that actually contain a slit participate — a face that
+  // mixes slit loops with plain hole loops is ambiguous and stays unmeshed rather than wrong.
+  const railsB = (): Vec3[][] | null => {
+    const chains: Vec3[][] = [];
+    for (const es of loopEntries) {
+      const count = new Map<number, number>();
+      for (const e of es) count.set(e.id, (count.get(e.id) ?? 0) + 1);
+      if (![...count.values()].some((c) => c === 2)) return null; // no slit in this loop
+      const keep = es.map((e) => count.get(e.id) !== 2);
+      if (!keep.some((k) => k)) return null; // nothing but slits
+      const n = es.length;
+      let anchor = 0;
+      while (anchor < n && keep[anchor]) anchor++; // a dropped slot; exists since some edge doubled
+      let run: Vec3[] | null = null;
+      for (let s = 1; s <= n; s++) {
+        const i = (anchor + s) % n;
+        if (!keep[i]) { if (run && run.length >= 2) chains.push(run); run = null; continue; }
+        const poly = es[i]!.poly;
+        if (!run) run = poly.slice();
+        else run.push(...(d3(run[run.length - 1]!, poly[0]!) < 1e-6 ? poly.slice(1) : poly));
+      }
+      if (run && run.length >= 2) chains.push(run);
     }
-  }
-  return emitted > 0;
+    return chains;
+  };
+
+  return tryLoft(railsA()) || tryLoft(railsB());
 }
 
 /** Cone: stack concentric rings from the shared base circle to the apex (cone is ruled by lines). */
