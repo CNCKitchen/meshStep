@@ -1312,9 +1312,14 @@ function tessellateSphereCap(
   if (vmax - vmin > 0.05 || umax - umin < 0.9 * TWO_PI) return false;
   const vRim = (vmin + vmax) / 2;
   // Net signed longitude travel of the oriented rim -> which pole is the enclosed (left-hand) side.
+  // "Left of the rim" is defined against the FACE normal, not the surface normal: on a sameSense
+  // face, eastward (+u) travel keeps the +v (north) hemisphere; a reversed face (sign<0) has its
+  // material on the other side, so the enclosed pole flips with it (a hemispherical DIMPLE is a
+  // sameSense=false sphere face whose eastward rim encloses the south hemisphere — picking north
+  // meshes the complement and turns the pocket into a bump).
   let du = 0;
   for (let i = 0; i < uv.length; i++) { let d = uv[(i + 1) % uv.length]![0] - uv[i]![0]; while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; du += d; }
-  const vPole = du >= 0 ? Math.PI / 2 : -Math.PI / 2;
+  const vPole = (du >= 0) === (sign > 0) ? Math.PI / 2 : -Math.PI / 2;
 
   const R = Math.max(s.r, 1e-9);
   const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - chordTol / R)));
@@ -1324,6 +1329,11 @@ function tessellateSphereCap(
   const nV = Math.max(1, Math.min(2000, Math.ceil(span / dTheta)));
   // Build the rim ring from the SHARED edge samples (watertight with the neighbour), then march
   // latitude rings to the pole, each sized to its own circumference so the cap tapers to a point.
+  // stitchRings pairs points by angular FRACTION along each ring, so the generated rings must start
+  // at the rim's own start longitude and run the rim's own way: stitching a westward (du<0) or
+  // off-phase rim against eastward-from-u=0 rings makes a full-turn twisted band of bowtie triangles.
+  const uStart = uv[0]![0];
+  const uDir = du >= 0 ? 1 : -1;
   let prev = rim.slice();
   for (let j = 1; j <= nV; j++) {
     const v = vRim + ((vPole - vRim) * j) / nV;
@@ -1331,7 +1341,7 @@ function tessellateSphereCap(
     const circ = TWO_PI * R * Math.cos(v);
     const nu = Math.max(3, Math.min(4000, Math.round(circ / target)));
     const ring: Vec3[] = [];
-    for (let i = 0; i < nu; i++) ring.push(s.evaluate((TWO_PI * i) / nu, v));
+    for (let i = 0; i < nu; i++) ring.push(s.evaluate(uStart + uDir * (TWO_PI * i) / nu, v));
     stitchRings(verts, faceIds, prev, ring, fid, s, sign);
     prev = ring;
   }

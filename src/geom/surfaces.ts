@@ -114,7 +114,12 @@ class Sphere implements Surface {
   }
   project(p: Vec3): [number, number] {
     const d = sub(p, this.f.o);
-    const v = Math.asin(Math.max(-1, Math.min(1, dot(d, this.f.z) / this.r)));
+    // Latitude against the point's OWN distance from the centre (not the nominal radius): that
+    // makes this the true nearest-point projection, so a query slightly off the sphere (a triangle
+    // centroid, a tolerance-loose edge sample) doesn't land at a shifted latitude. Identical for
+    // on-surface points.
+    const L = Math.max(1e-12, Math.hypot(d[0], d[1], d[2]));
+    const v = Math.asin(Math.max(-1, Math.min(1, dot(d, this.f.z) / L)));
     return [Math.atan2(dot(d, this.f.y), dot(d, this.f.x)), v];
   }
   normal(u: number, v: number): Vec3 {
