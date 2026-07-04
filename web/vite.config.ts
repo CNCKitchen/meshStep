@@ -8,6 +8,7 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
   server: {
+    port: 5180,
     fs: {
       // allow importing the library source that sits outside web/
       allow: [repoRoot],
