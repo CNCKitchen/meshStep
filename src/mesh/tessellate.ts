@@ -1167,7 +1167,7 @@ function tessellateRevolutionBand(
       // by span. Winding catches coarsely sampled rims — 8 points around a tiny circle span only
       // 7π/4, failing the span test, yet wind exactly ±period. Span catches rims that carry seam
       // edges and double back (net winding 0) which the old mesher still stitched acceptably.
-      let wind = 0, amin = Infinity, amax = -Infinity, hcos = 0, hsin = 0, hsum = 0;
+      let wind = 0, absWind = 0, amin = Infinity, amax = -Infinity, hcos = 0, hsin = 0, hsum = 0;
       const as: number[] = [], hs: number[] = [];
       for (const p of pts) {
         const uv = surface.project(p);
@@ -1180,7 +1180,7 @@ function tessellateRevolutionBand(
       for (let i = 0; i < as.length; i++) {
         let d = as[(i + 1) % as.length]! - as[i]!;
         while (d > period / 2) d -= period; while (d < -period / 2) d += period;
-        wind += d;
+        wind += d; absWind += Math.abs(d);
         // A rim that is MULTIVALUED in angle — an axial STEP, e.g. a staircase rim's constant-angle
         // riser — breaks the per-angle loft below: the interior rings inherit BOTH heights at that
         // angle, the zero-width "wall" quads between the doubled columns are dropped as degenerate,
@@ -1192,6 +1192,18 @@ function tessellateRevolutionBand(
         if (Math.abs(d) < 1e-8 && Math.abs(dh) > 1e-8) return false;
       }
       if (Math.abs(wind) < 0.9 * period && amax - amin < 0.9 * period) return false; // partial arc
+      // The per-angle loft is only well-defined for a rim SINGLE-VALUED in angle: monotone
+      // angular progression means sum(|du|) == |sum(du)|. A rim whose trim curves BACKTRACK in
+      // angle (a cone cut by a wavy B-spline boundary: 180°->152°->170°->56°, Ontos) passes the
+      // winding test and the exact constant-angle staircase check above, but pairing its points
+      // by angular progress then folds — the loft/stitch chords straight through the surface
+      // (5mm sagitta on an 8mm cone). Bail; the CDT-based unroll handles backtracking rims
+      // (its rim builder unwraps in polyline order and triangulates the true boundary).
+      // ONLY for a non-periodic stack coordinate: the unroll's rectangle assumes a LINEAR stack,
+      // so kicking a torus tube segment out of the band mesher hands it to a fallback that is
+      // wrong by construction (Ontos torus #92192: 1.5mm loft -> 92mm unroll garbage). On a
+      // periodic stack the loft's bounded fold error stays the best available result.
+      if (!stackPeriodic && absWind > Math.abs(wind) + 0.05 * period) return false;
       const h = stackPeriodic ? (Math.atan2(hsin, hcos) * stackPeriod) / TWO_PI : hsum / pts.length;
       rims.push({ pts, h, wind });
     }
@@ -1616,7 +1628,12 @@ function tessellateCone(
     const f = j / nV;
     if (j === nV) { stitchRings(verts, faceIds, prev, [apex], fid, surface, sign); break; }
     const vf = vBase + (vApex - vBase) * f, rf = Math.abs(rBase * (1 - f));
-    const M = Math.max(3, Math.min(4000, Math.round((TWO_PI * rf) / target)));
+    // Ring point count from the LOCAL curvature at this ring's height, not the base target: the
+    // normal curvature radius shrinks with the ring radius, so the base's allowed step violates the
+    // chord tolerance near the apex (a 77mm/46° cone meshed 90° segments at rho=11 — 2.9mm sagitta).
+    // The v-spacing (nV) may stay base-sized: rulings are straight, so it carries no chord error.
+    const tf = faceTarget(surface, targetEdge, chordTol, normalDev, theta0, vf);
+    const M = Math.max(3, Math.min(4000, Math.round((TWO_PI * rf) / tf)));
     const ring: Vec3[] = [];
     for (let k = 0; k < M; k++) ring.push(surface.evaluate(theta0 + (dir * TWO_PI * k) / M, vf));
     stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
@@ -2004,10 +2021,11 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         //     domain and CDT with the windows as holes. Bails unless there are exactly two rims.
         //  3. param grid: everything with a proper seam-bounded outer loop (the common case).
         const periodic = surface.periodicU || surface.periodicV;
-        ok = (periodic && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-          || (periodic && tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-          || tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)
-          || tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign);
+        const dbgWhich = DBG ? (n: string, r: boolean): boolean => { if (r) console.error(`[dispatch] fid=${face.faceId} -> ${n}`); return r; } : (n: string, r: boolean): boolean => r;
+        ok = (periodic && dbgWhich("band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (periodic && dbgWhich("unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || dbgWhich("grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || dbgWhich("ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign));
       }
       if (ok) facesTessellated++; else bump(skipped, "untriangulated");
     }

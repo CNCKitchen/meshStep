@@ -9,7 +9,7 @@
 // dir defaults to sourceModels/. Everything lands in <outdir> (default
 // out/gapcheck-<dirname>/): converted/*.stl for review, images/*.png failure
 // pictures, gapcheck.json, gapcheck.md and report.html.
-import { readdirSync, statSync, writeFileSync, mkdirSync } from "node:fs";
+import { readdirSync, statSync, writeFileSync, mkdirSync, readFileSync, existsSync } from "node:fs";
 import { join, dirname, relative, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawn } from "node:child_process";
@@ -212,3 +212,41 @@ for (const r of results) {
 writeFileSync(join(outBase, "gapcheck.md"), md.join("\n"));
 writeHtmlReport(outBase);
 console.log(`\nreports: ${relative(root, outBase)}\\report.html (+ gapcheck.md, gapcheck.json, converted\\, images\\)`);
+
+// ---------- checked-in status baseline: regressions fail the run ----------
+// test/gapcheck-baseline.json maps <corpus dir basename> -> { model: status }. Any model whose
+// status RANK drops versus the baseline is a regression (exit 1) — the manual two-table eyeball
+// diff has already missed less than fixes have regressed. Improvements are reported and accepted
+// with --update-baseline (which also records new/removed models).
+const baselinePath = join(root, "test", "gapcheck-baseline.json");
+const corpusKey = basename(scanDir);
+const allBaselines: Record<string, Record<string, string>> = existsSync(baselinePath)
+  ? JSON.parse(readFileSync(baselinePath, "utf8")) : {};
+const baseline = allBaselines[corpusKey];
+const current: Record<string, string> = {};
+for (const r of results) current[r.file] = r.status;
+if (argv.includes("--update-baseline")) {
+  allBaselines[corpusKey] = Object.fromEntries(Object.entries(current).sort(([a], [b]) => a.localeCompare(b)));
+  writeFileSync(baselinePath, JSON.stringify(allBaselines, null, 1));
+  console.log(`baseline updated: ${relative(root, baselinePath)} [${corpusKey}]`);
+} else if (baseline) {
+  const regressions: string[] = [], improvements: string[] = [], added: string[] = [];
+  for (const [model, status] of Object.entries(current)) {
+    const old = baseline[model];
+    if (old === undefined) { added.push(`${model} (${status})`); continue; }
+    const or = RANK[old] ?? 9, nr = RANK[status] ?? 9;
+    if (nr < or) regressions.push(`${model}: ${old} -> ${status}`);
+    else if (nr > or) improvements.push(`${model}: ${old} -> ${status}`);
+  }
+  const missing = Object.keys(baseline).filter((m) => !(m in current));
+  if (improvements.length) console.log(`\nbaseline improvements (run with --update-baseline to accept):\n  ${improvements.join("\n  ")}`);
+  if (added.length) console.log(`\nmodels not in baseline: ${added.join(", ")}`);
+  if (missing.length && !skipArg) console.log(`\nbaseline models missing from this run: ${missing.join(", ")}`);
+  if (regressions.length) {
+    console.error(`\n!! BASELINE REGRESSIONS:\n  ${regressions.join("\n  ")}`);
+    process.exit(1);
+  }
+  console.log(`\nbaseline check: no regressions (${Object.keys(baseline).length} models tracked)`);
+} else {
+  console.log(`\nno baseline for corpus "${corpusKey}" — run with --update-baseline to create one`);
+}
