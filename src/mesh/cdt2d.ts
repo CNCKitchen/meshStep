@@ -6,6 +6,9 @@
 
 type P2 = [number, number];
 
+/** Diagnostics for the gapcheck harness (MESHSTEP_DEBUG=1); no-op in production/browser. */
+const DBG = typeof process !== "undefined" && !!process.env?.MESHSTEP_DEBUG;
+
 const orient = (a: P2, b: P2, c: P2): number => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
 
 /** True if d is strictly inside the circumcircle of CCW triangle a,b,c. */
@@ -148,8 +151,57 @@ function flipEdge(tris: Tri[], pts: P2[], ti: number, e: number): boolean {
 }
 
 function forceEdge(tris: Tri[], pts: P2[], v2t: number[][], a: number, b: number): void {
+  const tryFlip = (ti: number, e: number): boolean => {
+    const t = tris[ti]!;
+    if (!flipEdge(tris, pts, ti, e)) return false;
+    // refresh incidence for the two changed triangles
+    for (const tt of [ti, t.n[e]!]) if (tt >= 0) for (const vv of tris[tt]!.v) (v2t[vv] ??= []).push(tt);
+    return true;
+  };
+  /** Walk the corridor of triangles the segment a-b crosses (via neighbour links, valid during the
+   * flip pass) and flip the first flippable crossing edge. O(corridor) instead of O(all triangles).
+   * Returns false when the walk can't proceed (segment through a vertex, broken link) — caller
+   * falls back to the exhaustive scan for that iteration. */
+  const corridorFlip = (): boolean | null => {
+    for (const ti of v2t[a] ?? []) {
+      const t = tris[ti];
+      if (!t || t.dead) continue;
+      const k = t.v.indexOf(a);
+      if (k < 0) continue;
+      const e = (k + 1) % 3; // edge opposite a
+      const u = t.v[e]!, w = t.v[(e + 1) % 3]!;
+      if (u === b || w === b) continue;
+      if (!segCross(pts[a]!, pts[b]!, pts[u]!, pts[w]!)) continue;
+      // found the corridor entrance; walk it, trying to flip each crossing edge
+      let cur = ti, edge = e;
+      for (let step = 0; step < 2000; step++) {
+        if (tryFlip(cur, edge)) return true;
+        const nx = tris[cur]!.n[edge]!;
+        if (nx < 0) return null;
+        const nt = tris[nx]!;
+        if (nt.dead) return null;
+        // entry edge in nx is (w2,u2) reversed; segment exits through one of the other two edges
+        let advanced = false;
+        for (let e2 = 0; e2 < 3; e2++) {
+          const u2 = nt.v[e2]!, w2 = nt.v[(e2 + 1) % 3]!;
+          if (u2 === a || u2 === b || w2 === a || w2 === b) continue;
+          const pk = ckey(u2, w2);
+          if (pk === ckey(tris[cur]!.v[edge]!, tris[cur]!.v[(edge + 1) % 3]!)) continue; // entry edge
+          if (segCross(pts[a]!, pts[b]!, pts[u2]!, pts[w2]!)) { cur = nx; edge = e2; advanced = true; break; }
+        }
+        if (!advanced) return false; // corridor ends (reached b's fan) with nothing flippable
+      }
+      return null;
+    }
+    return null; // no crossing edge incident to a (collinear pass-through) — needs the full scan
+  };
   let guard = 0;
   while (!edgeExists(tris, v2t, a, b) && guard++ < 500) {
+    const cf = corridorFlip();
+    if (cf === true) continue;
+    // corridor blocked or unwalkable: exhaustive scan — the old behaviour. Flipping a crossing
+    // edge anywhere (even outside the walked corridor) can unblock a non-convex quad, so the
+    // corridor is strictly an accelerator, never a reason to give up earlier than the scan did.
     let flipped = false;
     for (let ti = 0; ti < tris.length && !flipped; ti++) {
       const t = tris[ti]!;
@@ -157,12 +209,7 @@ function forceEdge(tris: Tri[], pts: P2[], v2t: number[][], a: number, b: number
       for (let e = 0; e < 3; e++) {
         const u = t.v[e]!, w = t.v[(e + 1) % 3]!;
         if (u === a || u === b || w === a || w === b) continue;
-        if (segCross(pts[a]!, pts[b]!, pts[u]!, pts[w]!) && flipEdge(tris, pts, ti, e)) {
-          // refresh incidence for the two changed triangles
-          for (const tt of [ti, t.n[e]!]) if (tt >= 0) for (const vv of tris[tt]!.v) (v2t[vv] ??= []).push(tt);
-          flipped = true;
-          break;
-        }
+        if (segCross(pts[a]!, pts[b]!, pts[u]!, pts[w]!) && tryFlip(ti, e)) { flipped = true; break; }
       }
     }
     if (!flipped) break;
@@ -267,6 +314,98 @@ function fanFill(pts: P2[], ring: number[]): [number, number, number][] | null {
 }
 
 /**
+ * Excise MICRO self-intersections from a boundary ring: projection noise where two rails of a
+ * slot/thread converge (run-outs) makes the ring cross itself in tiny zero-area loops, which makes
+ * every watertight fill refuse the ring — and a 15k-point dome then vanishes over a dozen bad
+ * points. A crossing whose two segments are ≤64 ring positions apart bounds a micro-loop: drop the
+ * short arc between them (the neighbour keeps those samples — a few T-junction points at the
+ * run-out, instead of the whole face missing). Genuine large-scale tangles (crossings far apart on
+ * the ring) are NOT repairable this way — return null so the caller keeps its other fallbacks.
+ */
+function dropMicroLoops(pts: P2[], ring: number[]): number[] | null {
+  let cur = ring.slice();
+  const maxDrop = Math.max(16, Math.floor(ring.length * 0.1));
+  let dropped = 0;
+  const distPS = (p: P2, a: P2, b: P2): number => {
+    const ex = b[0] - a[0], ey = b[1] - a[1];
+    const l2 = ex * ex + ey * ey;
+    let t = l2 > 0 ? ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey) / l2 : 0;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Math.hypot(p[0] - (a[0] + t * ex), p[1] - (a[1] + t * ey));
+  };
+  for (let pass = 0; pass < 32; pass++) {
+    const n = cur.length;
+    if (n < 4) return null;
+    // spatial hash of segments (short segments -> few cells each)
+    let sum = 0;
+    for (let i = 0; i < n; i++) {
+      const a = pts[cur[i]!]!, b = pts[cur[(i + 1) % n]!]!;
+      sum += Math.hypot(b[0] - a[0], b[1] - a[1]);
+    }
+    const avgSeg = Math.max(sum / n, 1e-12);
+    const touchTol = 0.25 * avgSeg; // rails closer than a quarter sample-step = degenerate contact
+    const cell = avgSeg * 2;
+    const hk = (ix: number, iy: number): number => Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663);
+    const grid = new Map<number, number[]>();
+    for (let i = 0; i < n; i++) {
+      const a = pts[cur[i]!]!, b = pts[cur[(i + 1) % n]!]!;
+      const x0 = Math.floor((Math.min(a[0], b[0]) - touchTol) / cell), x1 = Math.floor((Math.max(a[0], b[0]) + touchTol) / cell);
+      const y0 = Math.floor((Math.min(a[1], b[1]) - touchTol) / cell), y1 = Math.floor((Math.max(a[1], b[1]) + touchTol) / cell);
+      for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) {
+        const k = hk(x, y);
+        const arr = grid.get(k); if (arr) arr.push(i); else grid.set(k, [i]);
+      }
+    }
+    // Collect degenerate contacts: proper segment crossings AND rail segments passing within
+    // touchTol of each other (interleaved zero-width corridors block every ear without crossing).
+    const pairs: [number, number, number][] = []; // [dcyc, i, j]
+    for (const arr of grid.values()) {
+      for (let ai = 0; ai < arr.length; ai++) for (let bi = ai + 1; bi < arr.length; bi++) {
+        let i = arr[ai]!, j = arr[bi]!;
+        if (i > j) { const t = i; i = j; j = t; }
+        const dIdx = Math.min(j - i, n - (j - i));
+        if (dIdx <= 1) continue; // adjacent segments legitimately touch
+        const a0 = pts[cur[i]!]!, a1 = pts[cur[(i + 1) % n]!]!;
+        const b0 = pts[cur[j]!]!, b1 = pts[cur[(j + 1) % n]!]!;
+        const touch = segCross(a0, a1, b0, b1)
+          || distPS(b0, a0, a1) < touchTol || distPS(b1, a0, a1) < touchTol
+          || distPS(a0, b0, b1) < touchTol || distPS(a1, b0, b1) < touchTol;
+        if (touch) pairs.push([dIdx, i, j]);
+      }
+    }
+    if (!pairs.length) {
+      if (DBG) console.error(`[cdt]   dropMicroLoops: clean after ${pass} passes, dropped=${dropped}/${ring.length}`);
+      return dropped > 0 ? cur : null; // simple now (or was never degenerate)
+    }
+    // Excise every non-overlapping small-span contact this pass (the short arc between the two
+    // segments = the micro-loop / zero-width tail). A long interleaved run-out is hundreds of
+    // touch points, so one-at-a-time never converges.
+    pairs.sort((a, b) => a[0] - b[0]);
+    const drop = new Uint8Array(n);
+    let any = false, tangle = false;
+    for (const [d, i, j] of pairs) {
+      if (d > 96) { tangle = tangle || !any; break; } // spans this large are a genuine tangle
+      if (j - i !== d) continue; // wrap-around short side: rare, let a later pass handle it solo
+      if (dropped + d > maxDrop) break;
+      let clear = drop[i] === 0 && drop[(j + 1) % n] === 0;
+      for (let k = i + 1; clear && k <= j; k++) clear = drop[k] === 0;
+      if (!clear) continue;
+      for (let k = i + 1; k <= j; k++) drop[k] = 1;
+      dropped += d;
+      any = true;
+    }
+    if (!any) {
+      // nothing excisable: either all contacts are huge (tangle) or budget is spent
+      if (DBG) console.error(`[cdt]   dropMicroLoops: ${tangle ? "large-span contact — genuine tangle" : `budget spent (dropped=${dropped})`}, contacts=${pairs.length}`);
+      return null;
+    }
+    cur = cur.filter((_, k) => drop[k] === 0);
+  }
+  if (DBG) console.error(`[cdt]   dropMicroLoops: pass budget exhausted, dropped=${dropped}`);
+  return null;
+}
+
+/**
  * Robustly enforce constraint edge a-b when flips couldn't: delete every triangle the segment
  * crosses, then ear-clip the two simple sub-polygons that the segment splits the cavity into.
  * Returns false (leaving the triangulation unchanged) if the cavity isn't a clean single loop.
@@ -283,7 +422,10 @@ function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: num
       if (segCross(PA, PB, pts[u]!, pts[w]!)) { crossed.push(t); break; }
     }
   }
-  if (!crossed.length || crossed.length > 64) return false; // huge/empty cavity = degenerate seam — leave it
+  if (!crossed.length || crossed.length > 64) {
+    if (DBG) console.error(`[cdt]     enforce ${a}-${b}: bail crossed=${crossed.length}`);
+    return false; // huge/empty cavity = degenerate seam — leave it
+  }
   // Boundary edges of the cavity = edges of crossed triangles not shared by two crossed triangles.
   const count = new Map<number, number>();
   for (const t of crossed) { const v = tris[t]!.v; for (let e = 0; e < 3; e++) count.set(ckey(v[e]!, v[(e + 1) % 3]!), (count.get(ckey(v[e]!, v[(e + 1) % 3]!)) ?? 0) + 1); }
@@ -293,7 +435,10 @@ function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: num
     const v = tris[t]!.v;
     for (let e = 0; e < 3; e++) {
       const u = v[e]!, w = v[(e + 1) % 3]!;
-      if ((count.get(ckey(u, w)) ?? 0) === 1) { if (nextOf.has(u)) return false; nextOf.set(u, w); edges++; }
+      if ((count.get(ckey(u, w)) ?? 0) === 1) {
+        if (nextOf.has(u)) { if (DBG) console.error(`[cdt]     enforce ${a}-${b}: bail cavity-fork at v${u}`); return false; }
+        nextOf.set(u, w); edges++;
+      }
     }
   }
   if (!nextOf.has(a) || !nextOf.has(b)) return false;
@@ -344,9 +489,11 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   const tris: Tri[] = [{ v: [s0, s1, s2], n: [-1, -1, -1], dead: false }];
   const free: number[] = [];
   let hint = 0;
+  const dbgT0 = DBG ? Date.now() : 0;
   // Insert boundary loop points first, then interior points.
   for (const loop of loops) for (const pi of loop) hint = insertPoint(tris, pts, pi, hint, free);
   for (const pi of interior) hint = insertPoint(tris, pts, pi, hint, free);
+  const dbgT1 = DBG ? Date.now() : 0;
 
   // Force the constraint (boundary) edges.
   const v2t: number[][] = Array.from({ length: pts.length }, () => []);
@@ -357,14 +504,22 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     constraints.add(ckey(a, b));
     forceEdge(tris, pts, v2t, a, b);
   }
+  const dbgT2 = DBG ? Date.now() : 0;
   // Second pass: any constraint the flip method left unrealised (stuck on non-convex quads) is
-  // enforced by deleting the crossed triangles and ear-clipping the cavity — guaranteed to succeed.
+  // enforced by deleting the crossed triangles and ear-clipping the cavity. (A fixpoint iteration
+  // of this pass was tried and REGRESSED: re-forcing hopeless constraints churns the triangulation
+  // and trips fold audits on other faces — one pass, like it always was.)
   const present = new Set<number>();
   for (let t = 0; t < tris.length; t++) { const T = tris[t]!; if (T.dead) continue; for (let e = 0; e < 3; e++) present.add(ckey(T.v[e]!, T.v[(e + 1) % 3]!)); }
+  let unrealized = 0;
   for (const ck of constraints) {
     if (present.has(ck)) continue;
+    unrealized++;
     const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
     enforceByRetriangulation(tris, pts, free, a, b);
+  }
+  if (DBG && Date.now() - dbgT0 > 500) {
+    console.error(`[cdt] SLOW n=${n} constraints=${constraints.size} unrealized=${unrealized}: insert=${dbgT1 - dbgT0}ms force=${dbgT2 - dbgT1}ms enforce=${Date.now() - dbgT2}ms`);
   }
 
   // Region extraction: flood fill from a super-triangle (outside), toggling in/out at constraints.
@@ -406,10 +561,11 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
 
   // Count boundary constraints the CDT couldn't realise. When every constraint is present the parity
   // flood fill is exact, so we keep it untouched (the common case for every well-parametrised face).
+  // (over the constraints set, not the raw loops: a chain-split constraint is realised by its
+  // collinear pieces and must not count as missing)
   let missing = 0;
-  for (const loop of loops) for (let i = 0; i < loop.length; i++) {
-    if (!edgeTris.has(ckey(loop[i]!, loop[(i + 1) % loop.length]!))) missing++;
-  }
+  for (const ck of constraints) if (!edgeTris.has(ck)) missing++;
+  if (DBG && missing > 0) console.error(`[cdt] missing=${missing}/${constraints.size} pts=${n} loops=[${loops.map((l) => l.length).join(",")}] interior=${interior.length} flood=${flood.length}`);
   if (missing === 0) return flood;
 
   // Constraints unrealised — the (u,v) embedding collapsed (a thin-sliver B-spline parameter domain
@@ -420,11 +576,21 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // shares those exact samples — while still following the surface through the interior points.
   // Falls through to the geometric classification if the ring isn't a clean simple polygon.
   if (loops.length === 1 && (loops[0]?.length ?? 0) >= 3) {
-    const filled = boundaryFillWithInterior(points, loops[0]!, interior);
+    let filled = boundaryFillWithInterior(points, loops[0]!, interior);
+    if (DBG) console.error(`[cdt]   boundaryFillWithInterior: ${filled ? `${filled.length} tris` : "FAILED (ring not simple)"}`);
+    if (!filled || filled.length === 0) {
+      // Ring not simple — often micro self-crossings at slot/thread run-outs. Excise them and retry.
+      const simplified = dropMicroLoops(points, loops[0]!);
+      if (simplified) {
+        filled = boundaryFillWithInterior(points, simplified, interior);
+        if (DBG) console.error(`[cdt]   dropMicroLoops(${loops[0]!.length}->${simplified.length}) + refill: ${filled ? `${filled.length} tris` : "still FAILED"}`);
+      }
+    }
     if (filled && filled.length > 0) return filled;
     // Ear-clip failed — the loop is a triangle with a collinear side (a curved slice meeting at a
     // cone apex / sphere pole). Fan from the apex, making every rim segment a triangle edge.
     const fan = fanFill(points, loops[0]!);
+    if (DBG) console.error(`[cdt]   fanFill: ${fan ? `${fan.length} tris` : "FAILED"}`);
     if (fan && fan.length > 0) return fan;
   }
 
@@ -446,6 +612,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
       if (segCross(a0, a1, b0, b1)) { selfCross = true; break; }
     }
   }
+  if (DBG) console.error(`[cdt]   selfCross=${selfCross} -> ${selfCross ? "flood-or-nothing" : "geometric classification"}`);
   if (selfCross) {
     // If the flood fill itself is manifold, keep it — a benign self-cross. Only when it double-covers
     // (an edge shared by >2 triangles, i.e. an unavoidable knot on a tangled closed-v seam) is the

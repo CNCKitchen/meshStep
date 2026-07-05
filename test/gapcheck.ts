@@ -53,6 +53,14 @@ const scan = (d: string): void => {
   }
 };
 scan(scanDir);
+// --skip a,b : drop files whose name contains any of the comma-separated substrings
+const skipArg = strFlag("skip", "");
+if (skipArg) {
+  const pats = skipArg.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const before = files.length;
+  for (let i = files.length - 1; i >= 0; i--) if (pats.some((p) => files[i]!.toLowerCase().includes(p))) files.splice(i, 1);
+  console.log(`skipping ${before - files.length} model(s) matching: ${skipArg}`);
+}
 if (files.length === 0) { console.error(`no .step/.stp files under ${scanDir}`); process.exit(1); }
 console.log(`gapcheck: ${files.length} models in ${dir}, ${jobs} parallel, ${opts.samples} samples/direction, ${timeoutMs / 1000}s timeout\n`);
 

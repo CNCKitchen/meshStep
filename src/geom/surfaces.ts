@@ -291,7 +291,29 @@ class BSplineSurface implements Surface {
     this.buildGrid();
   }
   private buildGrid(): void {
-    const GU = 24, GV = 24;
+    // Seed-grid resolution follows the surface's metric aspect. A fixed 24×24 grid on a
+    // 0.4mm × 2400mm helical strip (StingStopp_4000 groove bottom) puts seeds 100mm apart along
+    // the strip; Gauss-Newton cannot cross that basin, so boundary projection lands millimetres
+    // off (accepted as "best effort"), the pcurve tangles, and the CDT shatters the face.
+    // Allocate cells proportional to per-direction arc length within a fixed budget.
+    const umid = (this.u0 + this.u1) / 2, vmid = (this.v0 + this.v1) / 2;
+    const arcLen = (c: 0 | 1): number => {
+      let len = 0;
+      let prev: Vec3 | null = null;
+      for (let i = 0; i <= 16; i++) {
+        const t = i / 16;
+        const p = c === 0
+          ? this.evaluateRaw(this.u0 + (this.u1 - this.u0) * t, vmid)
+          : this.evaluateRaw(umid, this.v0 + (this.v1 - this.v0) * t);
+        if (prev) len += Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]);
+        prev = p;
+      }
+      return Math.max(len, 1e-9);
+    };
+    const uLen = arcLen(0), vLen = arcLen(1);
+    const BUDGET = 2048;
+    const GU = Math.max(4, Math.min(1024, Math.round(Math.sqrt((BUDGET * uLen) / vLen))));
+    const GV = Math.max(4, Math.min(1024, Math.round(Math.sqrt((BUDGET * vLen) / uLen))));
     for (let i = 0; i <= GU; i++) this.gU.push(this.u0 + ((this.u1 - this.u0) * i) / GU);
     for (let j = 0; j <= GV; j++) this.gV.push(this.v0 + ((this.v1 - this.v0) * j) / GV);
     for (let i = 0; i <= GU; i++) {
@@ -299,16 +321,21 @@ class BSplineSurface implements Surface {
       for (let j = 0; j <= GV; j++) row.push(this.evaluate(this.gU[i]!, this.gV[j]!));
       this.gP.push(row);
     }
-    // Rough min curvature radius from normal turn across the grid (drives adaptive refinement),
-    // kept PER CELL: one degenerate spot (a lens patch pinching to a needle tip) must not drag the
-    // whole surface's target down — a global minimum made gridCDT mesh a benign R≈2mm face at the
-    // needle-tip's 0.1mm "radius" everywhere (OpenVessel's bow lens: 14× too dense, needle fringe).
+    // Rough min curvature radius from normal turn across a FIXED 24×24 lattice (drives adaptive
+    // refinement), kept PER CELL: one degenerate spot (a lens patch pinching to a needle tip) must
+    // not drag the whole surface's target down — a global minimum made gridCDT mesh a benign R≈2mm
+    // face at the needle-tip's 0.1mm "radius" everywhere (OpenVessel's bow lens). Deliberately
+    // DECOUPLED from the adaptive seed grid above: finer curvature cells would silently densify
+    // meshing ("everything" +50% triangles when this followed the 2048-cell seed budget).
+    const RU = 24, RV = 24;
+    const rU = (i: number): number => this.u0 + ((this.u1 - this.u0) * i) / RU;
+    const rV = (j: number): number => this.v0 + ((this.v1 - this.v0) * j) / RV;
     let minR = Infinity;
-    for (let i = 0; i < GU; i++) {
+    for (let i = 0; i < RU; i++) {
       const row: number[] = [];
-      for (let j = 0; j < GV; j++) {
-        const a = this.gP[i]![j]!, b = this.gP[i + 1]![j]!, c = this.gP[i]![j + 1]!;
-        const n1 = this.normalAt(this.gU[i]!, this.gV[j]!), n2 = this.normalAt(this.gU[i + 1]!, this.gV[j]!), n3 = this.normalAt(this.gU[i]!, this.gV[j + 1]!);
+      for (let j = 0; j < RV; j++) {
+        const a = this.evaluate(rU(i), rV(j)), b = this.evaluate(rU(i + 1), rV(j)), c = this.evaluate(rU(i), rV(j + 1));
+        const n1 = this.normalAt(rU(i), rV(j)), n2 = this.normalAt(rU(i + 1), rV(j)), n3 = this.normalAt(rU(i), rV(j + 1));
         const du = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
         const dv = Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
         const tu = Math.acos(Math.max(-1, Math.min(1, dot(n1, n2))));

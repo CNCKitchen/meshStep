@@ -21,6 +21,9 @@ import { sampleEdgePolyline } from "../geom/curves.ts";
 import { constrainedTriangulate } from "./cdt2d.ts";
 
 const TWO_PI = Math.PI * 2;
+
+/** Diagnostics for the gapcheck harness (MESHSTEP_DEBUG=1); no-op in production/browser. */
+const DBG = typeof process !== "undefined" && !!process.env?.MESHSTEP_DEBUG;
 type P2 = [number, number];
 
 export interface TessOptions {
@@ -451,13 +454,19 @@ function shiftIntoRange(p2: P2[], target: number, c: 0 | 1, period = TWO_PI): vo
  * The floor bounds only the CHORD term: the chord requirement densifies with Rc/chordTol and can
  * explode, but the angular term is self-bounding (≤ 2π/(2·normalDev) segments per full turn no
  * matter the radius), and it is an explicit user setting — flooring it away silently violates the
- * requested normal deviation (e.g. a 100mm max edge turned a 10° setting into 2.5mm edges). */
-function faceTarget(surface: Surface, targetEdge: number, chordTol: number, normalDev: number, u = 0, v = 0): number {
+ * requested normal deviation (e.g. a 100mm max edge turned a 10° setting into 2.5mm edges).
+ * floorAngular=true (EDGE-SAMPLING use only) floors the angular term too: the per-turn bound is
+ * per turn OF THE SURFACE, but an edge target applies along the edge's whole length — a thread
+ * ribbon whose root radius is 0.2mm would sample its 1.6-METRE helical rails at 0.05mm
+ * (30k points/rail, StingStopp_4000_Base) to honour a normal deviation that never materialises
+ * along the ruling. Genuinely curved edges still densify through the curve's own chord/turn
+ * criteria in sampleEdgePolyline; interior meshing keeps the unfloored requirement. */
+function faceTarget(surface: Surface, targetEdge: number, chordTol: number, normalDev: number, u = 0, v = 0, floorAngular = false): number {
   const Rc = surface.curvatureRadius(u, v);
   const floor = Math.min(targetEdge / 40, 30 * chordTol);
-  return Number.isFinite(Rc)
-    ? Math.min(targetEdge, Math.max(floor, Math.sqrt(8 * Rc * chordTol)), Rc * normalDev)
-    : targetEdge;
+  if (!Number.isFinite(Rc)) return targetEdge;
+  const ang = floorAngular ? Math.max(floor, Rc * normalDev) : Rc * normalDev;
+  return Math.min(targetEdge, Math.max(floor, Math.sqrt(8 * Rc * chordTol)), ang);
 }
 
 /**
@@ -549,7 +558,10 @@ function tessellateParamGrid(
     }
   }
   for (const [k, m] of bound) {
-    if ((used.get(k) ?? 0) > m) { verts.length = v0; faceIds.length = f0; return false; }
+    if ((used.get(k) ?? 0) > m) {
+      if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT rollback (boundary segment over-covered)`);
+      verts.length = v0; faceIds.length = f0; return false;
+    }
   }
   return true;
 }
@@ -566,11 +578,7 @@ function gridCDT(
     if (q[0] < umin) umin = q[0]; if (q[0] > umax) umax = q[0];
     if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1];
   }
-  const umid = (umin + umax) / 2, vmid = (vmin + vmax) / 2, eps = 1e-3;
-  const dU = surface.evaluate(umid + eps, vmid), dU2 = surface.evaluate(umid - eps, vmid);
-  const dV = surface.evaluate(umid, vmid + eps), dV2 = surface.evaluate(umid, vmid - eps);
-  const uScale = Math.max(1e-9, Math.hypot(dU[0] - dU2[0], dU[1] - dU2[1], dU[2] - dU2[2]) / (2 * eps));
-  const vScale = Math.max(1e-9, Math.hypot(dV[0] - dV2[0], dV[1] - dV2[1], dV[2] - dV2[2]) / (2 * eps));
+  const umid = (umin + umax) / 2, vmid = (vmin + vmax) / 2;
 
   // Per-DIRECTION curvature bounds -> ANISOTROPIC scaling. A fillet bends across one parameter and
   // is straight along the other; meshing it isotropically at the across-the-bend step makes every
@@ -587,6 +595,7 @@ function gridCDT(
   // isotropic — no surface-kind special cases needed.
   const epsU = Math.max(1e-6, (umax - umin) / 64), epsV = Math.max(1e-6, (vmax - vmin) / 64);
   let kU = 0, kV = 0;
+  const uMags: number[] = [], vMags: number[] = [];
   for (const fu of [0.15, 0.5, 0.85]) for (const fv of [0.15, 0.5, 0.85]) {
     const su = umin + (umax - umin) * fu, sv = vmin + (vmax - vmin) * fv;
     const Pc = surface.evaluate(su, sv);
@@ -594,6 +603,8 @@ function gridCDT(
     const vPp = surface.evaluate(su, sv + epsV), vPm = surface.evaluate(su, sv - epsV);
     const d1u: Vec3 = [(uPp[0] - uPm[0]) / (2 * epsU), (uPp[1] - uPm[1]) / (2 * epsU), (uPp[2] - uPm[2]) / (2 * epsU)];
     const d1v: Vec3 = [(vPp[0] - vPm[0]) / (2 * epsV), (vPp[1] - vPm[1]) / (2 * epsV), (vPp[2] - vPm[2]) / (2 * epsV)];
+    uMags.push(Math.hypot(d1u[0], d1u[1], d1u[2]));
+    vMags.push(Math.hypot(d1v[0], d1v[1], d1v[2]));
     const nrm = normalize(cross(d1u, d1v));
     const normCurv = (Pp: Vec3, Pn: Vec3, d1: Vec3, e: number): number => {
       const d2: Vec3 = [(Pp[0] + Pn[0] - 2 * Pc[0]) / (e * e), (Pp[1] + Pn[1] - 2 * Pc[1]) / (e * e), (Pp[2] + Pn[2] - 2 * Pc[2]) / (e * e)];
@@ -602,6 +613,13 @@ function gridCDT(
     kU = Math.max(kU, normCurv(uPp, uPm, d1u, epsU));
     kV = Math.max(kV, normCurv(vPp, vPm, d1v, epsV));
   }
+  // Metric scales from the MEDIAN of the 3x3 samples, not the domain midpoint: on a ruled/loft
+  // surface (e.g. a degree-1xN dome) the midpoint u-metric can be 1000x below the typical value,
+  // and scaling by it squashes the whole boundary polygon into numeric collinearity — the CDT then
+  // "succeeds" on a hair-thin sliver and emits a shattered face (StingStopp_4000_Base #12266).
+  const median = (a: number[]): number => { const s = [...a].sort((x, y) => x - y); return s[s.length >> 1]!; };
+  const uScale = Math.max(1e-9, median(uMags));
+  const vScale = Math.max(1e-9, median(vMags));
   const stepOf = (kappa: number): number => {
     if (!(kappa > 1e-9)) return targetEdge;
     const R = 1 / kappa;
@@ -663,8 +681,12 @@ function gridCDT(
     if (keep.length < 3) return lp;
     return { p3: keep.map((i) => lp.p3[i]!), p2: keep.map((i) => lp.p2[i]!) };
   };
+  const preOuter = outer.p2.length, preHoles = holes.reduce((s, h) => s + h.p2.length, 0);
   outer = sanitize(outer);
   holes = holes.map(sanitize);
+  if (DBG && (outer.p2.length !== preOuter || holes.reduce((s, h) => s + h.p2.length, 0) !== preHoles)) {
+    console.error(`[grid] fid=${fid} sanitize: outer ${preOuter}->${outer.p2.length} holes ${preHoles}->${holes.reduce((s, h) => s + h.p2.length, 0)}`);
+  }
   const holeP2 = holes.map((h) => h.p2);
   const inRegion = (p: P2): boolean => pointInPoly(p, outer.p2) && !holeP2.some((h) => pointInPoly(p, h));
 
@@ -742,13 +764,18 @@ function gridCDT(
 
   const cdtPts: P2[] = allP2.map(([u, v]) => [SX(u), SY(v)]);
   let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx);
+  if (DBG) console.error(`[grid] fid=${fid} nU=${nU} nV=${nV} uSc=${uSc.toExponential(2)} vSc=${vSc.toExponential(2)} boundary=${outerIdx.length}+${holeIdx.reduce((s, h) => s + h.length, 0)} interior=${interiorIdx.length} -> cdt tris=${tris.length}`);
   // Delaunay refinement: insert the circumcentre of any triangle whose circumdiameter exceeds the
   // local size field — this grades the mesh from the fine boundary into the interior (fillet runs
   // into chamfer) and, being Delaunay, keeps the new triangles well-shaped. Capped at a multiple of
   // the base grid: well-behaved faces converge long before it, but a skewed B-spline patch (whose
   // diagonal-metric triangles always look oversized) would otherwise refine to millions of points.
   const cap = 200 + (interiorIdx.length + outerIdx.length) * 6;
-  const maxIter = 4;
+  // Each refinement pass re-runs the whole CDT from scratch; on a very dense boundary (shared
+  // thread rails, tens of thousands of samples) that multiplies an already-fine mesh for minutes.
+  // Those boundaries are far below the size field everywhere — refinement has nothing real to add.
+  const nBoundaryPts = outerIdx.length + holeIdx.reduce((s, h) => s + h.length, 0);
+  const maxIter = nBoundaryPts > 20000 ? 0 : nBoundaryPts > 8000 ? 1 : 4;
   for (let iter = 0; iter < maxIter && interiorIdx.length < cap; iter++) {
     const fresh: P2[] = [];
     for (const [a, b, c] of tris) {
@@ -911,6 +938,7 @@ function gridCDT(
     }
     if (!flips) break;
   }
+  if (DBG) console.error(`[grid] fid=${fid} final tris=${tris.length} pts=${cdtPts.length}`);
   for (const [a, b, c] of tris) emitTri(verts, faceIds, allP3[a]!, allP3[b]!, allP3[c]!, fid, surface, sign);
   return tris.length > 0;
 }
@@ -1882,7 +1910,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const edgeMaxLen = new Map<number, number>();
   for (const solid of brep.solids) for (const face of solid.faces) {
     const surface = faceSurf.get(face.faceId);
-    const t = surface ? faceTarget(surface, targetEdge, chordTol, normalDev) : targetEdge;
+    const t = surface ? faceTarget(surface, targetEdge, chordTol, normalDev, 0, 0, true) : targetEdge;
     for (const lp of face.loops) for (const oe of lp.edges) {
       const cur = edgeMaxLen.get(oe.edgeId);
       if (cur === undefined || t < cur) edgeMaxLen.set(oe.edgeId, t);
