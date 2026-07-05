@@ -60,6 +60,32 @@ function unitFactor(t: Table, id: number, kind: "length" | "angle", depth = 0): 
  * DEGREE conversion is defined in, so a global scan can pick the wrong one. Handles SI_UNIT
  * (MILLI METRE, RADIAN) and CONVERSION_BASED_UNIT (INCH, DEGREE, ...). Falls back to mm / radians.
  */
+/**
+ * Per-representation-context length scale (mm per unit). A multi-part assembly may declare a
+ * DIFFERENT length unit per part representation (Inventor 2026 mixes plain METRE and MILLI METRE
+ * contexts in one file); geometry must be scaled by the unit of the context its representation
+ * references, not a single global pick. Returns only contexts that resolve a length unit — callers
+ * fall back to the global detectUnits() scale for anything absent.
+ */
+export function contextLengthScales(table: Table): Map<number, number> {
+  const out = new Map<number, number>();
+  for (const [id, guac] of table.byType("GLOBAL_UNIT_ASSIGNED_CONTEXT")) {
+    const units = guac.params.find((p) => p.k === "list");
+    if (!units || units.k !== "list") continue;
+    for (const u of units.v) {
+      if (u.k !== "ref") continue;
+      const e = table.model.entities.get(u.v);
+      const isLen = e && ("complex" in e
+        ? e.complex.some((r) => r.type === "LENGTH_UNIT")
+        : e.type === "SI_UNIT"); // a bare SI_UNIT length (rare) — unitFactor rejects non-METRE anyway
+      if (!isLen) continue;
+      const f = unitFactor(table, u.v, "length");
+      if (f !== null) { out.set(id, f); break; }
+    }
+  }
+  return out;
+}
+
 export function detectUnits(table: Table): Units {
   let mmPerUnit: number | null = null;
   let radPerAngle: number | null = null;

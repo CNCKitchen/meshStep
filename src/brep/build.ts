@@ -5,7 +5,7 @@
 import type { Vec3 } from "../geom/vec.ts";
 import { Table, ref, refList, enumOf } from "../step/entities.ts";
 import { parseStep } from "../step/parser.ts";
-import { detectUnits, type Units } from "../step/units.ts";
+import { detectUnits, contextLengthScales, type Units } from "../step/units.ts";
 import { readPoint, readPlacement, type Frame } from "../geom/placement.ts";
 import { makeCurve } from "../geom/curves.ts";
 
@@ -14,6 +14,9 @@ export interface BEdge {
   v1: Vec3;
   curveId: number;
   sameSense: boolean;
+  /** mm per unit for this edge's curve geometry, when its solid's representation context differs
+   * from the file-global unit. Samplers must use this over the global scale. */
+  scale?: number;
 }
 
 export interface OrientedEdge {
@@ -40,8 +43,16 @@ export interface BSolid {
   id: number;
   faces: BFace[];
   /** World placement from the STEP assembly tree (identity for a single part). Applied to the final
-   * mesh AFTER tessellation/remesh, since the analytic surfaces stay in each part's local frame. */
+   * mesh AFTER tessellation/remesh, since the analytic surfaces stay in each part's local frame.
+   * Equal to instances[0] when the part occurs in the assembly. */
   transform?: Frame;
+  /** ALL world placements of this part (one per assembly occurrence). A part used N times in the
+   * assembly is meshed once and replicated at each frame; absent = single occurrence at identity. */
+  instances?: Frame[];
+  /** mm per length unit of this solid's own representation context, when it differs from the
+   * file-global unit (Inventor mixes plain-METRE part reps into a millimetre assembly). Geometry
+   * readers must use this over the global scale for the solid's points/curves/surfaces. */
+  scale?: number;
 }
 
 // ---- Rigid transform (a Frame is columns x,y,z + origin o): world = o + x·p₀ + y·p₁ + z·p₂ ----
@@ -59,23 +70,54 @@ const invF = (f: Frame): Frame => {
 };
 
 /**
- * Resolve each MANIFOLD_SOLID_BREP's world placement from the STEP assembly graph: parts live in
- * their own SHAPE_REPRESENTATION and are positioned by REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION
- * chains (each an ITEM_DEFINED_TRANSFORMATION mapping the child rep's frame into its parent's). We
- * compose those transforms from each part up to the assembly root. Without this every part renders at
- * its own local origin (the assembly comes in disassembled). A single-part file has no such relations
- * and every solid stays identity.
+ * Resolve each solid's world placement(s) and unit scale from the STEP assembly graph: parts live
+ * in their own SHAPE_REPRESENTATION and are positioned by
+ * REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION chains (each an ITEM_DEFINED_TRANSFORMATION
+ * mapping the child rep's frame into its parent's). A part USED N TIMES has N such relationships
+ * with the same child rep — every path from its geometry rep to the assembly root is one world
+ * placement, so a solid yields a LIST of instance frames (wallganizer: 258 occurrences of 25
+ * bodies; keeping only one parent per child dropped 233 of them and picked arbitrary survivors).
+ * Each representation may also declare its OWN length unit (Inventor mixes plain-METRE part reps
+ * into a millimetre file): a rep's geometry AND the ITEM_DEFINED_TRANSFORMATION placement that
+ * lives in it are read at that rep's scale, so composed translations come out in millimetres.
+ * A single-part file has no relationships and every solid stays a single identity instance.
  */
-function assemblyTransforms(t: Table, s: number): Map<number, Frame> {
-  // child rep -> { parent rep, transform mapping child frame -> parent frame }
-  const parent = new Map<number, { rep: number; xf: Frame }>();
+function assemblyInfo(t: Table, s: number): {
+  instances: Map<number, Frame[]>;
+  solidScale: Map<number, number>;
+} {
+  // geometry rep (ABSR / SHAPE_REPRESENTATION / ...) -> the solid bodies it contains
+  const repOfSolid = new Map<number, number>();
+  const repCtx = new Map<number, number>();
+  for (const ty of ["ADVANCED_BREP_SHAPE_REPRESENTATION", "MANIFOLD_SURFACE_SHAPE_REPRESENTATION", "SHAPE_REPRESENTATION"]) {
+    for (const [repId, rep] of t.byType(ty)) {
+      if (rep.params[2]?.k === "ref") repCtx.set(repId, ref(rep.params[2]!));
+      if (rep.params[1]?.k !== "list") continue;
+      for (const item of refList(rep.params[1]!)) {
+        const ty2 = t.typeOf(item);
+        if (ty2 === "MANIFOLD_SOLID_BREP" || ty2 === "BREP_WITH_VOIDS") repOfSolid.set(item, repId);
+      }
+    }
+  }
+  const ctxScale = contextLengthScales(t);
+  const scaleOfRep = (rep: number): number => {
+    const c = repCtx.get(rep);
+    return (c !== undefined ? ctxScale.get(c) : undefined) ?? s;
+  };
+
+  // child rep -> [{ parent rep, transform mapping child frame -> parent frame }] (one per occurrence)
+  const parents = new Map<number, { rep: number; xf: Frame }[]>();
   for (const [id, rrwt] of t.byType("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION")) {
     const rr = t.sub(id, "REPRESENTATION_RELATIONSHIP");
     if (!rr || rr.params[2]?.k !== "ref" || rr.params[3]?.k !== "ref") continue;
     const child = ref(rr.params[2]!), par = ref(rr.params[3]!);
     const idt = t.record(ref(rrwt.params[0]!)); // ITEM_DEFINED_TRANSFORMATION(name, desc, item1, item2)
-    const p1 = readPlacement(t, ref(idt.params[2]!), s), p2 = readPlacement(t, ref(idt.params[3]!), s);
-    parent.set(child, { rep: par, xf: composeF(p2, invF(p1)) }); // maps item1 frame -> item2 frame
+    // item1 is a placement in the CHILD rep, item2 in the PARENT rep — each in its rep's own units.
+    const p1 = readPlacement(t, ref(idt.params[2]!), scaleOfRep(child));
+    const p2 = readPlacement(t, ref(idt.params[3]!), scaleOfRep(par));
+    const arr = parents.get(child) ?? [];
+    arr.push({ rep: par, xf: composeF(p2, invF(p1)) }); // maps item1 frame -> item2 frame
+    parents.set(child, arr);
   }
   // identity SHAPE_REPRESENTATION_RELATIONSHIP links a placeholder rep to the geometry rep (ABSR)
   const equiv = new Map<number, number>();
@@ -84,27 +126,42 @@ function assemblyTransforms(t: Table, s: number): Map<number, Frame> {
     const a = ref(srr.params[2]!), b = ref(srr.params[3]!);
     equiv.set(a, b); equiv.set(b, a);
   }
-  // geometry rep (ABSR / SHAPE_REPRESENTATION) -> the MANIFOLD_SOLID_BREPs it contains
-  const repOfSolid = new Map<number, number>();
-  for (const ty of ["ADVANCED_BREP_SHAPE_REPRESENTATION", "MANIFOLD_SURFACE_SHAPE_REPRESENTATION", "SHAPE_REPRESENTATION"]) {
-    for (const [repId, rep] of t.byType(ty)) {
-      if (rep.params[1]?.k !== "list") continue;
-      for (const item of refList(rep.params[1]!)) if (t.typeOf(item) === "MANIFOLD_SOLID_BREP") repOfSolid.set(item, repId);
+  const resolve = (rep: number): number => (parents.has(rep) ? rep : (equiv.get(rep) ?? rep));
+
+  // Every root path of a rep is one world placement. Memoised DFS over the (acyclic) parent links;
+  // a cycle or an explosion of paths (malformed graph) degrades to identity-only rather than hanging.
+  const memo = new Map<number, Frame[]>();
+  const onPath = new Set<number>();
+  const MAX_INSTANCES = 4096;
+  const worldsOf = (rep0: number): Frame[] => {
+    const rep = resolve(rep0);
+    const got = memo.get(rep);
+    if (got) return got;
+    const links = parents.get(rep);
+    if (!links || onPath.has(rep)) return [IDENT];
+    onPath.add(rep);
+    const out: Frame[] = [];
+    for (const p of links) {
+      for (const w of worldsOf(p.rep)) {
+        out.push(composeF(w, p.xf));
+        if (out.length >= MAX_INSTANCES) break;
+      }
+      if (out.length >= MAX_INSTANCES) break;
     }
-  }
-  const out = new Map<number, Frame>();
+    onPath.delete(rep);
+    memo.set(rep, out.length ? out : [IDENT]);
+    return memo.get(rep)!;
+  };
+
+  const instances = new Map<number, Frame[]>();
+  const solidScale = new Map<number, number>();
   for (const [solidId, geomRep] of repOfSolid) {
-    let cur = parent.has(geomRep) ? geomRep : (equiv.get(geomRep) ?? geomRep);
-    let world = IDENT, guard = 0; const seen = new Set<number>();
-    while (parent.has(cur) && !seen.has(cur) && guard++ < 64) {
-      seen.add(cur);
-      const p = parent.get(cur)!;
-      world = composeF(p.xf, world);
-      cur = parent.has(p.rep) ? p.rep : (equiv.get(p.rep) ?? p.rep);
-    }
-    if (world !== IDENT) out.set(solidId, world);
+    const worlds = worldsOf(geomRep);
+    if (worlds.length > 1 || worlds[0] !== IDENT) instances.set(solidId, worlds);
+    const sc = scaleOfRep(geomRep);
+    if (sc !== s) solidScale.set(solidId, sc);
   }
-  return out;
+  return { instances, solidScale };
 }
 
 export interface BrepModel {
@@ -229,9 +286,27 @@ export function buildBrep(src: string): BrepModel {
     if (faces.length > 0) solids.push({ id: 0, faces });
   }
 
-  // Position each part by its STEP assembly placement (identity for a single-part file).
-  const xforms = assemblyTransforms(table, s);
-  for (const solid of solids) { const xf = xforms.get(solid.id); if (xf) solid.transform = xf; }
+  // Position each part by its STEP assembly placement(s) (identity for a single-part file) and
+  // pick up per-representation unit scales (mixed-unit assemblies).
+  const { instances, solidScale } = assemblyInfo(table, s);
+  for (const solid of solids) {
+    const inst = instances.get(solid.id);
+    if (inst) { solid.instances = inst; solid.transform = inst[0]; }
+    const sc = solidScale.get(solid.id);
+    if (sc !== undefined && sc !== s) {
+      solid.scale = sc;
+      // The shared edge table was read at the global scale — re-read this solid's edge endpoints at
+      // its own scale and tag the edges so samplers scale their curves the same way. (An EDGE_CURVE
+      // belongs to exactly one shell/solid, so per-solid rescaling cannot conflict.)
+      for (const face of solid.faces) for (const lp of face.loops) for (const oe of lp.edges) {
+        const e = edges.get(oe.edgeId);
+        if (!e || e.scale === sc) continue;
+        e.v0 = vertexPoint(table, ref(table.record(oe.edgeId).params[1]!), sc);
+        e.v1 = vertexPoint(table, ref(table.record(oe.edgeId).params[2]!), sc);
+        e.scale = sc;
+      }
+    }
+  }
 
   return { solids, edges, units, table, scale: s };
 }

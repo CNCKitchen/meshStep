@@ -8,20 +8,58 @@ import { makeSurface, type Surface } from "./geom/surfaces.ts";
 import type { Frame } from "./geom/placement.ts";
 import type { IndexedMesh } from "./io/stl.ts";
 
-/** Move each part's vertices into its assembly world placement (each vertex belongs to one solid,
- * since bodies are welded independently). Rigid transforms preserve winding/watertightness. */
-function applyAssemblyPlacement(mesh: IndexedMesh, solidOfTri: Uint32Array, xf: Map<number, Frame>): void {
-  if (xf.size === 0) return;
+/** Move each part's vertices into its assembly world placement(s). Each vertex belongs to one solid
+ * (bodies are welded independently), so the first instance transforms in place; a part used N times
+ * in the assembly appends N-1 transformed copies of its vertices and triangles (each copy is its own
+ * welded component, so watertightness is preserved per instance). Rigid transforms keep winding. */
+function applyAssemblyPlacement(
+  mesh: IndexedMesh, faceOfTri: Uint32Array, solidOfTri: Uint32Array, xf: Map<number, Frame[]>,
+): { mesh: IndexedMesh; faceOfTri: Uint32Array; solidOfTri: Uint32Array } {
+  const unchanged = { mesh, faceOfTri, solidOfTri };
+  if (xf.size === 0) return unchanged;
   const P = mesh.positions, I = mesh.indices;
-  const vSolid = new Int32Array(P.length / 3).fill(-1);
+  const nV = P.length / 3;
+  const vSolid = new Int32Array(nV).fill(-1);
   for (let t = 0; t < solidOfTri.length; t++) for (let e = 0; e < 3; e++) vSolid[I[t * 3 + e]!] = solidOfTri[t]!;
-  for (let v = 0; v < P.length / 3; v++) {
-    const f = xf.get(vSolid[v]!); if (!f) continue;
-    const x = P[v * 3]!, y = P[v * 3 + 1]!, z = P[v * 3 + 2]!;
-    P[v * 3] = f.o[0] + f.x[0] * x + f.y[0] * y + f.z[0] * z;
-    P[v * 3 + 1] = f.o[1] + f.x[1] * x + f.y[1] * y + f.z[1] * z;
-    P[v * 3 + 2] = f.o[2] + f.x[2] * x + f.y[2] * y + f.z[2] * z;
+  const app = (f: Frame, out: Float64Array, o: number, x: number, y: number, z: number): void => {
+    out[o] = f.o[0] + f.x[0] * x + f.y[0] * y + f.z[0] * z;
+    out[o + 1] = f.o[1] + f.x[1] * x + f.y[1] * y + f.z[1] * z;
+    out[o + 2] = f.o[2] + f.x[2] * x + f.y[2] * y + f.z[2] * z;
+  };
+  // Extra instances first (they read the still-untransformed local coordinates), then instance 0.
+  const extraV: number[] = [], extraI: number[] = [], extraF: number[] = [], extraS: number[] = [];
+  for (const [sid, frames] of xf) {
+    for (let k = 1; k < frames.length; k++) {
+      const f = frames[k]!;
+      const remap = new Map<number, number>();
+      const tmp = new Float64Array(3);
+      for (let v = 0; v < nV; v++) {
+        if (vSolid[v] !== sid) continue;
+        remap.set(v, nV + (extraV.length / 3));
+        app(f, tmp, 0, P[v * 3]!, P[v * 3 + 1]!, P[v * 3 + 2]!);
+        extraV.push(tmp[0]!, tmp[1]!, tmp[2]!);
+      }
+      for (let t = 0; t < solidOfTri.length; t++) {
+        if (solidOfTri[t] !== sid) continue;
+        extraI.push(remap.get(I[t * 3]!)!, remap.get(I[t * 3 + 1]!)!, remap.get(I[t * 3 + 2]!)!);
+        extraF.push(faceOfTri[t]!); extraS.push(sid);
+      }
+    }
   }
+  for (let v = 0; v < nV; v++) {
+    const f = xf.get(vSolid[v]!)?.[0]; if (!f) continue;
+    app(f, P, v * 3, P[v * 3]!, P[v * 3 + 1]!, P[v * 3 + 2]!);
+  }
+  if (extraV.length === 0) return unchanged;
+  const positions = new Float64Array(P.length + extraV.length);
+  positions.set(P); positions.set(extraV, P.length);
+  const indices = new Uint32Array(I.length + extraI.length);
+  indices.set(I); indices.set(extraI, I.length);
+  const fo = new Uint32Array(faceOfTri.length + extraF.length);
+  fo.set(faceOfTri); fo.set(extraF, faceOfTri.length);
+  const so = new Uint32Array(solidOfTri.length + extraS.length);
+  so.set(solidOfTri); so.set(extraS, solidOfTri.length);
+  return { mesh: { positions, indices }, faceOfTri: fo, solidOfTri: so };
 }
 
 export { writeBinarySTL, readSTL, type IndexedMesh, type TriSoup } from "./io/stl.ts";
@@ -57,21 +95,25 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   const tess: TessOptions = { chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad };
   const result = tessellate(brep, tess);
   // Assembly placements per solid (empty for a single part); applied to the final mesh below.
-  const solidXf = new Map<number, Frame>();
-  for (const solid of brep.solids) if (solid.transform) solidXf.set(solid.id, solid.transform);
+  // A part with N occurrences carries N frames and is replicated after meshing.
+  const solidXf = new Map<number, Frame[]>();
+  for (const solid of brep.solids) {
+    if (solid.instances) solidXf.set(solid.id, solid.instances);
+    else if (solid.transform) solidXf.set(solid.id, [solid.transform]);
+  }
   // AP242 tessellated-geometry bodies have no analytic surfaces, so the curvature-adaptive remesh
   // can't project — return the (already watertight) faceted mesh as imported.
   if (opts.remesh !== true || brep.solids.length === 0) {
     orientConsistent(result.mesh);
-    applyAssemblyPlacement(result.mesh, result.solidOfTri, solidXf);
-    return result;
+    const placed = applyAssemblyPlacement(result.mesh, result.faceOfTri, result.solidOfTri, solidXf);
+    return { ...result, ...placed };
   }
 
   const surf = new Map<number, Surface | null>();
   const solidOfFace = new Map<number, number>();
   for (const solid of brep.solids) {
     for (const face of solid.faces) {
-      surf.set(face.faceId, makeSurface(brep.table, face.surfaceId, brep.scale, brep.units.radPerAngle));
+      surf.set(face.faceId, makeSurface(brep.table, face.surfaceId, solid.scale ?? brep.scale, brep.units.radPerAngle));
       solidOfFace.set(face.faceId, solid.id);
     }
   }
@@ -80,6 +122,6 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   });
   orientConsistent(r.mesh); // fix any triangles flipped by smoothing
   const solidOfTri = Uint32Array.from(r.faceOfTri, (f) => solidOfFace.get(f) ?? 0);
-  applyAssemblyPlacement(r.mesh, solidOfTri, solidXf);
-  return { ...result, mesh: r.mesh, faceOfTri: r.faceOfTri, solidOfTri };
+  const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf);
+  return { ...result, ...placed };
 }

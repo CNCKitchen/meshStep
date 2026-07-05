@@ -1915,7 +1915,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // Cache each face's surface (used to dispatch tessellation).
   const faceSurf = new Map<number, Surface | null>();
   for (const solid of brep.solids) for (const face of solid.faces) {
-    faceSurf.set(face.faceId, makeSurface(brep.table, face.surfaceId, brep.scale, brep.units.radPerAngle));
+    faceSurf.set(face.faceId, makeSurface(brep.table, face.surfaceId, solid.scale ?? brep.scale, brep.units.radPerAngle));
   }
   // Sample each edge to the FINEST interior target of its adjacent faces — not just its own curve
   // curvature. A curved face's straight seam / side edges (lines carry no curvature, so they'd be
@@ -1938,7 +1938,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const sampled = new Map<number, Vec3[]>();
   for (const [id, e] of brep.edges) {
     const te = edgeMaxLen.get(id) ?? targetEdge;
-    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, brep.scale, chordTol, te, brep.units.radPerAngle, normalDev));
+    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, chordTol, te, brep.units.radPerAngle, normalDev));
   }
 
   // Weld each body independently so touching bodies don't merge into non-manifold edges.
