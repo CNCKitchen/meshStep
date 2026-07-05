@@ -470,8 +470,9 @@ function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: num
  * Triangulate the region bounded by loops[0] (outer) minus loops[1..] (holes), using all listed
  * points (loop vertices + interior). Returns triangle index triples into `points`.
  */
-export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[]): [number, number, number][] {
+export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: { missing: number }): [number, number, number][] {
   const n = points.length;
+  if (out) out.missing = 0;
   if (n < 3) return [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
   for (const p of points) {
@@ -565,6 +566,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // collinear pieces and must not count as missing)
   let missing = 0;
   for (const ck of constraints) if (!edgeTris.has(ck)) missing++;
+  if (out) out.missing = missing;
   if (DBG && missing > 0) console.error(`[cdt] missing=${missing}/${constraints.size} pts=${n} loops=[${loops.map((l) => l.length).join(",")}] interior=${interior.length} flood=${flood.length}`);
   if (missing === 0) return flood;
 

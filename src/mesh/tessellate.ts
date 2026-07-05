@@ -763,7 +763,8 @@ function gridCDT(
   for (let i = 1; i < nU; i++) for (let j = 1; j < nV; j++) tryAdd(umin + ((umax - umin) * i) / nU, vmin + ((vmax - vmin) * j) / nV);
 
   const cdtPts: P2[] = allP2.map(([u, v]) => [SX(u), SY(v)]);
-  let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx);
+  const cdtOut = { missing: 0 };
+  let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
   if (DBG) console.error(`[grid] fid=${fid} nU=${nU} nV=${nV} uSc=${uSc.toExponential(2)} vSc=${vSc.toExponential(2)} boundary=${outerIdx.length}+${holeIdx.reduce((s, h) => s + h.length, 0)} interior=${interiorIdx.length} -> cdt tris=${tris.length}`);
   // Delaunay refinement: insert the circumcentre of any triangle whose circumdiameter exceeds the
   // local size field — this grades the mesh from the fine boundary into the interior (fillet runs
@@ -776,6 +777,17 @@ function gridCDT(
   // Those boundaries are far below the size field everywhere — refinement has nothing real to add.
   const nBoundaryPts = outerIdx.length + holeIdx.reduce((s, h) => s + h.length, 0);
   const maxIter = nBoundaryPts > 20000 ? 0 : nBoundaryPts > 8000 ? 1 : 4;
+  // A refinement iteration may never trade a fully-constrained triangulation for a rescued one.
+  // Inserted circumcentres can push the re-run CDT into a collinear degeneracy (a straight boundary
+  // rail on a coarse periodic band) where a constraint becomes unrealisable; the ear-clip rescue
+  // then fills the ring with zero-2D-area slivers along the collinear rail whose 3D images are
+  // CHORDS through the surface — and the next iteration refines the chords, compounding them
+  // (ov_pokal's scalloped goblet band: one face emitted 750× its own area at 106mm deviation).
+  // Constraint loss is detected via the CDT's missing count: roll back to the previous
+  // triangulation and stop refining. Orphaned points from the discarded iteration stay in the
+  // arrays but are unreferenced. An INITIAL missing>0 keeps the rescue as before — for a
+  // metric-collapsed boundary it is the only watertight fill available.
+  let prevMissing = cdtOut.missing;
   for (let iter = 0; iter < maxIter && interiorIdx.length < cap; iter++) {
     const fresh: P2[] = [];
     for (const [a, b, c] of tris) {
@@ -813,7 +825,14 @@ function gridCDT(
       added = true;
     }
     if (!added) break;
-    tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx);
+    const prevTris = tris;
+    tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
+    if (cdtOut.missing > prevMissing) {
+      if (DBG) console.error(`[grid] fid=${fid} refinement iter ${iter} lost ${cdtOut.missing - prevMissing} constraint(s) — rolled back`);
+      tris = prevTris;
+      break;
+    }
+    prevMissing = cdtOut.missing;
   }
   // Delaunay picks each quad's diagonal by circumcircle in the (flat) scaled plane, which on a
   // curved face alternates diagonal direction from quad to quad — and every alternation is a
