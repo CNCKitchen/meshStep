@@ -194,12 +194,13 @@ export function makeCurve(t: Table, id: number, s: number, aRad = 1): Curve3 | n
  * bisect any segment whose midpoint sags more than chordTol off the chord or that is longer than
  * maxSegLen. Returns ≥ 2 points, capped to stay bounded on pathological input.
  */
-export function sampleCurve(c: Curve3, chordTol: number, maxSegLen: number, ta = c.t0, tb = c.t1): Vec3[] {
+export function sampleCurve(c: Curve3, chordTol: number, maxSegLen: number, ta = c.t0, tb = c.t1, normalDev = Math.PI): Vec3[] {
   const ts: number[] = [];
   const n0 = c.closed || c.kind === "TRIMMED_CURVE" ? 8 : 2;
   for (let i = 0; i <= n0; i++) ts.push(ta + ((tb - ta) * i) / n0);
   const pts = ts.map((t) => c.evaluate(t));
   const maxPts = 4000;
+  const cosDev = Math.cos(Math.min(normalDev, Math.PI));
   for (let i = 0; i + 1 < ts.length && ts.length < maxPts; ) {
     const tm = (ts[i]! + ts[i + 1]!) / 2;
     const pm = c.evaluate(tm);
@@ -207,7 +208,13 @@ export function sampleCurve(c: Curve3, chordTol: number, maxSegLen: number, ta =
     const chord = dist(a, b);
     const mid = lerp(a, b, 0.5);
     const sag = dist(pm, mid);
-    if ((sag > chordTol || chord > maxSegLen) && dist(a, pm) > 1e-9 && dist(pm, b) > 1e-9) {
+    // Angular criterion: the two half-chords turn by ~half the segment's arc angle, so a turn
+    // above normalDev means the segment spans more than 2·normalDev of arc — split it.
+    const la = dist(a, pm), lb = dist(pm, b);
+    const turnDot = la > 1e-9 && lb > 1e-9
+      ? ((pm[0] - a[0]) * (b[0] - pm[0]) + (pm[1] - a[1]) * (b[1] - pm[1]) + (pm[2] - a[2]) * (b[2] - pm[2])) / (la * lb)
+      : 1;
+    if ((sag > chordTol || chord > maxSegLen || turnDot < cosDev) && la > 1e-9 && lb > 1e-9) {
       ts.splice(i + 1, 0, tm); pts.splice(i + 1, 0, pm);
     } else i++;
   }
@@ -264,9 +271,12 @@ function bsplineData(t: Table, curveId: number, s: number): { degree: number; cp
   return { degree, cps, knots, weights, u0: knots[degree]!, u1: knots[cps.length]! };
 }
 
-function arcSegments(radius: number, sweepAbs: number, chordTol: number): number {
+function arcSegments(radius: number, sweepAbs: number, chordTol: number, normalDev = Math.PI): number {
   const r = Math.max(radius, 1e-9);
-  const dTheta = 2 * Math.acos(Math.max(0, Math.min(1, 1 - chordTol / r)));
+  // Chord-sag limit AND the angular limit: adjacent facet normals differ by the segment's full arc
+  // angle, so a normal deviation of normalDev allows at most 2·normalDev of arc per segment.
+  const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - chordTol / r)));
+  const dTheta = Math.min(dChord, 2 * normalDev);
   const seg = dTheta > 1e-6 ? Math.ceil(sweepAbs / dTheta) : 1;
   return Math.max(1, Math.min(4000, seg));
 }
@@ -314,7 +324,7 @@ function cutOpenPolyline(pts: Vec3[], v0: Vec3, v1: Vec3): Vec3[] | null {
  */
 export function sampleEdgePolyline(
   t: Table, curveId: number, v0: Vec3, v1: Vec3, sameSense: boolean,
-  s: number, chordTol: number, maxSegLen: number, aRad = 1,
+  s: number, chordTol: number, maxSegLen: number, aRad = 1, normalDev = Math.PI,
 ): Vec3[] {
   const kind = t.typeOf(curveId); // undefined for complex entities (surface/seam curves)
 
@@ -325,7 +335,7 @@ export function sampleEdgePolyline(
   // so endpoint snapping strands the interior samples there (legacy AP203 exporters wrap EVERY edge
   // in INTERSECTION_CURVE — model-spanning sliver triangles on 2827056.stp).
   if (kind === "SURFACE_CURVE" || kind === "SEAM_CURVE" || kind === "INTERSECTION_CURVE") {
-    return sampleEdgePolyline(t, ref(t.record(curveId).params[1]!), v0, v1, sameSense, s, chordTol, maxSegLen, aRad);
+    return sampleEdgePolyline(t, ref(t.record(curveId).params[1]!), v0, v1, sameSense, s, chordTol, maxSegLen, aRad, normalDev);
   }
 
   if (kind === "CIRCLE") {
@@ -354,7 +364,7 @@ export function sampleEdgePolyline(
       sweep = d;
     }
     const arcLen = Math.abs(sweep) * R;
-    const n = Math.max(arcSegments(R, Math.abs(sweep), chordTol), Math.ceil(arcLen / Math.max(maxSegLen, 1e-9)));
+    const n = Math.max(arcSegments(R, Math.abs(sweep), chordTol, normalDev), Math.ceil(arcLen / Math.max(maxSegLen, 1e-9)));
     const pts: Vec3[] = [];
     for (let i = 0; i <= n; i++) {
       const a = t0 + (sweep * i) / n;
@@ -381,8 +391,11 @@ export function sampleEdgePolyline(
     else { let d = t1 - t0; while (d >= 0) d -= TWO_PI; while (d < -TWO_PI) d += TWO_PI; sweep = d; }
     // Tightest curvature radius (minSemi²/maxSemi) bounds the chord deviation everywhere; arc length
     // ~ mean-radius·sweep bounds the segment length. Uniform-in-t sampling is fine for both.
+    // The normal turns at up to max/min radians per eccentric-angle radian (fastest at the tight
+    // ends), so shrink the angular tolerance by min/max to bound the turn per uniform-in-t step.
     const rMin = Math.min(a, b) ** 2 / Math.max(a, b, 1e-9);
-    const n = Math.max(arcSegments(rMin, Math.abs(sweep), chordTol), Math.ceil((Math.abs(sweep) * (a + b) / 2) / Math.max(maxSegLen, 1e-9)));
+    const devT = normalDev * Math.min(a, b) / Math.max(a, b, 1e-9);
+    const n = Math.max(arcSegments(rMin, Math.abs(sweep), chordTol, devT), Math.ceil((Math.abs(sweep) * (a + b) / 2) / Math.max(maxSegLen, 1e-9)));
     const pts: Vec3[] = [];
     for (let i = 0; i <= n; i++) {
       const ta = t0 + (sweep * i) / n;
@@ -420,7 +433,7 @@ export function sampleEdgePolyline(
   if (kind !== "LINE") {
     const c = makeCurve(t, curveId, s, aRad);
     if (c) {
-      let pts = sampleCurve(c, chordTol, maxSegLen);
+      let pts = sampleCurve(c, chordTol, maxSegLen, c.t0, c.t1, normalDev);
       const ringClosed = pts.length > 3 && dist(pts[0]!, pts[pts.length - 1]!) < Math.max(1e-9, chordTol * 1e-3);
       if (ringClosed) {
         // Closed curve (full circle/intersection ring): its seam start is unrelated to the edge's

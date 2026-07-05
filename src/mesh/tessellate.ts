@@ -447,12 +447,16 @@ function shiftIntoRange(p2: P2[], target: number, c: 0 | 1, period = TWO_PI): vo
  * mean "don't cap by length, follow curvature", and targetEdge/40 would then be ~2 mm and coarsen
  * every fillet. Floor at the finer of targetEdge/40 and 30·chordTol so curvature drives the density
  * whenever the max edge is large, while small-target corpus runs (30·chordTol ≫ targetEdge/40) keep
- * their existing floor unchanged. */
+ * their existing floor unchanged.
+ * The floor bounds only the CHORD term: the chord requirement densifies with Rc/chordTol and can
+ * explode, but the angular term is self-bounding (≤ 2π/(2·normalDev) segments per full turn no
+ * matter the radius), and it is an explicit user setting — flooring it away silently violates the
+ * requested normal deviation (e.g. a 100mm max edge turned a 10° setting into 2.5mm edges). */
 function faceTarget(surface: Surface, targetEdge: number, chordTol: number, normalDev: number, u = 0, v = 0): number {
   const Rc = surface.curvatureRadius(u, v);
   const floor = Math.min(targetEdge / 40, 30 * chordTol);
   return Number.isFinite(Rc)
-    ? Math.max(floor, Math.min(targetEdge, Math.sqrt(8 * Rc * chordTol), Rc * normalDev))
+    ? Math.min(targetEdge, Math.max(floor, Math.sqrt(8 * Rc * chordTol)), Rc * normalDev)
     : targetEdge;
 }
 
@@ -601,7 +605,8 @@ function gridCDT(
   const stepOf = (kappa: number): number => {
     if (!(kappa > 1e-9)) return targetEdge;
     const R = 1 / kappa;
-    return Math.max(targetEdge / 40, Math.min(targetEdge, Math.sqrt(8 * chordTol * R), R * normalDev));
+    // Floor only the chord term (see faceTarget): the angular requirement must hold as given.
+    return Math.min(targetEdge, Math.max(targetEdge / 40, Math.sqrt(8 * chordTol * R)), R * normalDev);
   };
   const stepU = stepOf(kU), stepV = stepOf(kV);
 
@@ -1652,12 +1657,12 @@ function tessellateConeSlice(
 /** Full sphere: concentric latitude rings, each sized to its own circumference so the poles taper
  * to a point instead of gathering a fan of slivers. */
 function tessellateSphere(
-  s: Sphere, fid: number, chordTol: number, targetEdge: number, sign: number, verts: number[], faceIds: number[],
+  s: Sphere, fid: number, chordTol: number, targetEdge: number, normalDev: number, sign: number, verts: number[], faceIds: number[],
 ): void {
   const R = Math.max(s.r, 1e-9);
   const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - chordTol / R)));
   const dEdge = targetEdge / R;
-  const dTheta = Math.max(1e-4, Math.min(dChord, dEdge));
+  const dTheta = Math.max(1e-4, Math.min(dChord, dEdge, 2 * normalDev));
   const target = R * dTheta; // arc-length target on the sphere
   const nV = Math.max(4, Math.min(2000, Math.ceil(Math.PI / dTheta)));
   const ringAt = (v: number): Vec3[] => {
@@ -1688,7 +1693,7 @@ function tessellateSphere(
  */
 function tessellateSphereCap(
   s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
-  verts: number[], faceIds: number[], chordTol: number, targetEdge: number, sign: number,
+  verts: number[], faceIds: number[], chordTol: number, targetEdge: number, normalDev: number, sign: number,
 ): boolean {
   // Separate the constant-latitude RIM from a SEAM meridian: a hemisphere/cap often carries a seam
   // edge from the pole to the rim, traversed twice (down one side, back the other). Those doubled
@@ -1721,7 +1726,7 @@ function tessellateSphereCap(
 
   const R = Math.max(s.r, 1e-9);
   const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - chordTol / R)));
-  const dTheta = Math.max(1e-4, Math.min(dChord, targetEdge / R));
+  const dTheta = Math.max(1e-4, Math.min(dChord, targetEdge / R, 2 * normalDev));
   const target = R * dTheta;
   const span = Math.abs(vPole - vRim);
   const nV = Math.max(1, Math.min(2000, Math.ceil(span / dTheta)));
@@ -1766,9 +1771,9 @@ function tessellateBSplineFull(
     }
     return len;
   };
-  const Rc = s.curvatureRadius();
-  const target = Number.isFinite(Rc)
-    ? Math.max(targetEdge / 40, Math.min(targetEdge, Math.sqrt(8 * Rc * chordTol), Rc * normalDev)) : targetEdge;
+  const Rc = s.rc; // global min — the full-patch grid is sized uniformly, so no local lookup
+  const target = Number.isFinite(Rc) // floor only the chord term (see faceTarget)
+    ? Math.min(targetEdge, Math.max(targetEdge / 40, Math.sqrt(8 * Rc * chordTol)), Rc * normalDev) : targetEdge;
   const nU = Math.max(2, Math.min(2000, Math.ceil(arcLen("u") / target)));
   // Build each u-ring at a resolution matching ITS OWN circumference, so rings shrinking toward a
   // pole don't keep a high v-count (which makes pole-fan slivers). A vanishing ring becomes a point.
@@ -1886,7 +1891,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const sampled = new Map<number, Vec3[]>();
   for (const [id, e] of brep.edges) {
     const te = edgeMaxLen.get(id) ?? targetEdge;
-    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, brep.scale, chordTol, te, brep.units.radPerAngle));
+    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, brep.scale, chordTol, te, brep.units.radPerAngle, normalDev));
   }
 
   // Weld each body independently so touching bodies don't merge into non-manifold edges.
@@ -1914,14 +1919,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         // A full sphere is its solid's only face (degenerate seam loop); trimmed spheres
         // (e.g. roundedCube corners) are one of many faces -> param grid.
         if (solid.faces.length === 1) {
-          tessellateSphere(surface, face.faceId, chordTol, targetEdge, sign, verts, faceIds);
+          tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds);
           ok = true;
         } else if (outer) {
           // A cap closing to a pole (sole full-longitude parallel rim) fans to the pole; any other
           // spherical patch returns false from the cap mesher and uses the param grid — with the
           // sphere REPARAMETRISED so pole and seam sit away from the patch (a corner blend often
           // runs straight through the default pole, which degenerates the projected loop).
-          ok = tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, sign)
+          ok = tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)
             || tessellateParamGrid(reorientSphere(surface, face.loops, sampled), face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer

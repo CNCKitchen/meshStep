@@ -52,8 +52,9 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   const brep = buildBrep(src);
   // Sample boundaries to the surface-deviation tolerance so feature edges (rims, holes) are fine
   // even without remeshing. The robust CDT handles the resulting dense/collinear boundaries.
-  const tessChordTol = Math.max(surfaceDev, maxEdge / 500);
-  const tess: TessOptions = { chordTol: tessChordTol, targetEdge: maxEdge, normalDev: normalDevRad };
+  // maxEdge is a pure upper CAP on segment length — it must never loosen the chord tolerance
+  // (a CAD-style export sets a huge max edge to mean "follow curvature", not "coarsen 20×").
+  const tess: TessOptions = { chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad };
   const result = tessellate(brep, tess);
   // Assembly placements per solid (empty for a single part); applied to the final mesh below.
   const solidXf = new Map<number, Frame>();
