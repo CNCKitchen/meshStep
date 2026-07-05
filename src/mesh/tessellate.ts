@@ -833,7 +833,7 @@ function gridCDT(
   const cdtPts: P2[] = allP2.map(([u, v]) => [SX(u), SY(v)]);
   const cdtOut = { missing: 0 };
   let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
-  if (DBG) console.error(`[grid] fid=${fid} nU=${nU} nV=${nV} uSc=${uSc.toExponential(2)} vSc=${vSc.toExponential(2)} boundary=${outerIdx.length}+${holeIdx.reduce((s, h) => s + h.length, 0)} interior=${interiorIdx.length} -> cdt tris=${tris.length}`);
+  if (DBG) console.error(`[grid] fid=${fid} nU=${nU} nV=${nV} uSc=${uSc.toExponential(2)} vSc=${vSc.toExponential(2)} boundary=${outerIdx.length}+${holeIdx.reduce((s, h) => s + h.length, 0)} interior=${interiorIdx.length} -> cdt tris=${tris.length}${cdtOut.missing ? ` MISSING=${cdtOut.missing}` : ""}`);
   // Delaunay refinement: insert the circumcentre of any triangle whose circumdiameter exceeds the
   // local size field — this grades the mesh from the fine boundary into the interior (fillet runs
   // into chamfer) and, being Delaunay, keeps the new triangles well-shaped. Capped at a multiple of
@@ -1146,14 +1146,120 @@ function tessellatePeriodicUnroll(
     const bottom = buildRim(rims[0]!), top = buildRim(rims[1]!);
     // Outer boundary: bottom left->right, then top right->left. The two vertical sides are the seam
     // (same 3D line at seam and seam+period) -> weld closes it.
-    const outer = {
+    let outer = {
       p3: [...bottom.p3, ...top.p3.slice().reverse()],
       p2: [...bottom.p2, ...top.p2.slice().reverse()],
     };
-    const holeLoops = holes.map((h) => ({
+    let holeLoops = holes.map((h) => ({
       p3: h.p3,
       p2: h.p2.map((q) => toP2(normTo(q[c]), q[stackC])),
     }));
+    // The vertex-cut construction above cuts each rim at its own nearest vertex, so the two seam
+    // sides are only NEAR-vertical; on a rim that weaves (the Ontos muzzle wall: slot fingers
+    // excursing 40mm along the axis), a seam side or the closing chord then CROSSES rim segments —
+    // crossing constraints are unrealisable, the CDT drops one, and the rescue fills 65mm garbage
+    // chords across the face. When the polygon self-intersects, rebuild with an EXACT common seam:
+    // scan for a seam angle whose meridian crosses each rim exactly once and no hole, and cut both
+    // rims THERE with an interpolated point. The cut point lies ON its segment's 3D chord, so the
+    // neighbouring face's identical chord gains only an exactly-collinear T-vertex (closed by the
+    // T-junction zip). Faces whose polygon is already simple keep the vertex-cut result bit-for-bit.
+    // Conflict test covers BOTH failure modes: the outer polygon self-intersecting AND a window
+    // hole crossing the outer (a hole hugging the seam lands split across the domain by normTo —
+    // its constraints then cross the seam sides, equally unrealisable).
+    const conflicted = (): boolean => {
+      if (countSelfIntersections(outer.p2) > 0) return true;
+      const o2 = (a: P2, b: P2, q: P2): number => (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]);
+      const sx = (p: P2, q: P2, r: P2, s: P2): boolean => {
+        const d1 = o2(r, s, p), d2 = o2(r, s, q), d3 = o2(p, q, r), d4 = o2(p, q, s);
+        return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+      };
+      const on = outer.p2.length;
+      for (const h of holeLoops) {
+        for (let i = 0; i < h.p2.length; i++) {
+          const a = h.p2[i]!, b = h.p2[(i + 1) % h.p2.length]!;
+          for (let j = 0; j < on; j++) {
+            if (sx(a, b, outer.p2[j]!, outer.p2[(j + 1) % on]!)) return true;
+          }
+        }
+      }
+      return false;
+    };
+    if (conflicted()) {
+      const cross = (p2: P2[], uk: number): number => {
+        let cnt = 0;
+        for (let i = 0; i < p2.length; i++) {
+          const a = p2[i]![c];
+          let d = p2[(i + 1) % p2.length]![c] - a;
+          while (d > period / 2) d -= period; while (d < -period / 2) d += period;
+          if (Math.abs(d) < 1e-12) continue;
+          const r = norm(uk - a);
+          if ((d > 0 && r > 0 && r < d) || (d < 0 && r - period > d && r < period)) cnt++;
+        }
+        return cnt;
+      };
+      const buildRimCut = (rim: { p3: Vec3[]; p2: P2[]; wind: number }, uStar: number): { p3: Vec3[]; p2: P2[] } | null => {
+        let p3 = rim.p3, p2 = rim.p2;
+        if (rim.wind < 0) { p3 = p3.slice().reverse(); p2 = p2.slice().reverse(); }
+        const n = p2.length;
+        const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
+        let ci = -1, ct = 0, cs = 0;
+        for (let i = 0; i < n; i++) {
+          const a = p2[i]![c], j = (i + 1) % n;
+          const d = wrapD(p2[j]![c] - a);
+          if (Math.abs(d) < 1e-12) continue;
+          const r = norm(uStar - a);
+          let t = -1;
+          if (d > 0 && r > 0 && r < d) t = r / d;
+          else if (d < 0 && r - period > d && r < period) t = (r - period) / d;
+          if (t > 0 && t < 1) {
+            if (ci >= 0) return null; // crosses more than once — the scan should have excluded uStar
+            ci = i; ct = t;
+            cs = p2[i]![stackC] + (p2[j]![stackC] - p2[i]![stackC]) * t;
+          }
+        }
+        if (ci < 0) return null;
+        const j = (ci + 1) % n;
+        const cut3: Vec3 = [
+          p3[ci]![0] + (p3[j]![0] - p3[ci]![0]) * ct,
+          p3[ci]![1] + (p3[j]![1] - p3[ci]![1]) * ct,
+          p3[ci]![2] + (p3[j]![2] - p3[ci]![2]) * ct,
+        ];
+        const outP3: Vec3[] = [cut3];
+        const auv: [number, number][] = [[uStar, cs]];
+        let acc = uStar + (1 - ct) * wrapD(p2[j]![c] - p2[ci]![c]);
+        outP3.push(p3[j]!); auv.push([acc, p2[j]![stackC]]);
+        for (let k = 1; k < n; k++) {
+          const idx = (j + k) % n, prv = (j + k - 1) % n;
+          acc += wrapD(p2[idx]![c] - p2[prv]![c]);
+          outP3.push(p3[idx]!); auv.push([acc, p2[idx]![stackC]]);
+        }
+        outP3.push(cut3); auv.push([uStar + period, cs]);
+        return { p3: outP3, p2: auv.map(([a, s]) => toP2(a, s)) };
+      };
+      const K = 512;
+      let uStar = NaN, bestMargin = -1;
+      for (let k = 0; k < K; k++) {
+        const uk = ((k + 0.5) * period) / K;
+        if (cross(rims[0]!.p2, uk) !== 1 || cross(rims[1]!.p2, uk) !== 1) continue;
+        let ok = true;
+        for (const h of holes) if (cross(h.p2, uk) > 0) { ok = false; break; }
+        if (!ok) continue;
+        let margin = Infinity;
+        for (const arr of [rims[0]!.p2, rims[1]!.p2, ...holes.map((h) => h.p2)]) {
+          for (const q of arr) { const dd = norm(q[c] - uk); const m = Math.min(dd, period - dd); if (m < margin) margin = m; }
+        }
+        if (margin > bestMargin) { bestMargin = margin; uStar = uk; }
+      }
+      if (Number.isFinite(uStar)) {
+        const b2 = buildRimCut(rims[0]!, uStar), t2 = buildRimCut(rims[1]!, uStar);
+        if (b2 && t2) {
+          const normTo2 = (x: number): number => { let d = (x - uStar) % period; if (d < 0) d += period; return uStar + d; };
+          outer = { p3: [...b2.p3, ...t2.p3.slice().reverse()], p2: [...b2.p2, ...t2.p2.slice().reverse()] };
+          holeLoops = holes.map((h) => ({ p3: h.p3, p2: h.p2.map((q) => toP2(normTo2(q[c]), q[stackC])) }));
+          if (DBG) console.error(`[unroll] fid=${fid} exact-seam rebuild at ${uStar.toFixed(4)} (margin ${bestMargin.toExponential(1)})`);
+        }
+      }
+    }
     return gridCDT(surface, outer, holeLoops, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign);
   };
   return (!!surface.periodicU && attempt(0)) || (!!surface.periodicV && attempt(1));
@@ -1302,11 +1408,11 @@ function tessellateRevolutionBand(
     // Periodic stack (torus): "between h0 and h1" is ambiguous (two arcs) — use the boundary
     // orientation: a CCW face in (u,v) travels its v0 rim in +u and its v1 rim in -u (c=0), and its
     // u1 rim in +v and u0 rim in -v (c=1), so the winding SIGN says which rim starts the stack.
-    let stack: { from: number; width: number; bottom: Vec3[]; top: Vec3[] }[] = [];
+    let stack: { from: number; width: number; bottom: Vec3[]; top: Vec3[]; bWind: number; tWind: number }[] = [];
     if (!stackPeriodic) {
       rims.sort((a, b) => a.h - b.h);
       for (let r = 0; r + 1 < rims.length; r++) {
-        stack.push({ from: rims[r]!.h, width: rims[r + 1]!.h - rims[r]!.h, bottom: rims[r]!.pts, top: rims[r + 1]!.pts });
+        stack.push({ from: rims[r]!.h, width: rims[r + 1]!.h - rims[r]!.h, bottom: rims[r]!.pts, top: rims[r + 1]!.pts, bWind: rims[r]!.wind, tWind: rims[r + 1]!.wind });
       }
     } else {
       if (rims.length !== 2) return false;
@@ -1317,24 +1423,30 @@ function tessellateRevolutionBand(
       let width = (B.h - A.h) % stackPeriod;
       if (width <= 1e-9) width += stackPeriod;
       if (width >= stackPeriod - 1e-9) return false; // degenerate: rims coincide in stack coordinate
-      stack.push({ from: A.h, width, bottom: A.pts, top: B.pts });
+      stack.push({ from: A.h, width, bottom: A.pts, top: B.pts, bWind: A.wind, tWind: B.wind });
     }
 
     const half = period / 2;
     const wrap = (d: number): number => { while (d > half) d -= period; while (d < -half) d += period; return d; };
     // Rotate/flip `ring` so it starts at `ref[0]`'s angle and runs the same rotational direction.
-    const align = (ref: Vec3[], ring: Vec3[]): Vec3[] => {
+    // Direction comes from the rim's NET WINDING when it has one: a wavy rim's FIRST segment can
+    // locally backtrack (Ontos crown rim: u steps −0.004 twice before marching +2π), and reading
+    // direction off it reverses the partner ring — the stitch then pairs diametrally opposite
+    // points and chords straight through the surface. First-segment stays as the fallback for
+    // span-qualified rims with zero net wind (seam-carrying doubled rims).
+    const align = (ref: Vec3[], ring: Vec3[], refWind = 0, ringWind = 0): Vec3[] => {
       const a0 = angleOf(ref[0]!);
-      const dirRef = wrap(angleOf(ref[1]!) - a0) >= 0 ? 1 : -1;
+      const dirRef = refWind !== 0 ? Math.sign(refWind) : wrap(angleOf(ref[1]!) - a0) >= 0 ? 1 : -1;
       const r = ring.slice();
-      if ((wrap(angleOf(r[1]!) - angleOf(r[0]!)) >= 0 ? 1 : -1) !== dirRef) r.reverse();
+      const dirRing = ringWind !== 0 ? Math.sign(ringWind) : wrap(angleOf(r[1]!) - angleOf(r[0]!)) >= 0 ? 1 : -1;
+      if (dirRing !== dirRef) r.reverse();
       let bi = 0, bd = Infinity;
       for (let i = 0; i < r.length; i++) { const dd = Math.abs(wrap(angleOf(r[i]!) - a0)); if (dd < bd) { bd = dd; bi = i; } }
       return [...r.slice(bi), ...r.slice(0, bi)];
     };
 
     for (const band of stack) {
-      const bottom = band.bottom, top = align(bottom, band.top);
+      const bottom = band.bottom, top = align(bottom, band.top, band.bWind, band.tWind);
       const angs = bottom.map(angleOf);
       const h0 = band.from, h1 = band.from + band.width;
       // Rims need not sit at constant stack height — a cylinder crossed by another cylinder has a
@@ -1676,12 +1788,37 @@ function tessellateCone(
     const p = sampled.get(oe.edgeId);
     return !!p && p.length >= 4;
   });
-  if (circleEdges.length !== 1) return false;
-  const oe0 = circleEdges[0]!;
-  const s0 = sampled.get(oe0.edgeId)!;
-  let base: Vec3[] | null = oe0.orient ? s0.slice() : s0.slice().reverse();
-  if (!base || base.length < 4) return false;
-  base = base.slice(0, base.length - 1); // drop duplicate closing point (keep index 0 = angular start)
+  let base: Vec3[] | null = null;
+  let multiEdgeRim = false;
+  if (circleEdges.length === 1) {
+    const oe0 = circleEdges[0]!;
+    const s0 = sampled.get(oe0.edgeId)!;
+    base = oe0.orient ? s0.slice() : s0.slice().reverse();
+    if (base.length < 4) return false;
+    base = base.slice(0, base.length - 1); // drop duplicate closing point (keep index 0 = angular start)
+  } else if (circleEdges.length === 0 && nFaceLoops === 1 && loop.edges.length >= 2) {
+    // Full-period rim SPLIT into several arc edges (Inventor splits a countersink tip's base circle
+    // at neighbouring slot corners): the sole loop's chained samples must close into ONE circle —
+    // constant v (all on the rim) winding u exactly once — leaving the apex as the only closure.
+    // Anything with samples off that circle (a genuine trimmed cone) falls through to the grid.
+    const chain: Vec3[] = [];
+    for (const oe of loop.edges) {
+      const s = sampled.get(oe.edgeId);
+      if (!s) return false;
+      const poly = oe.orient ? s : s.slice().reverse();
+      for (let i = 0; i < poly.length - 1; i++) chain.push(poly[i]!);
+    }
+    if (chain.length < 4) return false;
+    const c2 = surface as Surface & { r: number; sin: number };
+    const uv = chain.map((p) => surface.project(p));
+    let vmin = Infinity, vmax = -Infinity;
+    for (const q of uv) { if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1]; }
+    const slantV = Math.abs(-c2.r / c2.sin - uv[0]![1]);
+    if (vmax - vmin > 1e-3 * Math.max(slantV, 1e-9)) return false;
+    if (Math.abs(cycleWind(uv as P2[], 0, TWO_PI)) !== 1) return false;
+    base = chain;
+    multiEdgeRim = true;
+  } else return false;
   const cone = surface as Surface & { r: number; sin: number };
   const apex = surface.evaluate(0, -cone.r / cone.sin);
   const L = Math.hypot(base[0]![0] - apex[0], base[0]![1] - apex[1], base[0]![2] - apex[2]);
@@ -1698,9 +1835,12 @@ function tessellateCone(
     const e = brep.edges.get(oe.edgeId); if (!e) continue;
     for (const v of [e.v0, e.v1]) minApex = Math.min(minApex, Math.hypot(v[0] - apex[0], v[1] - apex[1], v[2] - apex[2]));
   }
-  const rimEdge = brep.edges.get(oe0.edgeId)!;
-  const closedCircle = Math.hypot(rimEdge.v0[0] - rimEdge.v1[0], rimEdge.v0[1] - rimEdge.v1[1], rimEdge.v0[2] - rimEdge.v1[2]) < 1e-6;
-  const soleRim = nFaceLoops === 1 && loop.edges.length === 1 && closedCircle;
+  let soleRim = multiEdgeRim && nFaceLoops === 1;
+  if (!soleRim && circleEdges.length === 1) {
+    const rimEdge = brep.edges.get(circleEdges[0]!.edgeId)!;
+    const closedCircle = Math.hypot(rimEdge.v0[0] - rimEdge.v1[0], rimEdge.v0[1] - rimEdge.v1[1], rimEdge.v0[2] - rimEdge.v1[2]) < 1e-6;
+    soleRim = nFaceLoops === 1 && loop.edges.length === 1 && closedCircle;
+  }
   if (minApex > 0.05 * L && !soleRim) return false;
   const [theta0, vBase] = surface.project(base[0]!);
   const vApex = -cone.r / cone.sin, rBase = cone.r + vBase * cone.sin;
@@ -2153,7 +2293,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           // spherical patch returns false from the cap mesher and uses the param grid — with the
           // sphere REPARAMETRISED so pole and seam sit away from the patch (a corner blend often
           // runs straight through the default pole, which degenerates the projected loop).
-          ok = tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)
+          // The cap is ONLY offered a single-loop face: handed just the outer rim of a HOLED face
+          // (a screw head's dome pierced by its hex socket, Ontos) it happily fans over the hole —
+          // or fans from the hole's rim and leaves the real shared rim fully open. A multi-loop
+          // sphere zone is a revolution band like any other: band -> unroll -> param grid.
+          const single = face.loops.length === 1;
+          ok = (single && tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign))
+            || (!single && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            || (!single && tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
             || tessellateParamGrid(reorientSphere(surface, face.loops, sampled), face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
@@ -2206,7 +2353,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     const tj = solid.open
       ? { indices: z.indices, faceOf: keptFaceIds }
       : zipTJunctions(z.positions, z.indices, keptFaceIds, 0.02);
-    const fill = fillMicroHoles(z.positions, tj.indices, tj.faceOf, 0.05);
+    const fill = fillMicroHoles(z.positions, tj.indices, tj.faceOf, 0.05,
+      solid.open ? undefined : { perim: 24 * chordTol, dev: 0.75 * chordTol });
     for (const x of z.positions) positions.push(x);
     for (const ix of tj.indices) indices.push(ix + voff);
     for (const ix of fill.indices) indices.push(ix + voff);
@@ -2398,8 +2546,14 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
  * ring vertices are all mutually edge-connected, so the vertex zip can't close it) — not a real
  * gap. Fan it shut, wound opposite the ring so it pairs manifold-consistently with the surrounding
  * triangles. Real openings have perimeters orders of magnitude larger and are left alone.
+ * `big` additionally accepts SMALL NEAR-PLANAR rings (≤ 8 vertices, perimeter ≤ big.perim, every
+ * vertex within big.dev of the ring's best-fit plane): in a closed solid every open ring is by
+ * definition a meshing defect — the B-rep itself is watertight — and a small flat ring is a patch
+ * of surface the face mesher failed to cover (a parity-flood notch between two dropped constraints,
+ * Ontos #91640), which a fan restores on-surface. A genuine deep notch or a failed face's long rim
+ * fails the planarity / size gates and is left as a clean gap.
  */
-function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number): { indices: number[]; faceOf: number[] } {
+function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number, big?: { perim: number; dev: number }): { indices: number[]; faceOf: number[] } {
   const KEY = 2 ** 26;
   const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
   const use = new Map<number, number>();
@@ -2414,8 +2568,27 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
     if (nxt.has(a)) multi.add(a);
     nxt.set(a, b); faceAt.set(a, faceOf[i / 3]!);
   }
+  const planarDev = (ring: number[]): number => {
+    let nx = 0, ny = 0, nz = 0, cx = 0, cy = 0, cz = 0;
+    const n = ring.length;
+    for (let i = 0; i < n; i++) {
+      const a = ring[i]! * 3, b = ring[(i + 1) % n]! * 3;
+      nx += (P[a + 1]! - P[b + 1]!) * (P[a + 2]! + P[b + 2]!);
+      ny += (P[a + 2]! - P[b + 2]!) * (P[a]! + P[b]!);
+      nz += (P[a]! - P[b]!) * (P[a + 1]! + P[b + 1]!);
+      cx += P[a]!; cy += P[a + 1]!; cz += P[a + 2]!;
+    }
+    const l = Math.hypot(nx, ny, nz);
+    if (l < 1e-30) return Infinity;
+    nx /= l; ny /= l; nz /= l; cx /= n; cy /= n; cz /= n;
+    let mx = 0;
+    for (const v of ring) mx = Math.max(mx, Math.abs((P[v * 3]! - cx) * nx + (P[v * 3 + 1]! - cy) * ny + (P[v * 3 + 2]! - cz) * nz));
+    return mx;
+  };
+  const perCap = Math.max(tol, big?.perim ?? 0);
   const outI: number[] = [], outF: number[] = [];
   const seen = new Set<number>();
+  const filled = new Set<number>(); // vertices of rings actually fanned (seen also marks rejected walks)
   for (const start of nxt.keys()) {
     if (seen.has(start)) continue;
     const ring: number[] = [];
@@ -2425,14 +2598,63 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
       const n = nxt.get(cur);
       if (n === undefined) { ok = false; break; }
       per += Math.hypot(P[cur * 3]! - P[n * 3]!, P[cur * 3 + 1]! - P[n * 3 + 1]!, P[cur * 3 + 2]! - P[n * 3 + 2]!);
-      if (per > tol) { ok = false; break; }
+      if (per > perCap) { ok = false; break; }
       cur = n;
       if (cur === start) break;
       if (g === 64 || seen.has(cur)) { ok = false; break; }
     }
-    if (!ok || cur !== start || ring.length < 3 || ring.some((v) => multi.has(v))) continue;
+    if (!ok || cur !== start || ring.length < 3 || ring.some((v) => multi.has(v))) {
+      if (DBG && ring.length <= 10) console.error(`[fill] ring rejected: ok=${ok} closed=${cur === start} len=${ring.length} multi=${ring.some((v) => multi.has(v))} per=${per.toFixed(3)}`);
+      continue;
+    }
+    const micro = per <= tol;
+    const flat = !micro && !!big && ring.length <= 8 && per <= big.perim && planarDev(ring) <= big.dev;
+    if (!micro && !flat) {
+      if (DBG) console.error(`[fill] ring not filled: len=${ring.length} per=${per.toFixed(3)} dev=${planarDev(ring).toExponential(2)} bigPerim=${big?.perim.toFixed(3)} bigDev=${big?.dev.toFixed(3)}`);
+      continue;
+    }
     // Fan, reversed relative to the directed ring so each ring edge is paired b->a.
     for (let i = 1; i + 1 < ring.length; i++) { outI.push(ring[0]!, ring[i + 1]!, ring[i]!); outF.push(faceAt.get(ring[0]!)!); }
+    for (const v of ring) filled.add(v);
+  }
+  // UNDIRECTED pass (big only): a notch between two faces whose local windings disagree around it
+  // has no consistent directed cycle — the walk above bails at a doubled-outgoing vertex — but the
+  // undirected ring is still closed (every vertex borders exactly two open edges). Same size and
+  // planarity gates; the fan is wound against the ring's first owned edge, and the global
+  // orientation pass downstream settles any triangles the disagreeing side flips.
+  if (big) {
+    const adj = new Map<number, [number, number][]>(); // vertex -> [other, faceOf][]
+    for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+      const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
+      if (use.get(ek(a, b)) !== 1) continue;
+      (adj.get(a) ?? adj.set(a, []).get(a)!).push([b, faceOf[i / 3]!]);
+      (adj.get(b) ?? adj.set(b, []).get(b)!).push([a, faceOf[i / 3]!]);
+    }
+    const visited = new Set<number>();
+    for (const [start, nb] of adj) {
+      if (filled.has(start) || visited.has(start) || nb.length !== 2) continue;
+      const ring: number[] = [start];
+      visited.add(start);
+      let prev = start, cur = nb[0]![0], per = 0, ok = true;
+      for (let g = 0; g <= 8; g++) {
+        const link = adj.get(cur);
+        if (!link || link.length !== 2 || filled.has(cur)) { ok = false; break; }
+        per += Math.hypot(P[prev * 3]! - P[cur * 3]!, P[prev * 3 + 1]! - P[cur * 3 + 1]!, P[prev * 3 + 2]! - P[cur * 3 + 2]!);
+        if (per > big.perim) { ok = false; break; }
+        if (cur === start) break;
+        ring.push(cur);
+        const next = link[0]![0] === prev ? link[1]![0] : link[0]![0];
+        prev = cur; cur = next;
+      }
+      if (!ok || cur !== start || ring.length < 3 || ring.length > 8 || planarDev(ring) > big.dev) continue;
+      for (const v of ring) filled.add(v);
+      // Wind against the first edge's owner traversal (ring[0]->ring[1] if the owner walked it
+      // that way, the fan pairs it opposite); best-effort for the rest.
+      const fwd = (faceAt.get(ring[0]!) !== undefined && nxt.get(ring[0]!) === ring[1]!);
+      const r = fwd ? ring : ring.slice().reverse();
+      for (let i = 1; i + 1 < r.length; i++) { outI.push(r[0]!, r[i + 1]!, r[i]!); outF.push(nb[0]![1]); }
+      if (DBG) console.error(`[fill] undirected flat ring filled: len=${ring.length} per=${per.toFixed(3)}`);
+    }
   }
   return { indices: outI, faceOf: outF };
 }
