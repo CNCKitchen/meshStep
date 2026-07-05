@@ -856,6 +856,25 @@ function gridCDT(
   // arrays but are unreferenced. An INITIAL missing>0 keeps the rescue as before — for a
   // metric-collapsed boundary it is the only watertight fill available.
   let prevMissing = cdtOut.missing;
+  // Exact-duplicate guard for refinement inserts, persistent across iterations. The per-iteration
+  // dedup below hashes by the POSITION-DEPENDENT local size, so two ulp-separated circumcentres —
+  // every grid rectangle is cyclic, its two diagonal triangles propose the SAME cell centre — that
+  // straddle an rc-lattice border get different bucket sizes and are never compared. The CDT then
+  // carries coincident vertices whose triangles land on identical quantised 3D edges 4×: a "fold"
+  // that is pure bookkeeping (cat-napkin / bottle-cage ripple fields). Cell = 1e-3 of the face
+  // target: 25× below the size-field floor (never rejects a legitimate insert), orders of
+  // magnitude above fp noise.
+  const dupCell = 1e-3 * csz;
+  const dupKey = (x: number, y: number): number => hkey(Math.round(x / dupCell), Math.round(y / dupCell));
+  const dupSeen = new Set<number>();
+  const dupHas = (x: number, y: number): boolean => {
+    const cx = Math.round(x / dupCell), cy = Math.round(y / dupCell);
+    for (let gx = cx - 1; gx <= cx + 1; gx++) for (let gy = cy - 1; gy <= cy + 1; gy++) {
+      if (dupSeen.has(hkey(gx, gy))) return true;
+    }
+    return false;
+  };
+  for (const p of cdtPts) dupSeen.add(dupKey(p[0], p[1]));
   for (let iter = 0; iter < maxIter && interiorIdx.length < cap; iter++) {
     const fresh: P2[] = [];
     for (const [a, b, c] of tris) {
@@ -882,6 +901,7 @@ function gridCDT(
     const acc = new Map<number, [number, number][]>();
     let added = false;
     for (const [px, py] of fresh) {
+      if (dupHas(px, py)) continue;
       const [sz] = sizeDist(px, py), hx = Math.floor(px / sz), hy = Math.floor(py / sz);
       let ok = true;
       for (let gx = hx - 1; gx <= hx + 1 && ok; gx++) for (let gy = hy - 1; gy <= hy + 1 && ok; gy++) {
@@ -889,6 +909,7 @@ function gridCDT(
       }
       if (!ok) continue;
       (acc.get(hkey(hx, hy)) ?? acc.set(hkey(hx, hy), []).get(hkey(hx, hy))!).push([px, py]);
+      dupSeen.add(dupKey(px, py));
       interiorIdx.push(allP2.length); allP2.push([px / uSc, py / vSc]); allP3.push(surface.evaluate(px / uSc, py / vSc)); cdtPts.push([px, py]);
       added = true;
     }

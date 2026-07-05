@@ -1,9 +1,9 @@
 {
  "newTestModels": {
   "boomerang-v2.step": "WARN",
-  "bottle-cage.step": "FAIL",
+  "bottle-cage.step": "OK",
   "build_tray_v3.step": "OK",
-  "cat-napkin-holder.step": "FAIL",
+  "cat-napkin-holder.step": "OK",
   "cmf-phone-2-pro-cover.step": "OK",
   "core-one-replicator-arches.stp": "OK",
   "core-one-replicator-base.stp": "OK",
