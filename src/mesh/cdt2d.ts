@@ -410,7 +410,7 @@ function dropMicroLoops(pts: P2[], ring: number[]): number[] | null {
  * crosses, then ear-clip the two simple sub-polygons that the segment splits the cavity into.
  * Returns false (leaving the triangulation unchanged) if the cavity isn't a clean single loop.
  */
-function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: number, b: number): boolean {
+function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: number, b: number, constraints: Set<number>): boolean {
   const PA = pts[a]!, PB = pts[b]!;
   const crossed: number[] = [];
   for (let t = 0; t < tris.length; t++) {
@@ -429,6 +429,27 @@ function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: num
   // Boundary edges of the cavity = edges of crossed triangles not shared by two crossed triangles.
   const count = new Map<number, number>();
   for (const t of crossed) { const v = tris[t]!.v; for (let e = 0; e < 3; e++) count.set(ckey(v[e]!, v[(e + 1) % 3]!), (count.get(ckey(v[e]!, v[(e + 1) % 3]!)) ?? 0) + 1); }
+  // CONSTRAINT PROTECTION: an edge interior to the cavity (shared by two crossed triangles) is
+  // deleted with them, and a free ear-clip fill has no obligation to recreate it. When the segment
+  // squeezes past a shared boundary vertex, such an interior edge can be a NEIGHBOURING constraint
+  // the flip pass already realised — enforcing a-b would silently destroy it (the wio-front/letters
+  // open-edge class; both a fixpoint re-enforcement and a chain-split repair of the aftermath
+  // REGRESSED — see the note above constrainedTriangulate's second pass). Enforce the invariant at
+  // the source: such an edge becomes a MANDATORY DIAGONAL of the fill (the cavity polygon is split
+  // at it and each side clipped separately), so a-b and the neighbour are BOTH realised. It cannot
+  // cross a-b (an interior edge crossed by the segment is a genuine constraint-vs-constraint
+  // conflict) — there, refuse and leave a-b to the face-level rescue.
+  const chords: [number, number][] = [];
+  for (const [k, c] of count) {
+    if (c === 2 && constraints.has(k)) {
+      const u = Math.floor(k / 0x8000000), w = k % 0x8000000;
+      if (segCross(PA, PB, pts[u]!, pts[w]!)) {
+        if (DBG) console.error(`[cdt]     enforce ${a}-${b}: bail crosses realised constraint ${u}-${w}`);
+        return false;
+      }
+      chords.push([u, w]);
+    }
+  }
   const nextOf = new Map<number, number>();
   let edges = 0;
   for (const t of crossed) {
@@ -451,7 +472,23 @@ function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: num
   for (let i = ia; ; i = (i + 1) % loop.length) { path1.push(loop[i]!); if (i === ib) break; }
   for (let i = ib; ; i = (i + 1) % loop.length) { path2.push(loop[i]!); if (i === ia) break; }
   const newTris: [number, number, number][] = [];
-  if (!earClip(pts, path1, newTris) || !earClip(pts, path2, newTris)) return false;
+  // Clip each side with the protected constraints as mandatory diagonals: split the polygon at the
+  // chord and clip the two sub-polygons, so the chord edge is guaranteed present in the fill. A
+  // chord not in this path (endpoints on the other side of a-b) is simply skipped by the index test.
+  const clipWithChords = (path: number[], rem: [number, number][]): boolean => {
+    for (let ci = 0; ci < rem.length; ci++) {
+      const [u, w] = rem[ci]!;
+      const iu = path.indexOf(u), iw = path.indexOf(w);
+      if (iu < 0 || iw < 0) continue;
+      const [i, j] = iu < iw ? [iu, iw] : [iw, iu];
+      if (j - i === 1 || (i === 0 && j === path.length - 1)) continue; // already a polygon side
+      const rest = rem.slice(0, ci).concat(rem.slice(ci + 1));
+      return clipWithChords(path.slice(i, j + 1), rest)
+        && clipWithChords([...path.slice(j), ...path.slice(0, i + 1)], rest);
+    }
+    return earClip(pts, path, newTris);
+  };
+  if (!clipWithChords(path1, chords) || !clipWithChords(path2, chords)) return false;
   // Area-conservation guard: the fill must tile exactly the deleted cavity. If areas disagree the
   // cavity loop was self-folded (a degenerate periodic seam) — abort rather than corrupt the mesh.
   const triArea = (x: number, y: number, z: number): number => Math.abs(orient(pts[x]!, pts[y]!, pts[z]!));
@@ -517,7 +554,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     if (present.has(ck)) continue;
     unrealized++;
     const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
-    enforceByRetriangulation(tris, pts, free, a, b);
+    enforceByRetriangulation(tris, pts, free, a, b, constraints);
   }
   if (DBG && Date.now() - dbgT0 > 500) {
     console.error(`[cdt] SLOW n=${n} constraints=${constraints.size} unrealized=${unrealized}: insert=${dbgT1 - dbgT0}ms force=${dbgT2 - dbgT1}ms enforce=${Date.now() - dbgT2}ms`);

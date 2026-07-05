@@ -1957,6 +1957,72 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     const te = edgeMaxLen.get(id) ?? targetEdge;
     sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, chordTol, te, brep.units.radPerAngle, normalDev));
   }
+  // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
+  // run-out at 0.7mm chord tolerance) samples its edges with so few points that the boundary
+  // polygon SELF-INTERSECTS in (u,v) — chords of adjacent edges swing across each other. The CDT
+  // then classifies most of the polygon away (parity flips at every crossing) and the face's whole
+  // rim opens against its neighbours (wallganizer's screw: 16-pt run-out plane -> 4 triangles ->
+  // the cone rim it borders is fully open, ×213 instances). For such a face, TRIAL-sample its
+  // edges at increasingly fine tolerances and commit the first level whose polygon is simple.
+  // Outcome-verified on purpose: a polygon that stays self-intersecting at every level crosses
+  // from genuine trim overlap (tangent letter engravings), where densification cannot help — it
+  // only perturbs every neighbour sharing those edges (Ontos +523 open edges under a blind
+  // version of this pass). This runs as a PRE-PASS before any face is meshed, so a densified edge
+  // remains the SINGLE shared sampling and seams stay watertight; per edge the FINEST committed
+  // level wins. Only small boundaries are checked (the crossing test is O(n²)-ish, and large
+  // self-intersecting polygons are always the genuine-overlap class).
+  {
+    const level = new Map<number, number>(); // edgeId -> finest committed refinement factor
+    const resample = (id: number, f: number): Vec3[] => {
+      const e = brep.edges.get(id)!;
+      const te = Math.max((edgeMaxLen.get(id) ?? targetEdge) / f, chordTol);
+      return sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, chordTol / f, te, brep.units.radPerAngle, normalDev);
+    };
+    for (const solid of brep.solids) for (const face of solid.faces) {
+      const surface = faceSurf.get(face.faceId);
+      if (!surface) continue;
+      let nPts = 0;
+      let lo0 = Infinity, lo1 = Infinity, lo2 = Infinity, hi0 = -Infinity, hi1 = -Infinity, hi2 = -Infinity;
+      for (const lp of face.loops) for (const oe of lp.edges) {
+        const s = sampled.get(oe.edgeId); if (!s) continue;
+        nPts += s.length;
+        for (const p of s) {
+          if (p[0] < lo0) lo0 = p[0]; if (p[0] > hi0) hi0 = p[0];
+          if (p[1] < lo1) lo1 = p[1]; if (p[1] > hi1) hi1 = p[1];
+          if (p[2] < lo2) lo2 = p[2]; if (p[2] > hi2) hi2 = p[2];
+        }
+      }
+      if (nPts > 128) continue;
+      // Only faces a few chord-lengths across: coarse chords can only swing across each other when
+      // the whole face is comparable to the tolerance budget. A LARGER face whose small polygon
+      // still self-intersects does so from pinched/doubled edges or genuine trim overlap —
+      // densifying those perturbs the neighbours' pinch handling for nothing (OpenVessel's 6mm
+      // counterbore rims at 0.002mm tolerance went watertight -> 12 open under a blind version).
+      if (Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) > 16 * chordTol) continue;
+      const tangledLoops = face.loops.filter((lp) => {
+        const p2 = loopParam(surface, lp, sampled).p2;
+        return p2.length >= 4 && countSelfIntersections(p2, 1) > 0;
+      });
+      if (tangledLoops.length === 0) continue;
+      for (const f of [4, 16, 64]) {
+        const probe = new Map(sampled);
+        const ids = new Set<number>();
+        for (const lp of tangledLoops) for (const oe of lp.edges) ids.add(oe.edgeId);
+        for (const id of ids) probe.set(id, resample(id, f));
+        const stillBad = tangledLoops.some((lp) => {
+          const p2 = loopParam(surface, lp, probe).p2;
+          return p2.length >= 4 && countSelfIntersections(p2, 1) > 0;
+        });
+        if (!stillBad) {
+          if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} simple at tol/${f} (${ids.size} edges)`);
+          for (const id of ids) level.set(id, Math.max(level.get(id) ?? 0, f));
+          break;
+        }
+        if (DBG && f === 64) console.error(`[tess] micro-face densify: fid=${face.faceId} still self-intersecting at tol/64 — left as-is (genuine overlap)`);
+      }
+    }
+    for (const [id, f] of level) sampled.set(id, resample(id, f));
+  }
 
   // Weld each body independently so touching bodies don't merge into non-manifold edges.
   const positions: number[] = [];
