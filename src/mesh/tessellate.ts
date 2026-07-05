@@ -1965,9 +1965,17 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         // A standalone closed B-spline body (its solid's only face) has no usable trimming loop ->
         // full-patch grid. A patch that is one of many faces must use the param grid so its boundary
         // uses the SHARED edge samples (independent grids would crack against their neighbours).
+        // A CLOSED-direction band bounded by bare full-period rim loops (StingStopp_4000 dome body:
+        // two iso-u rim circles enclosing zero param-space area, so the param grid has no outer
+        // loop) unrolls exactly like an analytic revolution surface — tried after the param grid so
+        // ordinary trimmed patches are untouched, and before the rail ribbon, whose straight loft
+        // cut that dome's bulge 4.5mm deep.
+        const per = !!(surface.periodicU || surface.periodicV);
         ok = (solid.faces.length === 1 && (surface.closedU || surface.closedV))
           ? tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)
           : (!!outer && (tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)
+            || (per && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            || (per && tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
             || tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign)));
       } else if (outer) {
         // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
