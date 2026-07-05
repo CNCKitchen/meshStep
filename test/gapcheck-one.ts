@@ -101,10 +101,11 @@ interface Watertight {
   openEdgesOfFace: Map<number, number>;
 }
 
-const watertight = (m: { positions: Float64Array; indices: Uint32Array }, faceOfTri: Uint32Array): Watertight => {
+const watertight = (m: { positions: Float64Array; indices: Uint32Array }, faceOfTri: Uint32Array, skipTri?: (t: number) => boolean): Watertight => {
   const K = 0x40000000;
   const inc = new Map<number, { n: number; a: number; b: number; tri: number }>();
   for (let i = 0; i < m.indices.length; i += 3) {
+    if (skipTri?.(i / 3)) continue; // open-shell surface bodies: boundary is open by design
     const a = m.indices[i]!, b = m.indices[i + 1]!, c = m.indices[i + 2]!;
     for (const [x, y] of [[a, b], [b, c], [c, a]] as const) {
       const k = x < y ? x * K + y : y * K + x;
@@ -320,7 +321,8 @@ export async function gapcheckOne(path: string, opts: GapOptions): Promise<Recor
   }
   const oursMs = Date.now() - t0;
   const ours = soupFromIndexed(res.mesh, res.faceOfTri);
-  const wt = watertight(res.mesh, res.faceOfTri);
+  const openSet = new Set(res.openSolids ?? []);
+  const wt = watertight(res.mesh, res.faceOfTri, openSet.size ? (t) => openSet.has(res.solidOfTri[t]!) : undefined);
   const outBase = basename(path).replace(/\.[^.]+$/, "").replace(/[^\w.\- ]+/g, "_");
   const analysis: { cause: string; fix: string }[] = [];
   rec.analysis = analysis;

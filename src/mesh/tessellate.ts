@@ -40,6 +40,9 @@ export interface MeshResult {
   faceOfTri: Uint32Array;
   /** STEP solid (body) id per triangle; bodies are welded independently and kept disjoint. */
   solidOfTri: Uint32Array;
+  /** Ids of surface bodies built from OPEN_SHELLs: their boundary edges are open by design, so
+   * watertightness checks must exclude their triangles rather than report defects. */
+  openSolids: number[];
   stats: { solids: number; facesTotal: number; facesTessellated: number; skipped: Record<string, number> };
 }
 
@@ -510,8 +513,35 @@ function tessellateParamGrid(
   // Malformed trimming: the enclosing loop collapsed to ~zero area in parameter space (a degenerate
   // boundary a CAD kernel left, or two edges that trace back over each other). There's no valid
   // region — emit nothing. A clean gap reads far better than a spurious cap sealing a hole shut.
-  const ext = bboxExtent(outer.p2);
-  if (Math.abs(polyArea(outer.p2)) < 1e-4 * ext * ext) return false;
+  // The judgement must be METRIC-scaled: raw (u,v) area is meaningless on an extreme-anisotropy
+  // patch — a 0.06mm knife-edge strip whose u-knot-span is 3.5e-5 (handle_v4's tooth tips) is a
+  // REAL face whose raw area always fails a raw-extent test, while the downstream grid handles the
+  // anisotropy fine once it's allowed through.
+  {
+    let umn = Infinity, umx = -Infinity, vmn = Infinity, vmx = -Infinity;
+    for (const q of outer.p2) {
+      if (q[0] < umn) umn = q[0]; if (q[0] > umx) umx = q[0];
+      if (q[1] < vmn) vmn = q[1]; if (q[1] > vmx) vmx = q[1];
+    }
+    const du = Math.max(umx - umn, 1e-12), dv = Math.max(vmx - vmn, 1e-12);
+    const um = (umn + umx) / 2, vm = (vmn + vmx) / 2;
+    const dd = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    // Arc-length (4-chord) metric per direction — an endpoint-to-endpoint chord is ZERO on a
+    // full-period wrap (evaluate(umin) == evaluate(umax)) and would reject every closed band.
+    const arc = (dir: 0 | 1): number => {
+      let s = 0;
+      let prev = surface.evaluate(dir === 0 ? umn : um, dir === 0 ? vm : vmn);
+      for (let i = 1; i <= 4; i++) {
+        const t = i / 4;
+        const q = surface.evaluate(dir === 0 ? umn + du * t : um, dir === 0 ? vm : vmn + dv * t);
+        s += dd(prev, q); prev = q;
+      }
+      return s;
+    };
+    const mU = arc(0) / du, mV = arc(1) / dv;
+    const extS = Math.hypot(du * mU, dv * mV);
+    if (Math.abs(polyArea(outer.p2)) * mU * mV < 1e-4 * extS * extS) return false;
+  }
 
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
   for (const q of outer.p2) {
@@ -550,17 +580,55 @@ function tessellateParamGrid(
     }
   }
   const used = new Map<string, number>();
+  const all = new Map<string, number>();
   for (let t = v0; t < verts.length; t += 9) {
     for (let e = 0; e < 3; e++) {
       const i1 = t + e * 3, i2 = t + ((e + 1) % 3) * 3;
       const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
       if (bound.has(k)) used.set(k, (used.get(k) ?? 0) + 1);
+      all.set(k, (all.get(k) ?? 0) + 1);
     }
   }
   for (const [k, m] of bound) {
     if ((used.get(k) ?? 0) > m) {
       if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT rollback (boundary segment over-covered)`);
       verts.length = v0; faceIds.length = f0; return false;
+    }
+  }
+  // SELF-OVERLAP SURGERY: a valid single-face triangulation is a disk — no 3D edge belongs to more
+  // than two of its own triangles. Three or more means the projection folded and the CDT laid a
+  // second sheet over part of the region (a tangled patch corner welds non-manifold: cat-napkin /
+  // bottle-cage's B-spline folds). Rolling the whole face back trades a few non-manifold edges for
+  // its entire open rim — worse. Instead peel the redundant sheet: greedily drop the triangle whose
+  // edges are most over-covered until every edge is ≤2, which removes a fully-pancaked flap without
+  // opening anything (its edges stay covered by the base sheet underneath).
+  {
+    let over = 0;
+    for (const [k, m] of all) if (m > 2 && (bound.get(k) ?? 0) < m) over++;
+    let guard = 0;
+    while (over > 0 && guard++ < 256) {
+      let worst = -1, worstScore = 0;
+      for (let t = v0; t < verts.length; t += 9) {
+        let score = 0;
+        for (let e = 0; e < 3; e++) {
+          const i1 = t + e * 3, i2 = t + ((e + 1) % 3) * 3;
+          const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
+          if ((all.get(k) ?? 0) > 2) score++;
+        }
+        if (score > worstScore) { worstScore = score; worst = t; }
+      }
+      if (worst < 0) break;
+      // remove the triangle: update edge counts, then splice it out of verts/faceIds
+      for (let e = 0; e < 3; e++) {
+        const i1 = worst + e * 3, i2 = worst + ((e + 1) % 3) * 3;
+        const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
+        all.set(k, (all.get(k) ?? 1) - 1);
+      }
+      verts.splice(worst, 9);
+      faceIds.splice(f0 + (worst - v0) / 9, 1);
+      over = 0;
+      for (const [k, m] of all) if (m > 2 && (bound.get(k) ?? 0) < m) over++;
+      if (DBG && over === 0) console.error(`[grid] fid=${fid} self-overlap surgery: dropped ${guard} folded triangle(s)`);
     }
   }
   return true;
@@ -1681,6 +1749,13 @@ function tessellateConeSlice(
   let Lc = seamCol(seams[0]!), Rc = seamCol(seams[1]!);
   if (!Lc || !Rc || Lc.length !== Rc.length) return false; // asymmetric sampling -> param grid
   const n = Lc.length;
+  // Size cap: rings × arc samples has no interior grading (every ring keeps the full arc count all
+  // the way to the apex), so a pathologically fine wedge would emit n·M·2 triangles unbounded.
+  // The cap must stay GENEROUS: these wedges exist precisely because the param grid chords their
+  // collinear rim open (a 100k cap re-routed nist_ctc_01's 150k-point wedges to the grid and opened
+  // 2,516 edges). nist_ctc_02's wedge fan still exceeds the JS array limit at 0.002mm absolute
+  // tolerance with ANY mesher — that is a documented capacity limit, not this cap's job.
+  if (n * (sampled.get(arcs[0]!)?.length ?? 0) > 2_000_000) return false;
   // Arc samples, oriented so index 0 is at the left seam's rim end.
   let arc = sampled.get(arcs[0]!)!.slice();
   const Lrim = Lc[n - 1]!, Rrim = Rc[n - 1]!;
@@ -1700,6 +1775,7 @@ function tessellateConeSlice(
     for (let j = 0; j < M; j++) r.push(surface.evaluate(angs[j]!, v));
     return r;
   };
+  if (DBG && n * M > 100000) console.error(`[coneSlice] fid=${fid} n=${n} M=${M} -> ~${n * M * 2} tris`);
   // OPEN stitch (the wedge is not a full revolution, so rings must NOT wrap left-to-right).
   const openStitch = (A: Vec3[], B: Vec3[]): void => {
     if (A.length === 1) { for (let j = 0; j + 1 < B.length; j++) emitTri(verts, faceIds, A[0]!, B[j]!, B[j + 1]!, fid, surface, sign); return; }
@@ -2093,19 +2169,28 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           || dbgWhich("grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
           || dbgWhich("ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign));
       }
-      if (ok) facesTessellated++; else bump(skipped, "untriangulated");
+      if (ok) facesTessellated++;
+      else {
+        if (DBG) console.error(`[tess] UNTRIANGULATED fid=${face.faceId} kind=${face.surfaceKind} loops=${face.loops.map((l) => l.edges.length).join("/")}`);
+        bump(skipped, "untriangulated");
+      }
     }
 
     const { mesh } = weld(verts);
     const z = zipSlivers(mesh, 0.05);
     const keptFaceIds: number[] = [];
     for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) keptFaceIds.push(faceIds[t]!);
-    const fill = fillMicroHoles(z.positions, z.indices, keptFaceIds, 0.05);
+    // T-junction crack repair — skipped for open-shell surface bodies, whose boundary is open by
+    // design (splitting their rims against each other would only churn).
+    const tj = solid.open
+      ? { indices: z.indices, faceOf: keptFaceIds }
+      : zipTJunctions(z.positions, z.indices, keptFaceIds, 0.02);
+    const fill = fillMicroHoles(z.positions, tj.indices, tj.faceOf, 0.05);
     for (const x of z.positions) positions.push(x);
-    for (const ix of z.indices) indices.push(ix + voff);
+    for (const ix of tj.indices) indices.push(ix + voff);
     for (const ix of fill.indices) indices.push(ix + voff);
     voff += z.positions.length / 3;
-    for (const f of keptFaceIds) { faceOfTri.push(f); solidOfTri.push(solid.id); }
+    for (const f of tj.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
     for (const f of fill.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
   }
 
@@ -2126,6 +2211,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     mesh: { positions: Float64Array.from(positions), indices: Uint32Array.from(indices) },
     faceOfTri: Uint32Array.from(faceOfTri),
     solidOfTri: Uint32Array.from(solidOfTri),
+    openSolids: brep.solids.filter((s) => s.open).map((s) => s.id),
     stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped },
   };
 }
@@ -2177,10 +2263,11 @@ function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; 
   // Weld each open vertex to its nearest open vertex within tol that it does NOT already share a
   // triangle edge with (across-gap partners are unconnected; along-rail neighbours are connected).
   for (const v of openV) {
-    // Absolute 3 µm floor on the cap: at a DEGENERATE tip (a B-spline sliver tapering to a pole)
+    // Absolute 10 µm floor on the cap: at a DEGENERATE tip (a B-spline sliver tapering to a pole)
     // the rail segments themselves shrink to microns, so half-a-segment blocks the very zip the
-    // crack needs. No real CAD feature lives at 3 µm, so the floor cannot weld distinct geometry.
-    const cap = Math.min(tol, Math.max(0.5 * (vCap.get(v) ?? Infinity), 3e-3));
+    // crack needs (wallganizer's 4 µm crumb edges pinned a 9 µm crack open at the old 3 µm floor).
+    // No real CAD feature lives at 10 µm, so the floor cannot weld distinct geometry.
+    const cap = Math.min(tol, Math.max(0.5 * (vCap.get(v) ?? Infinity), 1e-2));
     let best = -1, bestD = cap * cap;
     const cx = Math.round(px(v) / cell), cy = Math.round(py(v) / cell), cz = Math.round(pz(v) / cell);
     for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) for (let gz = -1; gz <= 1; gz++) {
@@ -2205,6 +2292,83 @@ function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; 
     keep[t] = true; outI.push(a, b, c);
   }
   return { positions: Float64Array.from(pos), indices: Uint32Array.from(outI), keep };
+}
+
+/**
+ * Repair T-junction cracks: an open edge one of whose flank vertices lies (numerically) ON another
+ * open edge — the two sides of a crack subdivide the same 3D line differently, so the vertex zip
+ * can never pair them (letters' engraving overlap: vertex 0.0001mm off the opposing edge but
+ * 0.057mm from its endpoints; wallganizer's residual seams likewise). Splitting the owning
+ * triangle at the on-edge vertex makes both sides share identical sub-edges BY INDEX, closing the
+ * crack with zero geometric change (positions untouched — the split reuses the existing vertex).
+ * Conservative by construction: only OPEN edges participate (defects, never real geometry), the
+ * vertex must sit within `tol` of the segment's interior and clear of its endpoints, and the pass
+ * iterates at most 3 rounds. Returns retriangulated indices + faceOf (same positions).
+ */
+function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol: number): { indices: Uint32Array; faceOf: number[] } {
+  let I = I0, faceOf = faceOf0;
+  const KEY = 2 ** 26;
+  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
+  for (let round = 0; round < 3; round++) {
+    const use = new Map<number, number>();
+    for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) use.set(ek(I[i + e]!, I[i + (e + 1) % 3]!), (use.get(ek(I[i + e]!, I[i + (e + 1) % 3]!)) ?? 0) + 1);
+    const openE: { a: number; b: number; tri: number; edge: number }[] = [];
+    const openV = new Set<number>();
+    for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+      const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
+      if (use.get(ek(a, b)) !== 1) continue;
+      openE.push({ a, b, tri: i / 3, edge: e });
+      openV.add(a); openV.add(b);
+    }
+    if (!openE.length) break;
+    // spatial hash of open vertices at the tolerance scale
+    const cell = Math.max(tol, 1e-9);
+    const hk = (x: number, y: number, z: number): string => `${Math.round(x / cell)},${Math.round(y / cell)},${Math.round(z / cell)}`;
+    const hash = new Map<string, number[]>();
+    for (const v of openV) { const k = hk(P[v * 3]!, P[v * 3 + 1]!, P[v * 3 + 2]!); (hash.get(k) ?? hash.set(k, []).get(k)!).push(v); }
+    // per-triangle-edge insertions: vertex + parametric position along (a,b)
+    const ins = new Map<number, { v: number; t: number }[]>(); // key tri*3+edge
+    let found = 0;
+    for (const oe of openE) {
+      const ax = P[oe.a * 3]!, ay = P[oe.a * 3 + 1]!, az = P[oe.a * 3 + 2]!;
+      const ex = P[oe.b * 3]! - ax, ey = P[oe.b * 3 + 1]! - ay, ez = P[oe.b * 3 + 2]! - az;
+      const l2 = ex * ex + ey * ey + ez * ez;
+      if (l2 < 1e-24) continue;
+      const len = Math.sqrt(l2);
+      const gx0 = Math.min(P[oe.a * 3]!, P[oe.b * 3]!) - tol, gx1 = Math.max(P[oe.a * 3]!, P[oe.b * 3]!) + tol;
+      const gy0 = Math.min(P[oe.a * 3 + 1]!, P[oe.b * 3 + 1]!) - tol, gy1 = Math.max(P[oe.a * 3 + 1]!, P[oe.b * 3 + 1]!) + tol;
+      const gz0 = Math.min(P[oe.a * 3 + 2]!, P[oe.b * 3 + 2]!) - tol, gz1 = Math.max(P[oe.a * 3 + 2]!, P[oe.b * 3 + 2]!) + tol;
+      const list: { v: number; t: number }[] = [];
+      for (let cx = Math.round(gx0 / cell); cx <= Math.round(gx1 / cell); cx++)
+        for (let cy = Math.round(gy0 / cell); cy <= Math.round(gy1 / cell); cy++)
+          for (let cz = Math.round(gz0 / cell); cz <= Math.round(gz1 / cell); cz++)
+            for (const v of hash.get(`${cx},${cy},${cz}`) ?? []) {
+              if (v === oe.a || v === oe.b) continue;
+              const qx = P[v * 3]! - ax, qy = P[v * 3 + 1]! - ay, qz = P[v * 3 + 2]! - az;
+              const t = (qx * ex + qy * ey + qz * ez) / l2;
+              if (t * len < tol || (1 - t) * len < tol) continue; // too near an endpoint — weld territory
+              const d = Math.hypot(qx - t * ex, qy - t * ey, qz - t * ez);
+              if (d <= tol && !list.some((x) => x.v === v)) list.push({ v, t });
+            }
+      if (list.length) { ins.set(oe.tri * 3 + oe.edge, list.sort((x, y) => x.t - y.t)); found += list.length; }
+    }
+    if (!found) break;
+    // refan the affected triangles (a triangle may have insertions on several of its edges)
+    const outI: number[] = [], outF: number[] = [];
+    for (let t = 0; t < I.length / 3; t++) {
+      const anyIns = ins.has(t * 3) || ins.has(t * 3 + 1) || ins.has(t * 3 + 2);
+      if (!anyIns) { outI.push(I[t * 3]!, I[t * 3 + 1]!, I[t * 3 + 2]!); outF.push(faceOf[t]!); continue; }
+      // polygon = triangle boundary with inserted vertices, fanned from the first corner
+      const poly: number[] = [];
+      for (let e = 0; e < 3; e++) {
+        poly.push(I[t * 3 + e]!);
+        for (const x of ins.get(t * 3 + e) ?? []) poly.push(x.v);
+      }
+      for (let i = 1; i + 1 < poly.length; i++) { outI.push(poly[0]!, poly[i]!, poly[i + 1]!); outF.push(faceOf[t]!); }
+    }
+    I = Uint32Array.from(outI); faceOf = outF;
+  }
+  return { indices: I, faceOf };
 }
 
 /**

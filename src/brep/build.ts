@@ -53,6 +53,9 @@ export interface BSolid {
    * file-global unit (Inventor mixes plain-METRE part reps into a millimetre assembly). Geometry
    * readers must use this over the global scale for the solid's points/curves/surfaces. */
   scale?: number;
+  /** True for a surface body built from OPEN_SHELLs (a SHELL_BASED_SURFACE_MODEL): its boundary
+   * edges are open BY DESIGN, so watertightness accounting must not count them as defects. */
+  open?: boolean;
 }
 
 // ---- Rigid transform (a Frame is columns x,y,z + origin o): world = o + x·p₀ + y·p₁ + z·p₂ ----
@@ -95,7 +98,7 @@ function assemblyInfo(t: Table, s: number): {
       if (rep.params[1]?.k !== "list") continue;
       for (const item of refList(rep.params[1]!)) {
         const ty2 = t.typeOf(item);
-        if (ty2 === "MANIFOLD_SOLID_BREP" || ty2 === "BREP_WITH_VOIDS") repOfSolid.set(item, repId);
+        if (ty2 === "MANIFOLD_SOLID_BREP" || ty2 === "BREP_WITH_VOIDS" || ty2 === "SHELL_BASED_SURFACE_MODEL") repOfSolid.set(item, repId);
       }
     }
   }
@@ -234,23 +237,28 @@ export function buildBrep(src: string): BrepModel {
   };
 
   const solids: BSolid[] = [];
-  const addSolid = (sid: number, shellIds: number[]): void => {
+  const addSolid = (sid: number, shellIds: number[], open = false): void => {
     const faces: BFace[] = [];
     // A malformed face (unexpected record layout from an exotic kernel) must not kill the whole
     // file — drop it and let the tessellator report the gap via stats.
     for (const shellId of shellIds) for (const sf of resolveShellFaces(shellId, false)) {
       try { faces.push(buildFace(sf.fid, sf.flip)); } catch { /* skipped face */ }
     }
-    if (faces.length > 0) solids.push({ id: sid, faces });
+    if (faces.length > 0) solids.push(open ? { id: sid, faces, open } : { id: sid, faces });
   };
   // MANIFOLD_SOLID_BREP(name, outer_shell); BREP_WITH_VOIDS(name, outer_shell, (void_shells)).
   for (const [sid, msb] of table.byType("MANIFOLD_SOLID_BREP")) addSolid(sid, [ref(msb.params[1]!)]);
   for (const [sid, bwv] of table.byType("BREP_WITH_VOIDS")) addSolid(sid, [ref(bwv.params[1]!), ...refList(bwv.params[2]!)]);
 
-  // Shell-based surface models: SHELL_BASED_SURFACE_MODEL(name, (shell#...)) — open/closed shells of
-  // ADVANCED_FACEs without a solid wrapper. Same face machinery, one synthetic solid per model.
-  if (solids.length === 0) {
-    for (const [sid, sbsm] of table.byType("SHELL_BASED_SURFACE_MODEL")) addSolid(sid, refList(sbsm.params[1]!));
+  // Shell-based surface models: SHELL_BASED_SURFACE_MODEL(name, (shell#...)) — open/closed shells
+  // of ADVANCED_FACEs without a solid wrapper. Same face machinery, one body per model, imported
+  // ALONGSIDE solids (a file routinely mixes both: boomerang's zero-thickness blades, the NIST
+  // parts' supplemental surfaces — OCC meshes them, so skipping them reads as missing area/volume).
+  // A body with any OPEN_SHELL is marked open so watertightness accounting skips its boundary.
+  for (const [sid, sbsm] of table.byType("SHELL_BASED_SURFACE_MODEL")) {
+    const shellIds = refList(sbsm.params[1]!);
+    const open = shellIds.some((sh) => table.typeOf(sh) === "OPEN_SHELL");
+    addSolid(sid, shellIds, open);
   }
 
   // AP203-era bounded-surface models (GEOMETRIC_SET): CURVE_BOUNDED_SURFACE(name, basis#,

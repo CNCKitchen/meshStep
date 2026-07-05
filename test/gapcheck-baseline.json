@@ -1,6 +1,6 @@
 {
  "newTestModels": {
-  "boomerang-v2.step": "FAIL",
+  "boomerang-v2.step": "WARN",
   "bottle-cage.step": "FAIL",
   "build_tray_v3.step": "OK",
   "cat-napkin-holder.step": "FAIL",
@@ -8,14 +8,14 @@
   "core-one-replicator-arches.stp": "OK",
   "core-one-replicator-base.stp": "OK",
   "core-one-replicator-buttons.stp": "OK",
-  "core-one-replicator-letters.stp": "FAIL",
+  "core-one-replicator-letters.stp": "OK",
   "core-one-replicator-side-panel-base.stp": "OK",
   "core-one-replicator-side-panel-buttons.stp": "OK",
   "fidgetclicker_v30.step": "OK",
   "furniture-leg.step": "OK",
   "GARMIN_MOUNT_v15.step": "OK",
   "Goblin drone V3.step": "OK",
-  "handle_v4_two-tooth.step": "FAIL",
+  "handle_v4_two-tooth.step": "OK",
   "holder-w50-h150-c20-m6_2.step": "OK",
   "holder-w50-h150-c20-m6.step": "OK",
   "insect_water_station_impr.step": "OK",
@@ -37,8 +37,8 @@
   "turbinewhistle_a8-i8_t4.step": "OK",
   "Voron_Design_Cube_v8.STEP": "OK",
   "wall-hook.step": "OK",
-  "wallganizer.stp": "FAIL",
-  "wio-tracker-l1-eink-case-v1_3-back.step": "FAIL",
+  "wallganizer.stp": "OK",
+  "wio-tracker-l1-eink-case-v1_3-back.step": "OK",
   "wio-tracker-l1-eink-case-v1_3-front.step": "OK"
  }
 }

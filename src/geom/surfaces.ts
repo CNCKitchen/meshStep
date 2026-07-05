@@ -155,6 +155,71 @@ class Torus implements Surface {
   curvatureRadius(): number { return this.rMin; } // tube radius dominates
 }
 
+/**
+ * DEGENERATE_TOROIDAL_SURFACE: a torus with minor radius > major radius, so the full revolution
+ * self-intersects where the tube crosses the axis (radial coordinate ρ(v) = R + r·cos v changes
+ * sign at v = ±arccos(−R/r)). The surface splits into two valid lobes and the STEP select_outer
+ * flag names which one the face uses:
+ *   apple (outer, .T.): v ∈ (−vc, +vc), ρ(v) > 0 — the big outer barrel;
+ *   lemon (inner, .F.): v ∈ (vc, 2π−vc), ρ(v) < 0 — the small lens hugging the axis, whose points
+ *     physically sit at angle u+π with radius |ρ(v)|.
+ * The plain-Torus placeholder mis-projected lemon boundaries (atan2 returns the MIRRORED angle and
+ * the outer-branch v), so interior points landed on the wrong sheet 1.5mm off (wio-tracker's
+ * fillet caps). Here project() inverts the correct lobe and v is an OPEN direction bounded at the
+ * axis poles, so the mesher can never sample across the self-intersection.
+ */
+class DegenerateTorus implements Surface {
+  kind = "DEGENERATE_TOROIDAL_SURFACE";
+  periodicU = true;
+  uSeam = Math.PI;
+  f: Frame;
+  rMaj: number;
+  rMin: number;
+  outer: boolean;
+  vc: number;
+  v0: number;
+  v1: number;
+  constructor(f: Frame, rMaj: number, rMin: number, outer: boolean) {
+    this.f = f; this.rMaj = rMaj; this.rMin = rMin; this.outer = outer;
+    this.vc = Math.acos(Math.max(-1, Math.min(1, -rMaj / rMin)));
+    if (outer) { this.v0 = -this.vc; this.v1 = this.vc; }
+    else { this.v0 = this.vc; this.v1 = 2 * Math.PI - this.vc; }
+  }
+  evaluate(u: number, v: number): Vec3 {
+    v = Math.min(Math.max(v, this.v0), this.v1); // clamp at the axis poles — beyond is the other lobe
+    const ring = add(scale(this.f.x, Math.cos(u)), scale(this.f.y, Math.sin(u)));
+    const radial = scale(ring, this.rMaj + this.rMin * Math.cos(v));
+    return add(this.f.o, add(radial, scale(this.f.z, this.rMin * Math.sin(v))));
+  }
+  project(p: Vec3): [number, number] {
+    const d = sub(p, this.f.o);
+    const lx = dot(d, this.f.x), ly = dot(d, this.f.y), lz = dot(d, this.f.z);
+    const rho = Math.hypot(lx, ly);
+    if (this.outer) return [Math.atan2(ly, lx), Math.atan2(lz, rho - this.rMaj)];
+    // Lemon: the point sits at the mirrored angle (ρ(v) < 0), and v lives around π — shift atan2's
+    // (−π, π] branch onto (0, 2π) so the valid band (vc, 2π−vc) is a single continuous interval.
+    const u = Math.atan2(-ly, -lx);
+    let v = Math.atan2(lz, -rho - this.rMaj);
+    if (v < 0) v += 2 * Math.PI;
+    return [u, v];
+  }
+  normal(u: number, v: number): Vec3 {
+    // Su × Sv = ρ(v)·r·(ring·cos v + z·sin v): the analytic normal carries the SIGN of ρ(v), which
+    // is negative on the whole lemon lobe — the unsigned torus formula emits lemon faces inverted
+    // (18 same-direction shared edges and a 4% volume deficit on wio-tracker's fillet caps).
+    const s = this.outer ? 1 : -1;
+    const ring = add(scale(this.f.x, Math.cos(u)), scale(this.f.y, Math.sin(u)));
+    return normalize(add(scale(ring, s * Math.cos(v)), scale(this.f.z, s * Math.sin(v))));
+  }
+  curvatureRadius(u: number, v: number): number {
+    // Principal radii: the tube (rMin) and the ring |ρ(v)/cos v|, which SHRINKS toward the axis
+    // poles — same class as a cone apex, so the ring term must be local or pole caps mesh coarse.
+    const rho = Math.abs(this.rMaj + this.rMin * Math.cos(v));
+    const c = Math.abs(Math.cos(v));
+    return Math.max(1e-3, Math.min(this.rMin, c > 1e-9 ? rho / c : this.rMin));
+  }
+}
+
 /** OFFSET_SURFACE: the basis surface pushed `dist` mm along its (unit) normal. Shares the basis
  * parametrisation, so the boundary projects through the basis solver; the normal is unchanged and the
  * point is shifted. project(p) maps to the basis (p sits one offset out along the normal — exact for a
@@ -490,11 +555,9 @@ export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface 
     case "TOROIDAL_SURFACE":
       return new Torus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s);
     case "DEGENERATE_TOROIDAL_SURFACE":
-      // Same parametrisation as a torus but minor_radius > major_radius, so the full surface self-
-      // intersects (a spindle/apple-lemon). The real face is a small trimmed fillet patch far from
-      // the degenerate axis circle, so the trim loop + param grid fill only the valid region; the
-      // select_outer flag (params[4]) just says which lobe, which the loop already encodes.
-      return new Torus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s);
+      // (name, placement, major, minor, select_outer) — see DegenerateTorus for the lobe handling.
+      return new DegenerateTorus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s,
+        r.params[4]?.k === "enum" ? r.params[4].v === "T" : true);
     case "OFFSET_SURFACE": {
       const base = makeSurface(t, ref(r.params[1]!), s);
       return base ? new OffsetSurface(base, num(r.params[2]!) * s) : null;
