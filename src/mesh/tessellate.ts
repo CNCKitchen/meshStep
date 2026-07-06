@@ -1623,6 +1623,73 @@ function tessellateThinFace(
 }
 
 /**
+ * Thin ANNULAR sliver: a face bounded by two SEPARATE closed-ring loops (an outer circle and a
+ * concentric inner circle) that lie within `tol` of each other everywhere — a sub-tolerance flat
+ * washer a CAD kernel leaves between two coincident rims (the knife-edge annulus that caps a Voron
+ * stepper/Motor_Body cylinder). Its two loops project to two near-coincident circles in (u,v), so the
+ * param grid can seat NO interior point (the whole ring is inside the boundary keep-out) and its CDT
+ * cannot realise the ring constraints — the face meshes to garbage and its rims open against the
+ * neighbouring cylinder. The two rims ARE the shared edge samples, so stitching them directly into a
+ * ribbon (the same cyclic rail loft the revolution band uses) is watertight with both neighbours.
+ * Returns false — leaving the param grid to handle it — unless the two loops are thin everywhere, so a
+ * genuine annular FACE (a washer whose width ≫ tol, which the grid triangulates well) is untouched.
+ */
+function tessellateThinRing(
+  surface: Surface, loops: BLoop[], sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], sign: number, tol: number,
+): boolean {
+  // Only a FLAT annular sliver: two concentric rims lying in the face plane. (A curved thin ring would
+  // come as a periodic band, not two separate loops.) Restricting to planes lets the width be measured
+  // from AREA and PERIMETER, which converge under sampling — a point-to-polyline distance does not (a
+  // rim's chords bow by up to the sampling chord tolerance, which grows with part size, so on a metre-
+  // scale part it cannot tell a 6µm sliver from a 0.5mm washer).
+  if (loops.length !== 2 || surface.kind !== "PLANE") return false;
+  const rail = (lp: BLoop): Vec3[] | null => {
+    const p: Vec3[] = [];
+    for (const oe of lp.edges) {
+      const base = sampled.get(oe.edgeId); if (!base) return null;
+      const poly = oe.orient ? base : base.slice().reverse();
+      for (let i = 0; i < poly.length - 1; i++) p.push(poly[i]!);
+    }
+    return p.length >= 3 ? p : null;
+  };
+  const r1 = rail(loops[0]!), r2raw = rail(loops[1]!);
+  if (!r1 || !r2raw) return false;
+  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  // Sampling-independent width = annulus area / mean circumference. Shoelace area in the plane's own
+  // (u,v) (mm² for a plane) and 3D perimeter both converge as the rims are refined, so their ratio is
+  // the true ring width regardless of how coarsely the part was sampled. A genuine washer's width is
+  // orders of magnitude above `tol`; a CAD knife-edge sliver is a few microns.
+  const perim = (r: Vec3[]): number => { let s = 0; for (let i = 0; i < r.length; i++) s += d3(r[i]!, r[(i + 1) % r.length]!); return s; };
+  const area = (r: Vec3[]): number => {
+    let a = 0;
+    for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+      const pi = surface.project(r[i]!), pj = surface.project(r[j]!);
+      a += (pj[0] + pi[0]) * (pj[1] - pi[1]);
+    }
+    return Math.abs(a / 2);
+  };
+  const p1 = perim(r1), p2 = perim(r2raw);
+  const width = Math.abs(area(r1) - area(r2raw)) / Math.max(1e-9, (p1 + p2) / 2);
+  if (width > tol) return false;
+  // Align rail 2 to rail 1: rotate to start nearest r1[0], then flip if the reverse tracks r1 better.
+  let bi = 0, bd = Infinity;
+  for (let i = 0; i < r2raw.length; i++) { const d = d3(r1[0]!, r2raw[i]!); if (d < bd) { bd = d; bi = i; } }
+  let r2 = [...r2raw.slice(bi), ...r2raw.slice(0, bi)];
+  if (d3(r1[1 % r1.length]!, r2[r2.length - 1]!) < d3(r1[1 % r1.length]!, r2[1 % r2.length]!)) {
+    r2 = [r2[0]!, ...r2.slice(1).reverse()];
+  }
+  const frac = (c: Vec3[]): number[] => {
+    const f = [0];
+    for (let i = 1; i <= c.length; i++) f.push(f[i - 1]! + d3(c[i - 1]!, c[i % c.length]!));
+    const tot = f[f.length - 1]! || 1;
+    return f.slice(0, c.length).map((x) => x / tot);
+  };
+  stitchRings(verts, faceIds, r1, r2, fid, surface, sign, frac(r1), frac(r2));
+  return true;
+}
+
+/**
  * Rail-ribbon fallback for a thin curved strip whose loops are DEGENERATE in parameter space — a
  * counterbore/hole rim, a rounded-corner blend, a lens between two nearly-parallel curves. The param
  * grid bails on these (the boundary projects to a ~zero-area sliver) and leaves a hole; the multi-loop
@@ -1840,19 +1907,32 @@ function tessellateCone(
     // at neighbouring slot corners): the sole loop's chained samples must close into ONE circle —
     // constant v (all on the rim) winding u exactly once — leaving the apex as the only closure.
     // Anything with samples off that circle (a genuine trimmed cone) falls through to the grid.
+    // A slit apex cone (M5 button-head drive-socket cone) additionally carries an explicit SEAM
+    // ruling from the rim down to the apex; that ruling is the parametric slit, not part of the rim,
+    // so it is separated out here — the full-revolution ring march re-creates the seam continuously.
+    const c2 = surface as Surface & { r: number; sin: number };
+    const vApexP = -c2.r / c2.sin;
+    // slant = the rim's own distance from the apex in v; an endpoint within 2% of it is "at the apex".
+    let slant = 0;
+    for (const oe of loop.edges) {
+      const e = brep.edges.get(oe.edgeId); if (!e) return false;
+      for (const p of [e.v0, e.v1]) slant = Math.max(slant, Math.abs(surface.project(p)[1] - vApexP));
+    }
+    const atApex = (p: Vec3): boolean => Math.abs(surface.project(p)[1] - vApexP) < 0.02 * Math.max(slant, 1e-9);
     const chain: Vec3[] = [];
     for (const oe of loop.edges) {
+      const e = brep.edges.get(oe.edgeId);
       const s = sampled.get(oe.edgeId);
-      if (!s) return false;
+      if (!s || !e) return false;
+      if (atApex(e.v0) || atApex(e.v1)) continue; // seam ruling to the apex — not part of the rim
       const poly = oe.orient ? s : s.slice().reverse();
       for (let i = 0; i < poly.length - 1; i++) chain.push(poly[i]!);
     }
     if (chain.length < 4) return false;
-    const c2 = surface as Surface & { r: number; sin: number };
     const uv = chain.map((p) => surface.project(p));
     let vmin = Infinity, vmax = -Infinity;
     for (const q of uv) { if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1]; }
-    const slantV = Math.abs(-c2.r / c2.sin - uv[0]![1]);
+    const slantV = Math.abs(vApexP - uv[0]![1]);
     if (vmax - vmin > 1e-3 * Math.max(slantV, 1e-9)) return false;
     if (Math.abs(cycleWind(uv as P2[], 0, TWO_PI)) !== 1) return false;
     base = chain;
@@ -2353,6 +2433,9 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       if (outer && face.loops.length === 1 && solid.faces.length > 1
         && tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005)) {
         ok = true; // degenerate sub-resolution sliver/crack ribbon-stitched (returns false if not thin)
+      } else if (face.loops.length === 2 && solid.faces.length > 1
+        && tessellateThinRing(surface, face.loops, sampled, face.faceId, verts, faceIds, sign, 0.015)) {
+        ok = true; // sub-tolerance annular sliver (two near-coincident rims) ribbon-stitched
       } else if (isSphere(surface)) {
         // A full sphere is its solid's only face (degenerate seam loop); trimmed spheres
         // (e.g. roundedCube corners) are one of many faces -> param grid.
