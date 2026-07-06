@@ -462,17 +462,64 @@ class BSplineSurface implements Surface {
     // few Gauss-Newton steps minimising |S(u,v)-p|². In a CLOSED direction the coordinate is NOT
     // clamped — it follows p across the seam (evaluate() wraps it back), so a loop crossing the seam
     // stays monotone in param instead of snapping between v0 and v1.
-    let u: number, v: number;
-    if (hu !== undefined && hv !== undefined) { u = hu; v = hv; }
-    else {
-      let bu = this.u0, bv = this.v0, bd = Infinity;
+    let bd2 = Infinity;
+    const scan = (): [number, number] => {
+      let bu = this.u0, bv = this.v0;
       for (let i = 0; i < this.gP.length; i++) for (let j = 0; j < this.gP[i]!.length; j++) {
         const q = this.gP[i]![j]!;
         const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
-        if (d < bd) { bd = d; bu = this.gU[i]!; bv = this.gV[j]!; }
+        if (d < bd2) { bd2 = d; bu = this.gU[i]!; bv = this.gV[j]!; }
       }
-      u = bu; v = bv;
+      return [bu, bv];
+    };
+    let u: number, v: number;
+    if (hu !== undefined && hv !== undefined) { u = hu; v = hv; }
+    else [u, v] = scan();
+    [u, v] = this.newton(p, u, v);
+    // RESIDUAL-VERIFIED MULTI-START. On a patch with a COLLAPSED row (S(u,0) is one 3D point for
+    // every u) the Jacobian is singular along the row, and a Newton seeded there — the hint chain
+    // walked onto the row, or the grid-nearest node IS a row node (they are all equidistant) —
+    // parks at an arbitrary u with a millimetre residual while the true preimage sits elsewhere
+    // (Stealthburner fillet patches). "r beats bd" cannot detect this: the nearest node IS the
+    // collapse point, so r ≈ bd looks healthy. The discriminator is MULTIMODALITY: gather the
+    // grid nodes within 2× the best distance and cluster them in (u,v) — the stuck case shows
+    // several distant clusters (the whole degenerate row is equidistant), a healthy off-surface
+    // query (triangle centroid: the hot orientation path) shows exactly one and skips the retries.
+    const e0 = this.evaluate(u, v);
+    let r2 = (e0[0] - p[0]) ** 2 + (e0[1] - p[1]) ** 2 + (e0[2] - p[2]) ** 2;
+    if (r2 > 1e-6) {
+      if (bd2 === Infinity) scan();
+      if (r2 > 0.25 * bd2) {
+        const span = Math.max(this.u1 - this.u0, this.v1 - this.v0);
+        const lim = 4 * bd2 + 1e-12; // nodes within 2× the best grid distance
+        const near: { d: number; cu: number; cv: number }[] = [];
+        for (let i = 0; i < this.gP.length; i++) {
+          for (let j = 0; j < this.gP[i]!.length; j++) {
+            const q = this.gP[i]![j]!;
+            const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
+            if (d <= lim) near.push({ d, cu: this.gU[i]!, cv: this.gV[j]! });
+          }
+        }
+        near.sort((a, b) => a.d - b.d);
+        const cand: [number, number][] = [];
+        for (const { cu, cv } of near) {
+          if (cand.some(([x, y]) => Math.hypot(x - cu, y - cv) < span / 16)) continue;
+          cand.push([cu, cv]);
+          if (cand.length >= 8) break;
+        }
+        if (cand.length >= 2) {
+          for (const [cu, cv] of cand) {
+            const [nu, nv] = this.newton(p, cu, cv);
+            const e = this.evaluate(nu, nv);
+            const r = (e[0] - p[0]) ** 2 + (e[1] - p[1]) ** 2 + (e[2] - p[2]) ** 2;
+            if (r < r2) { r2 = r; u = nu; v = nv; }
+          }
+        }
+      }
     }
+    return [u, v];
+  }
+  private newton(p: Vec3, u: number, v: number): [number, number] {
     const eu = 1e-5 * (this.u1 - this.u0), ev = 1e-5 * (this.v1 - this.v0);
     const clampU = (x: number): number => this.closedU ? x : Math.min(Math.max(x, this.u0), this.u1);
     const clampV = (x: number): number => this.closedV ? x : Math.min(Math.max(x, this.v0), this.v1);
@@ -491,8 +538,18 @@ class BSplineSurface implements Surface {
       const a = dot(Su, Su), b = dot(Su, Sv), c = dot(Sv, Sv);
       const g1 = dot(Su, r), g2 = dot(Sv, r);
       const det = a * c - b * b;
-      if (Math.abs(det) < 1e-18) break;
-      const du = -(c * g1 - b * g2) / det, dv = -(a * g2 - b * g1) / det;
+      let du: number, dv: number;
+      if (Math.abs(det) >= 1e-18) {
+        du = -(c * g1 - b * g2) / det; dv = -(a * g2 - b * g1) / det;
+      } else if (c > 1e-30 && c >= a) {
+        // Singular Jacobian — a COLLAPSED row (Su = 0 where S(u,v0) is one point for every u).
+        // Breaking here strands the solver ON the row at an arbitrary u; instead descend along the
+        // one non-degenerate direction, which walks off the row and restores a full Jacobian for
+        // the next iteration.
+        du = 0; dv = -g2 / c;
+      } else if (a > 1e-30) {
+        du = -g1 / a; dv = 0;
+      } else break;
       u = clampU(u + du); v = clampV(v + dv);
       if (Math.abs(du) < eu && Math.abs(dv) < ev) break;
     }

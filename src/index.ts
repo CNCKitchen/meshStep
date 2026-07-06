@@ -104,7 +104,7 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   // AP242 tessellated-geometry bodies have no analytic surfaces, so the curvature-adaptive remesh
   // can't project — return the (already watertight) faceted mesh as imported.
   if (opts.remesh !== true || brep.solids.length === 0) {
-    orientConsistent(result.mesh);
+    orientConsistent(result.mesh, result.solidOfTri);
     const placed = applyAssemblyPlacement(result.mesh, result.faceOfTri, result.solidOfTri, solidXf);
     return { ...result, ...placed };
   }
@@ -120,8 +120,8 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   const r = remesh(result.mesh, result.faceOfTri, surf, {
     surfaceDev, normalDev: normalDevRad, maxEdge, iterations: opts.remeshIterations,
   });
-  orientConsistent(r.mesh); // fix any triangles flipped by smoothing
   const solidOfTri = Uint32Array.from(r.faceOfTri, (f) => solidOfFace.get(f) ?? 0);
+  orientConsistent(r.mesh, solidOfTri); // fix any triangles flipped by smoothing
   const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf);
   return { ...result, ...placed };
 }

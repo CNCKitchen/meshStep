@@ -335,6 +335,45 @@ function legacyLoopParam(surface: Surface, loop: BLoop, sampled: Map<number, Vec
   }
   if (surface.periodicU) unwrap(p2, 0, surface.uPeriod || TWO_PI);
   if (surface.periodicV) unwrap(p2, 1, surface.vPeriod || TWO_PI);
+  // START-RUN REPAIR (wrap-around chaining). The loop's FIRST edge has no chaining hint; its
+  // grid-nearest seed is arbitrary when the patch has a COLLAPSED boundary row — S(u,0) is one 3D
+  // point for EVERY u (Stealthburner's fillet patches) — so a LEADING RUN of points lands at a
+  // far-off u on the degenerate row (one can even stick there with a millimetre residual: the
+  // Jacobian is singular along the row), the polygon crosses the whole domain, the CDT loses
+  // constraints and the rescue fills phantom area. The loop is cyclic: when the CLOSING step's
+  // (u,v) jump is far larger than its 3D chord implies (metric-relative AND a real fraction of the
+  // domain), re-chain the leading run hinted from the loop END, accepting each redo only while it
+  // stays on the surface at least as well as the original, and stopping once the redo rejoins the
+  // original chain. Non-periodic surfaces only — a wound loop on a periodic surface legitimately
+  // closes a whole period apart, and the seam machinery below owns that case.
+  if (!surface.periodicU && !surface.periodicV && p2.length >= 4) {
+    const n = p2.length;
+    const d2p = (a: P2, b: P2): number => Math.hypot(a[0] - b[0], a[1] - b[1]);
+    const d3p = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+    const ratios: number[] = [];
+    for (let i = 0; i + 1 < n; i++) {
+      const dd = d3p(p3[i]!, p3[i + 1]!);
+      if (dd > 1e-9) ratios.push(d2p(p2[i]!, p2[i + 1]!) / dd);
+    }
+    ratios.sort((a, b) => a - b);
+    const med = ratios[ratios.length >> 1] ?? 0;
+    let umn = Infinity, umx = -Infinity, vmn = Infinity, vmx = -Infinity;
+    for (const q of p2) { if (q[0] < umn) umn = q[0]; if (q[0] > umx) umx = q[0]; if (q[1] < vmn) vmn = q[1]; if (q[1] > vmx) vmx = q[1]; }
+    const extent = Math.hypot(umx - umn, vmx - vmn);
+    const jump = d2p(p2[n - 1]!, p2[0]!);
+    if (med > 0 && jump > 20 * med * Math.max(d3p(p3[n - 1]!, p3[0]!), 1e-9) && jump > 0.05 * extent) {
+      let hint = p2[n - 1]!;
+      for (let i = 0; i < n >> 1; i++) {
+        const q = surface.project(p3[i]!, hint[0], hint[1]);
+        if (d2p(q, p2[i]!) < 1e-6 * Math.max(extent, 1e-9)) break; // rejoined the original chain
+        const eOld = surface.evaluate(p2[i]![0], p2[i]![1]);
+        const eNew = surface.evaluate(q[0], q[1]);
+        const rOld = d3p(eOld, p3[i]!), rNew = d3p(eNew, p3[i]!);
+        if (rNew > Math.max(2 * rOld, 1e-3)) break; // redo left the surface — keep the original
+        p2[i] = q; hint = q;
+      }
+    }
+  }
   // Repair ISOLATED (u,v) outliers. The loop's very first projection has no hint, and on a surface
   // that passes close to itself (a helical thread: adjacent turns are microns apart in 3D) the
   // nearest-grid-node seed can converge onto the WRONG TURN — one point whose (u,v) sits a dozen

@@ -103,15 +103,15 @@ interface Watertight {
 
 const watertight = (m: { positions: Float64Array; indices: Uint32Array }, faceOfTri: Uint32Array, skipTri?: (t: number) => boolean): Watertight => {
   const K = 0x40000000;
-  const inc = new Map<number, { n: number; a: number; b: number; tri: number }>();
+  const inc = new Map<number, { n: number; fwd: number; a: number; b: number; tri: number }>();
   for (let i = 0; i < m.indices.length; i += 3) {
     if (skipTri?.(i / 3)) continue; // open-shell surface bodies: boundary is open by design
     const a = m.indices[i]!, b = m.indices[i + 1]!, c = m.indices[i + 2]!;
     for (const [x, y] of [[a, b], [b, c], [c, a]] as const) {
       const k = x < y ? x * K + y : y * K + x;
       const e = inc.get(k);
-      if (e) e.n++;
-      else inc.set(k, { n: 1, a: x, b: y, tri: i / 3 });
+      if (e) { e.n++; if (x < y) e.fwd++; }
+      else inc.set(k, { n: 1, fwd: x < y ? 1 : 0, a: x, b: y, tri: i / 3 });
     }
   }
   const CAP = 20000;
@@ -130,6 +130,12 @@ const watertight = (m: { positions: Float64Array; indices: Uint32Array }, faceOf
       pushSeg(bSegs, e.a, e.b);
       const f = faceOfTri[e.tri]!;
       openEdgesOfFace.set(f, (openEdgesOfFace.get(f) ?? 0) + 1);
+    } else if (e.n % 2 === 0 && 2 * e.fwd === e.n) {
+      // Balanced even-count edge: pairs of consistently-wound manifold sheets welded together —
+      // a SELF-TOUCHING solid (two coincident B-rep edges, each carrying 2 faces, along a tangent
+      // contact line: Stealthburner). Faithful topology, not a defect. A folded flap traverses the
+      // edge twice the SAME way and stays unbalanced -> still flagged below.
+      continue;
     } else {
       nonmanifold++;
       pushSeg(nmSegs, e.a, e.b);
