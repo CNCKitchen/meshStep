@@ -1623,6 +1623,68 @@ function tessellateThinFace(
 }
 
 /**
+ * Thin planar STRIP sliver: a single-loop PLANE face that is a long thin crescent/ribbon (two nearly-
+ * coincident long rails — arcs or lines — closed by short ends), a sub-tolerance knife-edge a CAD
+ * kernel leaves where two surfaces almost meet (the 6020 fan-shroud venturi lips: 17µm wide × 45mm
+ * long). Like the thin ring, the param grid seats no interior point (the whole strip is inside the
+ * boundary keep-out) and its CDT drops the rail constraints, so the strip and its neighbours open.
+ * Split the loop at its two most-distant vertices into two rails and ribbon-stitch them (the rails are
+ * the shared edge samples → watertight). Width is measured sampling-independently as 2·area/perimeter
+ * (shoelace area in the plane's (u,v); a point-to-polyline distance is inflated by the sampling
+ * chord tolerance and cannot separate a 17µm sliver from a real strip on a large part). A face wider
+ * than `tol` fails and keeps the param grid, which triangulates a genuine thin face acceptably.
+ */
+function tessellateThinStrip(
+  surface: Surface, outerLoop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], sign: number, tol: number,
+): boolean {
+  if (surface.kind !== "PLANE") return false;
+  const p: Vec3[] = [];
+  for (const oe of outerLoop.edges) {
+    const base = sampled.get(oe.edgeId); if (!base) return false;
+    const poly = oe.orient ? base : base.slice().reverse();
+    for (let i = 0; i < poly.length - 1; i++) p.push(poly[i]!);
+  }
+  // Only a LONG thin strip — enough boundary points that the CDT genuinely can't seat interior and
+  // drops the rail constraints. A short sub-tolerance sliver (a tiny degenerate quad, a few points)
+  // triangulates trivially in the grid and must NOT be re-stitched: its rails are too short for the
+  // ribbon to close its ends reliably, and the grid already meshes it watertight (VORONDESIGN
+  // XY-Endstop's 4–14-point crumb faces). The 6020 crescents run 31 points over 90mm.
+  const m = p.length; if (m < 16) return false;
+  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  let per = 0; for (let i = 0; i < m; i++) per += d3(p[i]!, p[(i + 1) % m]!);
+  let a2 = 0;
+  for (let i = 0, j = m - 1; i < m; j = i++) { const pi = surface.project(p[i]!), pj = surface.project(p[j]!); a2 += (pj[0] + pi[0]) * (pj[1] - pi[1]); }
+  const width = (Math.abs(a2)) / Math.max(1e-9, per); // = 2·(|a2|/2)/perimeter
+  if (width > tol) return false;
+  // Split at the two most-distant vertices (the strip ends), as tessellateThinFace does.
+  let cx = 0, cy = 0, cz = 0; for (const q of p) { cx += q[0]; cy += q[1]; cz += q[2]; }
+  cx /= m; cy /= m; cz /= m;
+  const far = (ox: number, oy: number, oz: number): number => {
+    let bi = 0, bd = -1;
+    for (let i = 0; i < m; i++) { const d = (p[i]![0] - ox) ** 2 + (p[i]![1] - oy) ** 2 + (p[i]![2] - oz) ** 2; if (d > bd) { bd = d; bi = i; } }
+    return bi;
+  };
+  const ia = far(cx, cy, cz), ib = far(p[ia]![0], p[ia]![1], p[ia]![2]);
+  if (ia === ib) return false;
+  const c1: Vec3[] = [], c2: Vec3[] = [];
+  for (let i = ia; ; i = (i + 1) % m) { c1.push(p[i]!); if (i === ib) break; }
+  for (let i = ib; ; i = (i + 1) % m) { c2.push(p[i]!); if (i === ia) break; }
+  c2.reverse();
+  const na = c1.length, nb = c2.length;
+  if (na < 2 || nb < 2) return false;
+  let i = 0, j = 0;
+  while (i < na - 1 || j < nb - 1) {
+    if (j >= nb - 1 || (i < na - 1 && (i + 1) / na <= (j + 1) / nb)) {
+      emitTri(verts, faceIds, c1[i]!, c1[i + 1]!, c2[j]!, fid, surface, sign); i++;
+    } else {
+      emitTri(verts, faceIds, c1[i]!, c2[j + 1]!, c2[j]!, fid, surface, sign); j++;
+    }
+  }
+  return true;
+}
+
+/**
  * Thin ANNULAR sliver: a face bounded by two SEPARATE closed-ring loops (an outer circle and a
  * concentric inner circle) that lie within `tol` of each other everywhere — a sub-tolerance flat
  * washer a CAD kernel leaves between two coincident rims (the knife-edge annulus that caps a Voron
@@ -2431,7 +2493,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       let ok = false;
       const outer = face.loops.find((l) => l.outer) ?? face.loops[0];
       if (outer && face.loops.length === 1 && solid.faces.length > 1
-        && tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005)) {
+        && (tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005)
+          || tessellateThinStrip(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.03))) {
         ok = true; // degenerate sub-resolution sliver/crack ribbon-stitched (returns false if not thin)
       } else if (face.loops.length === 2 && solid.faces.length > 1
         && tessellateThinRing(surface, face.loops, sampled, face.faceId, verts, faceIds, sign, 0.015)) {
