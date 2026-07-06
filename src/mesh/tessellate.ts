@@ -1645,16 +1645,19 @@ function tessellateThinStrip(
     const poly = oe.orient ? base : base.slice().reverse();
     for (let i = 0; i < poly.length - 1; i++) p.push(poly[i]!);
   }
-  // Only a LONG thin strip — enough boundary points that the CDT genuinely can't seat interior and
-  // drops the rail constraints. A short sub-tolerance sliver (a tiny degenerate quad, a few points)
-  // triangulates trivially in the grid and must NOT be re-stitched: its rails are too short for the
-  // ribbon to close its ends reliably, and the grid already meshes it watertight (VORONDESIGN
-  // XY-Endstop's 4–14-point crumb faces). The 6020 crescents run 31 points over 90mm.
-  const m = p.length; if (m < 16) return false;
+  const m = p.length; if (m < 4) return false;
+  // Only stitch when the grid genuinely CAN'T: the boundary self-intersects in (u,v). Two nearly-
+  // coincident rails (curved sliver) cross their own chords, which the CDT cannot realise — the exact
+  // faces that come out untriangulated or MISSING (Toolhead Revo's 5-pt sliver crosses twice, the
+  // 6020 crescents 28×). A SIMPLE boundary (a clean thin quad, however sub-tolerance) triangulates
+  // fine in the grid and must be left to it — re-stitching it would open the ribbon's short-rail ends
+  // (VORONDESIGN XY-Endstop's crumb faces cross zero times and regressed under a point-count gate).
+  const p2 = p.map((q) => surface.project(q));
+  if (countSelfIntersections(p2) === 0) return false;
   const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
   let per = 0; for (let i = 0; i < m; i++) per += d3(p[i]!, p[(i + 1) % m]!);
   let a2 = 0;
-  for (let i = 0, j = m - 1; i < m; j = i++) { const pi = surface.project(p[i]!), pj = surface.project(p[j]!); a2 += (pj[0] + pi[0]) * (pj[1] - pi[1]); }
+  for (let i = 0, j = m - 1; i < m; j = i++) { a2 += (p2[j]![0] + p2[i]![0]) * (p2[j]![1] - p2[i]![1]); }
   const width = (Math.abs(a2)) / Math.max(1e-9, per); // = 2·(|a2|/2)/perimeter
   if (width > tol) return false;
   // Split at the two most-distant vertices (the strip ends), as tessellateThinFace does.
