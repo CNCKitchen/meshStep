@@ -19,6 +19,7 @@ import type { Surface } from "../geom/surfaces.ts";
 import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
 import { sampleEdgePolyline } from "../geom/curves.ts";
 import { constrainedTriangulate } from "./cdt2d.ts";
+import { earcut } from "./earcut.ts";
 
 const TWO_PI = Math.PI * 2;
 
@@ -644,6 +645,17 @@ function tessellateParamGrid(
     // mesh between the shared rails (OpenVessel counterbore tubes).
     verts.length = v0; faceIds.length = f0;
     if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true) || overCovered()) {
+      verts.length = v0; faceIds.length = f0;
+      // The un-refined base CDT still folds — a STRUCTURAL fold. On a PLANE the (u,v)->3D map is
+      // affine, so the region can be filled watertight without any parity flood: bridge every hole
+      // into the outer boundary and ear-clip (earcut). This rescues the multi-loop tray / embossed-
+      // text plane faces whose flood misclassifies in/out (z_bed mirror, Meanwell, Front_Skirt_Logo).
+      // A curved-surface fold (OpenVessel counterbore tubes) can't use a planar clip — it keeps
+      // falling through to the caller's rail-ribbon fallback.
+      if (surface.kind === "PLANE" && planeEarcutFill(surface, outer, holes, fid, verts, faceIds, sign)) {
+        if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT: earcut hole-bridge fill (structural multi-loop plane)`);
+        return true;
+      }
       if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT rollback (boundary segment over-covered)`);
       verts.length = v0; faceIds.length = f0; return false;
     }
@@ -685,6 +697,35 @@ function tessellateParamGrid(
       if (DBG && over === 0) console.error(`[grid] fid=${fid} self-overlap surgery: dropped ${guard} folded triangle(s)`);
     }
   }
+  return true;
+}
+
+/** Watertight fallback for a PLANE face whose CDT parity flood folded (structural multi-loop
+ * over-coverage): bridge every hole into the outer boundary and ear-clip in (u,v). Valid ONLY for a
+ * plane (affine (u,v)->3D); each triangle is re-oriented by emitTri against the surface normal, so
+ * the ear-clip winding is immaterial. Returns false if the clip produced nothing (leaves the face to
+ * the caller's ribbon fallback). No interior points are added — a flat face needs none for accuracy;
+ * the remesh pass refines size later if required. */
+function planeEarcutFill(
+  surface: Surface, outer: { p3: Vec3[]; p2: P2[] }, holes: { p3: Vec3[]; p2: P2[] }[], fid: number,
+  verts: number[], faceIds: number[], sign: number,
+): boolean {
+  const flat: number[] = [];
+  const p3: Vec3[] = [];
+  for (let i = 0; i < outer.p2.length; i++) { flat.push(outer.p2[i]![0], outer.p2[i]![1]); p3.push(outer.p3[i]!); }
+  const holeStarts: number[] = [];
+  for (const h of holes) {
+    if (h.p2.length < 3) continue; // a degenerate hole contributes no area — skip it, keep the rest
+    holeStarts.push(flat.length / 2);
+    for (let i = 0; i < h.p2.length; i++) { flat.push(h.p2[i]![0], h.p2[i]![1]); p3.push(h.p3[i]!); }
+  }
+  const tri = earcut(flat, holeStarts.length ? holeStarts : null);
+  if (tri.length === 0) return false;
+  const v0 = verts.length, f0 = faceIds.length;
+  for (let t = 0; t < tri.length; t += 3) {
+    emitTri(verts, faceIds, p3[tri[t]!]!, p3[tri[t + 1]!]!, p3[tri[t + 2]!]!, fid, surface, sign);
+  }
+  if (verts.length === v0) { faceIds.length = f0; return false; }
   return true;
 }
 
