@@ -620,19 +620,34 @@ function tessellateParamGrid(
   }
   const used = new Map<string, number>();
   const all = new Map<string, number>();
-  for (let t = v0; t < verts.length; t += 9) {
-    for (let e = 0; e < 3; e++) {
-      const i1 = t + e * 3, i2 = t + ((e + 1) % 3) * 3;
-      const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
-      if (bound.has(k)) used.set(k, (used.get(k) ?? 0) + 1);
-      all.set(k, (all.get(k) ?? 0) + 1);
+  // (Re)tally this face's emitted triangle edges and return whether any boundary segment is
+  // OVER-covered (proof of a fold). Rebuilds `used`/`all` in place so the surgery below sees them.
+  const overCovered = (): boolean => {
+    used.clear(); all.clear();
+    for (let t = v0; t < verts.length; t += 9) {
+      for (let e = 0; e < 3; e++) {
+        const i1 = t + e * 3, i2 = t + ((e + 1) % 3) * 3;
+        const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
+        if (bound.has(k)) used.set(k, (used.get(k) ?? 0) + 1);
+        all.set(k, (all.get(k) ?? 0) + 1);
+      }
     }
-  }
-  for (const [k, m] of bound) {
-    if ((used.get(k) ?? 0) > m) {
+    for (const [k, m] of bound) if ((used.get(k) ?? 0) > m) return true;
+    return false;
+  };
+  if (overCovered()) {
+    // The fold is usually introduced by the Delaunay REFINEMENT (its inserted circumcentres push the
+    // re-CDT into filling across a hole on a multi-loop plane — z_bed/z_stepper trays); the un-refined
+    // base CDT is fold-free. Retry once with refinement disabled before handing off to the fallback,
+    // so a valid (coarser) mesh replaces an empty face. If the un-refined grid still over-covers, the
+    // fold is structural (a genuinely folded projection) — roll back and let the rail-ribbon fallback
+    // mesh between the shared rails (OpenVessel counterbore tubes).
+    verts.length = v0; faceIds.length = f0;
+    if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true) || overCovered()) {
       if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT rollback (boundary segment over-covered)`);
       verts.length = v0; faceIds.length = f0; return false;
     }
+    if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT: un-refined retry is fold-free`);
   }
   // SELF-OVERLAP SURGERY: a valid single-face triangulation is a disk — no 3D edge belongs to more
   // than two of its own triangles. Three or more means the projection folded and the CDT laid a
@@ -678,7 +693,7 @@ function tessellateParamGrid(
 function gridCDT(
   surface: Surface, outer: { p3: Vec3[]; p2: P2[] }, holes: { p3: Vec3[]; p2: P2[] }[], fid: number,
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
-  allowAniso = true,
+  allowAniso = true, noRefine = false,
 ): boolean {
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
   for (const q of outer.p2) {
@@ -883,7 +898,7 @@ function gridCDT(
   // thread rails, tens of thousands of samples) that multiplies an already-fine mesh for minutes.
   // Those boundaries are far below the size field everywhere — refinement has nothing real to add.
   const nBoundaryPts = outerIdx.length + holeIdx.reduce((s, h) => s + h.length, 0);
-  const maxIter = nBoundaryPts > 20000 ? 0 : nBoundaryPts > 8000 ? 1 : 4;
+  const maxIter = noRefine ? 0 : nBoundaryPts > 20000 ? 0 : nBoundaryPts > 8000 ? 1 : 4;
   // A refinement iteration may never trade a fully-constrained triangulation for a rescued one.
   // Inserted circumcentres can push the re-run CDT into a collinear degeneracy (a straight boundary
   // rail on a coarse periodic band) where a constraint becomes unrealisable; the ear-clip rescue
