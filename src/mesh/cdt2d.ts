@@ -423,7 +423,7 @@ function enforceByRetriangulation(tris: Tri[], pts: P2[], free: number[], a: num
     }
   }
   if (!crossed.length || crossed.length > 64) {
-    if (DBG) console.error(`[cdt]     enforce ${a}-${b}: bail crossed=${crossed.length}`);
+    if (DBG) console.error(`[cdt]     enforce ${a}-${b}: bail crossed=${crossed.length}${process.env.MESHSTEP_SLICEDBG ? ` A=(${PA[0]},${PA[1]}) B=(${PB[0]},${PB[1]})` : ""}`);
     return false; // huge/empty cavity = degenerate seam — leave it
   }
   // Boundary edges of the cavity = edges of crossed triangles not shared by two crossed triangles.
@@ -549,12 +549,80 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // and trips fold audits on other faces — one pass, like it always was.)
   const present = new Set<number>();
   for (let t = 0; t < tris.length; t++) { const T = tris[t]!; if (T.dead) continue; for (let e = 0; e < 3; e++) present.add(ckey(T.v[e]!, T.v[(e + 1) % 3]!)); }
-  let unrealized = 0;
+  // COLLINEAR PASS-THROUGH: a vertex sitting exactly ON a constraint blocks it — no edge can cross
+  // a vertex, so the flip pass finds nothing to flip (crossed=0) and the cavity rescue has no
+  // cavity. When the triangulation already contains the full chain of edges a→X…→b along the
+  // segment, the constraint IS realised by its collinear pieces: swap it for the pieces in the
+  // constraints set, so the parity flood treats them as boundary and the missing count stays
+  // honest (Pool_Nozzle's cone rim: an out-and-back boundary revisits the rim row and parks a
+  // vertex exactly on another rim segment).
+  const chainSplit = (ck: number): boolean => {
+    const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
+    const A = pts[a]!, B = pts[b]!;
+    const abx = B[0] - A[0], aby = B[1] - A[1];
+    const len2 = abx * abx + aby * aby;
+    if (len2 < 1e-30) return false;
+    // Duplicate-vertex equivalence first: an out-and-back boundary visits the same (u,v) twice
+    // with two point indices; the CDT realises the edge between ONE pairing of the duplicates and
+    // the constraint references the other. A geometrically-identical realised edge counts.
+    const eps2 = 1e-18 * len2;
+    const eqOf = (i: number): number[] => {
+      const Q = pts[i]!;
+      const out = [i];
+      for (let v = 0; v < pts.length; v++) {
+        if (v === i) continue;
+        const P = pts[v]!;
+        const dx = P[0] - Q[0], dy = P[1] - Q[1];
+        if (dx * dx + dy * dy <= eps2) out.push(v);
+      }
+      return out;
+    };
+    const Ea = eqOf(a), Eb = eqOf(b);
+    if (Ea.length > 1 || Eb.length > 1) {
+      for (const va of Ea) {
+        for (const vb of Eb) {
+          const k2 = ckey(va, vb);
+          if (k2 !== ck && present.has(k2)) {
+            if (DBG && process.env.MESHSTEP_SLICEDBG) console.error(`[cdt]     chainSplit ${a}-${b}: realised by duplicate pair ${va}-${vb}`);
+            constraints.add(k2);
+            constraints.delete(ck);
+            return true;
+          }
+        }
+      }
+    }
+    const mid: { t: number; v: number }[] = [];
+    for (let v = 0; v < pts.length; v++) {
+      if (v === a || v === b) continue;
+      const P = pts[v]!;
+      const t = ((P[0] - A[0]) * abx + (P[1] - A[1]) * aby) / len2;
+      if (t <= 1e-9 || t >= 1 - 1e-9) continue;
+      const dx = P[0] - (A[0] + t * abx), dy = P[1] - (A[1] + t * aby);
+      if (dx * dx + dy * dy > eps2) continue;
+      mid.push({ t, v });
+    }
+    if (!mid.length) return false;
+    mid.sort((p, q) => p.t - q.t);
+    const chain = [a, ...mid.map((m) => m.v), b];
+    for (let i = 0; i + 1 < chain.length; i++) {
+      if (!present.has(ckey(chain[i]!, chain[i + 1]!))) {
+        if (DBG && process.env.MESHSTEP_SLICEDBG) console.error(`[cdt]     chainSplit ${a}-${b}: piece ${chain[i]}-${chain[i + 1]} absent`);
+        return false;
+      }
+    }
+    for (let i = 0; i + 1 < chain.length; i++) constraints.add(ckey(chain[i]!, chain[i + 1]!));
+    constraints.delete(ck);
+    return true;
+  };
+  let unrealized = 0, chainRealized = 0;
   for (const ck of constraints) {
     if (present.has(ck)) continue;
     unrealized++;
     const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
-    enforceByRetriangulation(tris, pts, free, a, b, constraints);
+    // Cavity enforcement first — it realises the constraint EXACTLY whenever a cavity exists.
+    // Only when it can't (crossed=0: nothing to flip, no cavity to fill) fall back to accepting a
+    // geometrically-identical realisation (duplicate pair / collinear chain).
+    if (!enforceByRetriangulation(tris, pts, free, a, b, constraints) && chainSplit(ck)) chainRealized++;
   }
   if (DBG && Date.now() - dbgT0 > 500) {
     console.error(`[cdt] SLOW n=${n} constraints=${constraints.size} unrealized=${unrealized}: insert=${dbgT1 - dbgT0}ms force=${dbgT2 - dbgT1}ms enforce=${Date.now() - dbgT2}ms`);
@@ -605,7 +673,55 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   for (const ck of constraints) if (!edgeTris.has(ck)) missing++;
   if (out) out.missing = missing;
   if (DBG && missing > 0) console.error(`[cdt] missing=${missing}/${constraints.size} pts=${n} loops=[${loops.map((l) => l.length).join(",")}] interior=${interior.length} flood=${flood.length}`);
-  if (missing === 0) return flood;
+  if (missing === 0) {
+    if (chainRealized === 0 || loops.length !== 1) return flood;
+    // Constraints realised only by EQUIVALENCE (duplicate pair / collinear chain): the parity flood
+    // can still classify the region wrongly around the duplicated vertices — but the single-loop
+    // rescue can be wrong the OTHER way (it fills the out-and-back spike as a notch). Neither rule
+    // wins at every tolerance (Pool_Nozzle: flood correct at 0.002mm absolute, rescue correct at
+    // corpus-relative). Judge by OUTCOME: count coverage defects — a boundary segment covered ≠ 1×,
+    // any other edge covered ≠ 2× or once — and keep the cleaner candidate (flood wins ties).
+    const raw = new Set<number>();
+    for (const loop of loops) for (let i = 0; i < loop.length; i++) raw.add(ckey(loop[i]!, loop[(i + 1) % loop.length]!));
+    const defects = (cand: [number, number, number][]): number => {
+      const fe = new Map<number, number>();
+      for (const [a, b, c] of cand) for (const [x, y] of [[a, b], [b, c], [c, a]] as const) fe.set(ckey(x, y), (fe.get(ckey(x, y)) ?? 0) + 1);
+      let bad = 0;
+      for (const [k, cnt] of fe) {
+        const isB = raw.has(k) || constraints.has(k);
+        if (cnt === 1) { if (!isB) bad++; }
+        else if (cnt === 2) { if (isB) bad++; }
+        else bad += cnt - 2;
+      }
+      return bad;
+    };
+    let alt = boundaryFillWithInterior(points, loops[0]!, interior);
+    if (!alt || alt.length === 0) {
+      const simplified = dropMicroLoops(points, loops[0]!);
+      if (simplified) alt = boundaryFillWithInterior(points, simplified, interior);
+    }
+    if (!alt || alt.length === 0) alt = fanFill(points, loops[0]!);
+    // Geometric (centroid-in-polygon) classification is the third candidate — it was the winning
+    // path for these rings before equivalence-realisation existed (missing>0 used to fall through
+    // to it), and pnpoly is immune to the duplicated vertices that mislead the parity flood.
+    const outerPoly0 = loops[0]!.map((i) => points[i]!);
+    const geom0: [number, number, number][] = [];
+    for (let i = 0; i < tris.length; i++) {
+      const t = tris[i]!;
+      if (t.dead || t.v[0] >= n || t.v[1] >= n || t.v[2] >= n) continue;
+      const cxp = (points[t.v[0]]![0] + points[t.v[1]]![0] + points[t.v[2]]![0]) / 3;
+      const cyp = (points[t.v[0]]![1] + points[t.v[1]]![1] + points[t.v[2]]![1]) / 3;
+      if (pnpoly(cxp, cyp, outerPoly0)) geom0.push([t.v[0], t.v[1], t.v[2]]);
+    }
+    let best = flood, dBest = defects(flood), label = "flood";
+    for (const [name, cand] of [["rescue", alt], ["geom", geom0]] as const) {
+      if (!cand || cand.length === 0) continue;
+      const d = defects(cand);
+      if (d < dBest) { best = cand; dBest = d; label = name; }
+    }
+    if (DBG) console.error(`[cdt]   equivalence-realised: flood=${defects(flood)} rescue=${alt ? defects(alt) : "-"} geom=${defects(geom0)} -> ${label}`);
+    return best;
+  }
 
   // Constraints unrealised — the (u,v) embedding collapsed (a thin-sliver B-spline parameter domain
   // where distinct 3D points coincide / fall collinear, so the CDT triangulated across the boundary

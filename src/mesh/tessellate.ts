@@ -1928,17 +1928,43 @@ function tessellateConeSlice(
   const cone = surface as Surface & { r: number; sin: number };
   const apex = surface.evaluate(0, -cone.r / cone.sin);
   const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  // Classify edges GEOMETRICALLY, not by curve type: AP242-e2 writes every edge as a B-spline, so
+  // a ruling seam is recognised as a STRAIGHT polyline with one endpoint at the apex, and the rim
+  // is whatever remains — including a SLANTED-section rim (a drill-point cone cut by a part face,
+  // nist_ftc_07/10's countersinks: two B-spline "lines" forming the rim diameter split at the
+  // apex + a B-spline half-ellipse rim). The type-based version rejected those wedges to the param
+  // grid, which walks the diameter THROUGH the apex into negative-radius (u,v), tangles, and drops
+  // a constraint: 46 open edges per hole, ×16.
   const arcs: number[] = [], seams: number[] = [];
+  let typed = true; // all seams LINE-typed and the rim CIRCLE-typed (the original wedge shape)
   for (const oe of loop.edges) {
     const e = brep.edges.get(oe.edgeId); if (!e) return false;
+    const s = sampled.get(oe.edgeId);
+    if (!s || s.length < 2) return false;
     const kind = brep.table.typeOf(e.curveId);
-    if (kind === "CIRCLE") arcs.push(oe.edgeId);
-    else if (kind === "LINE") seams.push(oe.edgeId);
-    else return false; // some other boundary curve — not a clean cone slice
+    const tol = 1e-6 * Math.max(1, d3(e.v0, apex), d3(e.v1, apex));
+    let isSeam = d3(e.v0, apex) < tol || d3(e.v1, apex) < tol;
+    if (isSeam) {
+      const a = s[0]!, b = s[s.length - 1]!;
+      const len = d3(a, b);
+      if (len < 1e-9) isSeam = false;
+      else {
+        const inv = 1 / len;
+        const dx = (b[0] - a[0]) * inv, dy = (b[1] - a[1]) * inv, dz = (b[2] - a[2]) * inv;
+        for (const p of s) {
+          const px = p[0] - a[0], py = p[1] - a[1], pz = p[2] - a[2];
+          const t = px * dx + py * dy + pz * dz;
+          if (Math.hypot(px - t * dx, py - t * dy, pz - t * dz) > 1e-5 * len + 1e-9) { isSeam = false; break; }
+        }
+      }
+    }
+    if (isSeam) { seams.push(oe.edgeId); if (kind !== "LINE") typed = false; }
+    else { arcs.push(oe.edgeId); if (kind !== "CIRCLE") typed = false; }
   }
-  if (arcs.length !== 1 || seams.length !== 2) return false;
+  const bail = (why: string): false => { if (DBG && process.env.MESHSTEP_SLICEDBG) console.error(`[coneSlice] fid=${fid} bail: ${why}`); return false; };
+  if (arcs.length !== 1 || seams.length !== 2) return bail(`arcs=${arcs.length} seams=${seams.length}`);
   const arcEdge = brep.edges.get(arcs[0]!)!;
-  if (d3(arcEdge.v0, arcEdge.v1) < 1e-9) return false; // full circle -> tessellateCone / band
+  if (d3(arcEdge.v0, arcEdge.v1) < 1e-9) return bail("closed rim"); // full circle -> tessellateCone / band
   // Both seams must run to the apex.
   const apexTol = 1e-6 * Math.max(1, d3(apex, arcEdge.v0));
   const seamCol = (id: number): Vec3[] | null => {
@@ -1947,7 +1973,7 @@ function tessellateConeSlice(
     return d3(col[0]!, apex) <= apexTol ? col : null; // must start AT the apex
   };
   let Lc = seamCol(seams[0]!), Rc = seamCol(seams[1]!);
-  if (!Lc || !Rc || Lc.length !== Rc.length) return false; // asymmetric sampling -> param grid
+  if (!Lc || !Rc || Lc.length !== Rc.length) return bail(`seams: L=${Lc?.length ?? "far-from-apex"} R=${Rc?.length ?? "far-from-apex"} apexTol=${apexTol.toExponential(1)}`); // asymmetric sampling -> param grid
   const n = Lc.length;
   // Size cap: rings × arc samples has no interior grading (every ring keeps the full arc count all
   // the way to the apex), so a pathologically fine wedge would emit n·M·2 triangles unbounded.
@@ -1956,6 +1982,12 @@ function tessellateConeSlice(
   // 2,516 edges). nist_ctc_02's wedge fan still exceeds the JS array limit at 0.002mm absolute
   // tolerance with ANY mesher — that is a documented capacity limit, not this cap's job.
   if (n * (sampled.get(arcs[0]!)?.length ?? 0) > 2_000_000) return false;
+  // A GEOMETRICALLY-classified wedge (B-spline seams/rim, the ftc_07 countersink class) only
+  // qualifies while SMALL: the fan is ungraded (full arc count on every ring), and stealing
+  // ctc_04's ~280×760-sample wedges from the graded param grid — which handles them perfectly —
+  // multiplied its output 60× and overflowed the JS array limit. Type-classified CIRCLE+LINE
+  // wedges (ctc_01) keep the generous cap above, bit-for-bit.
+  if (!typed && n * (sampled.get(arcs[0]!)?.length ?? 0) > 50_000) return bail(`geometric wedge too large (${n}×${sampled.get(arcs[0]!)?.length}) — graded grid handles it`);
   // Arc samples, oriented so index 0 is at the left seam's rim end.
   let arc = sampled.get(arcs[0]!)!.slice();
   const Lrim = Lc[n - 1]!, Rrim = Rc[n - 1]!;
