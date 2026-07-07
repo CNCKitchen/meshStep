@@ -248,7 +248,7 @@ const percentile = (dists: Float64Array, p: number): number => {
 
 interface OccResult { soup: Soup; faceCount: number; shapes: number }
 
-async function occConvert(path: string, deflRel: number): Promise<OccResult | null> {
+async function occConvert(path: string, deflRel: number, angular = 0.35): Promise<OccResult | null> {
   const occtimportjs = require("occt-import-js");
   // OCC logs (e.g. "*** ERR StepReaderData ***") default to stdout and would corrupt
   // the JSON result stream — route them to stderr.
@@ -258,7 +258,7 @@ async function occConvert(path: string, deflRel: number): Promise<OccResult | nu
     linearUnit: "millimeter",
     linearDeflectionType: "bounding_box_ratio",
     linearDeflection: deflRel,
-    angularDeflection: 0.35,
+    angularDeflection: angular,
   });
   if (!r.success || !r.meshes?.length) return null;
   let nTris = 0, nFaces = 0;
@@ -526,8 +526,31 @@ export async function gapcheckOne(path: string, opts: GapOptions): Promise<Recor
   };
 
   // -- global sanity ratios --
-  const areaRatio = oursArea / occArea;
-  const volRatio = (rec.ours as { volume: number }).volume / (rec.occ as { volume: number }).volume;
+  // Area/volume are the only metrics where the REFERENCE's own discretisation error dominates: a
+  // 700mm bowden tube at 0.35rad angular deflection loses 3.7% of its volume (the cross-section
+  // polygon cuts corners) while every sampled point still lies on-surface — our mesh, capped at
+  // 15° normal deviation, keeps 0.1% (PTFE tube class, checked against the exact Pappus volume).
+  // Before judging a discrepancy, re-read the reference ONCE at fine angular deflection: if the
+  // refined reference agrees with our mesh the gap was reference noise; a real defect (inverted
+  // void, missing patch) stands at any reference resolution.
+  const oursVolume = (rec.ours as { volume: number }).volume;
+  let occAreaRef = occArea, occVolumeRef = (rec.occ as { volume: number }).volume;
+  if (Math.abs(oursArea / occAreaRef - 1) > 0.005 || Math.abs(oursVolume / occVolumeRef - 1) > 0.005) {
+    console.error("[stage] occ-refine");
+    try {
+      const fine = await occConvert(path, opts.occDeflRel, 0.1);
+      if (fine) {
+        let a = 0;
+        for (let t = 0; t < fine.soup.nTris; t++) a += triArea(fine.soup.tris, t * 9);
+        const v = Math.abs(soupVolume(fine.soup.tris));
+        (rec.occ as Record<string, unknown>).refined = { tris: fine.soup.nTris, area: a, volume: v };
+        occAreaRef = a;
+        occVolumeRef = v;
+      }
+    } catch { /* refinement is best-effort — keep the coarse reference */ }
+  }
+  const areaRatio = oursArea / occAreaRef;
+  const volRatio = oursVolume / occVolumeRef;
   rec.areaRatio = areaRatio;
   rec.volRatio = volRatio;
 
