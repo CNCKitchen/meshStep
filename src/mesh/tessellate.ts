@@ -35,6 +35,10 @@ export interface TessOptions {
   targetEdge?: number;
   /** Max normal turn across an edge (radians) — drives curvature-adaptive interior density. */
   normalDev?: number;
+  /** Called once per face with the mesher that produced it ("grid", "band", "thinRing",
+   * "untriangulated", …). Characterization hook: the fallback dispatch order is semantic, and this
+   * makes "which mesher handled which face class" testable instead of tribal knowledge. */
+  trace?: (faceId: number, mesher: string) => void;
 }
 
 export interface MeshResult {
@@ -2470,6 +2474,13 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const chordTol = opts.chordTol ?? 0.01;
   const targetEdge = opts.targetEdge ?? 1.0;
   const normalDev = opts.normalDev ?? (15 * Math.PI / 180);
+  const trace = opts.trace;
+  /** Tag a dispatch outcome: report which mesher took the face (on success) to the trace hook
+   * and the MESHSTEP_DEBUG log, and pass the result through unchanged. */
+  const mark = (fid: number, n: string, r: boolean): boolean => {
+    if (r) { trace?.(fid, n); if (DBG) console.error(`[dispatch] fid=${fid} -> ${n}`); }
+    return r;
+  };
   const skipped: Record<string, number> = {};
   let facesTotal = 0;
   let facesTessellated = 0;
@@ -2588,18 +2599,18 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       let ok = false;
       const outer = face.loops.find((l) => l.outer) ?? face.loops[0];
       if (outer && face.loops.length === 1 && solid.faces.length > 1
-        && (tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005)
-          || tessellateThinStrip(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.03))) {
+        && (mark(face.faceId, "thinFace", tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005))
+          || mark(face.faceId, "thinStrip", tessellateThinStrip(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.03)))) {
         ok = true; // degenerate sub-resolution sliver/crack ribbon-stitched (returns false if not thin)
       } else if (face.loops.length === 2 && solid.faces.length > 1
-        && tessellateThinRing(surface, face.loops, sampled, face.faceId, verts, faceIds, sign, 0.015)) {
+        && mark(face.faceId, "thinRing", tessellateThinRing(surface, face.loops, sampled, face.faceId, verts, faceIds, sign, 0.015))) {
         ok = true; // sub-tolerance annular sliver (two near-coincident rims) ribbon-stitched
       } else if (isSphere(surface)) {
         // A full sphere is its solid's only face (degenerate seam loop); trimmed spheres
         // (e.g. roundedCube corners) are one of many faces -> param grid.
         if (solid.faces.length === 1) {
           tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds);
-          ok = true;
+          ok = mark(face.faceId, "sphereFull", true);
         } else if (outer) {
           // A cap closing to a pole (sole full-longitude parallel rim) fans to the pole; any other
           // spherical patch returns false from the cap mesher and uses the param grid — with the
@@ -2610,14 +2621,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           // or fans from the hole's rim and leaves the real shared rim fully open. A multi-loop
           // sphere zone is a revolution band like any other: band -> unroll -> param grid.
           const single = face.loops.length === 1;
-          ok = (single && tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign))
-            || (!single && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || (!single && tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || tessellateParamGrid(reorientSphere(surface, face.loops, sampled), face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign);
+          ok = (single && mark(face.faceId, "sphereCap", tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+            || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (!single && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, face.loops, sampled), face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign));
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
-        && (tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length)
-          || tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign))) {
+        && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))
+          || mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign)))) {
         ok = true; // genuine apex cone or apex wedge slice; frustums/trimmed cones use the param grid
       } else if (isBSpline(surface)) {
         // A standalone closed B-spline body (its solid's only face) has no usable trimming loop ->
@@ -2630,11 +2641,11 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         // cut that dome's bulge 4.5mm deep.
         const per = !!(surface.periodicU || surface.periodicV);
         ok = (solid.faces.length === 1 && (surface.closedU || surface.closedV))
-          ? tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)
-          : (!!outer && (tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)
-            || (per && tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || (per && tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign)));
+          ? mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds))
+          : (!!outer && (mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            || (per && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (per && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign))));
       } else if (outer) {
         // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
         //  1. band: rims are bare full-period circles (no seam edges, e.g. Onshape) with NO other
@@ -2643,14 +2654,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         //     domain and CDT with the windows as holes. Bails unless there are exactly two rims.
         //  3. param grid: everything with a proper seam-bounded outer loop (the common case).
         const periodic = surface.periodicU || surface.periodicV;
-        const dbgWhich = DBG ? (n: string, r: boolean): boolean => { if (r) console.error(`[dispatch] fid=${face.faceId} -> ${n}`); return r; } : (n: string, r: boolean): boolean => r;
-        ok = (periodic && dbgWhich("band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || (periodic && dbgWhich("unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || dbgWhich("grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-          || dbgWhich("ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign));
+        ok = (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (periodic && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign));
       }
       if (ok) facesTessellated++;
       else {
+        trace?.(face.faceId, "untriangulated");
         if (DBG) console.error(`[tess] UNTRIANGULATED fid=${face.faceId} kind=${face.surfaceKind} loops=${face.loops.map((l) => l.edges.length).join("/")}`);
         bump(skipped, "untriangulated");
       }

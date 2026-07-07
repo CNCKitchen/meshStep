@@ -79,6 +79,8 @@ export interface ImportOptions {
   /** Max edge length, mm (Fusion "Maximum Edge Length"). Default 1. */
   maxEdge?: number;
   remeshIterations?: number;
+  /** Diagnostic hook: called once per B-rep face with the mesher that produced it. */
+  trace?: TessOptions["trace"];
 }
 
 /** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
@@ -92,7 +94,7 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   // even without remeshing. The robust CDT handles the resulting dense/collinear boundaries.
   // maxEdge is a pure upper CAP on segment length — it must never loosen the chord tolerance
   // (a CAD-style export sets a huge max edge to mean "follow curvature", not "coarsen 20×").
-  const tess: TessOptions = { chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad };
+  const tess: TessOptions = { chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad, trace: opts.trace };
   const result = tessellate(brep, tess);
   // Assembly placements per solid (empty for a single part); applied to the final mesh below.
   // A part with N occurrences carries N frames and is replicated after meshing.

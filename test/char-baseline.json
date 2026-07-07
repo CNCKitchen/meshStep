@@ -1,0 +1,186 @@
+{
+  "chamferFillet": {
+    "hash": "709d5fbdf2f91fff6ad4a3cca4e4aacd3f22b8aa673d227e70bc6536db297069",
+    "verts": 28390,
+    "tris": 56776,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 103225.687,
+    "dispatch": {
+      "grid": 27
+    },
+    "skipped": {}
+  },
+  "cone": {
+    "hash": "583d3c63f04279dc0655517470cd29e6765cd741006be220492ac51deadd7541",
+    "verts": 1680,
+    "tris": 3356,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 2090.53,
+    "dispatch": {
+      "cone": 1,
+      "grid": 1
+    },
+    "skipped": {}
+  },
+  "cube": {
+    "hash": "89be59829c87efdff31ed3e6d78265d0e6f2fc900888f1d4946b902716f2d56c",
+    "verts": 4402,
+    "tris": 8800,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 8000,
+    "dispatch": {
+      "grid": 6
+    },
+    "skipped": {}
+  },
+  "cylinder": {
+    "hash": "63116f3662b0cc1358885b178b218193f91a8879ccefbb36d5541e82cdaa11bc",
+    "verts": 3913,
+    "tris": 7822,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 6280.783,
+    "dispatch": {
+      "grid": 3
+    },
+    "skipped": {}
+  },
+  "cylinderWithHole": {
+    "hash": "322dffca62439b72a06bb2b6ac2184371849bc39dd540c25e5a91d49fca4dfd7",
+    "verts": 5505,
+    "tris": 11010,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 4762.172,
+    "dispatch": {
+      "grid": 4
+    },
+    "skipped": {}
+  },
+  "everything": {
+    "hash": "c4a2c6165d948008700aa445b106c9d57cc9d254169c4cf9992be80f83cc517c",
+    "verts": 68356,
+    "tris": 136696,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 27707.329,
+    "dispatch": {
+      "bsplineFull": 1,
+      "cone": 1,
+      "grid": 31,
+      "sphereFull": 1
+    },
+    "skipped": {}
+  },
+  "GoProHandlePod": {
+    "hash": "c4750bee0dd7acacacf895398aafddd9d634880fef4dc95d085de27257dea270",
+    "verts": 326265,
+    "tris": 652538,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 34353.955,
+    "dispatch": {
+      "grid": 121
+    },
+    "skipped": {}
+  },
+  "Insta360GO3_case": {
+    "hash": "2b51a10ee371aec78419e44513af84b64eecb9c8914b2386854aad5513fe267a",
+    "verts": 28214,
+    "tris": 56448,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 5324.159,
+    "dispatch": {
+      "grid": 151
+    },
+    "skipped": {}
+  },
+  "LampenHalter": {
+    "hash": "2a12c79576d554af9a38bbf637c741df30af458860fcdf7ac8eb96b67343c7b7",
+    "verts": 9794,
+    "tris": 19596,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 5614.633,
+    "dispatch": {
+      "grid": 95
+    },
+    "skipped": {}
+  },
+  "MicHolder_Inserts": {
+    "hash": "b534b28a29d323cc78b20cecbd5069cf9c8ccb80ef16e59233e36ef34504125a",
+    "verts": 76261,
+    "tris": 152522,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 82619.741,
+    "dispatch": {
+      "grid": 112
+    },
+    "skipped": {}
+  },
+  "roundedCube": {
+    "hash": "116701aa2dc8b50bb13cf3e4f10957d8cc5f67577367fe4fada75022c265f87d",
+    "verts": 7238,
+    "tris": 14472,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 7802.4,
+    "dispatch": {
+      "grid": 26
+    },
+    "skipped": {}
+  },
+  "sphere": {
+    "hash": "a4f94aa76cbf517504e0215a42cf205b32b8717ff51ea0eaa1c07dbf82a0eaa6",
+    "verts": 1612,
+    "tris": 3220,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 4173.681,
+    "dispatch": {
+      "sphereFull": 1
+    },
+    "skipped": {}
+  },
+  "splineThing": {
+    "hash": "08c4d845bbec1ed9ece1e3fad5520d6e6b18ee977949028a34e6d795cba9a4b4",
+    "verts": 52321,
+    "tris": 104638,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 8878.546,
+    "dispatch": {
+      "bsplineFull": 1
+    },
+    "skipped": {}
+  },
+  "SquAIRPot": {
+    "hash": "676838e9b3dae3f6fbd9a642c22ff104f110fc0db235b074084823ab4a6de3c4",
+    "verts": 69655,
+    "tris": 139306,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 118526.855,
+    "dispatch": {
+      "grid": 188
+    },
+    "skipped": {}
+  },
+  "tool": {
+    "hash": "df9beb0f4ee09090e1fd9dd46834e2c3c4e1897430bd4ab1b902a7a2da0e54c8",
+    "verts": 29677,
+    "tris": 59354,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 2437.992,
+    "dispatch": {
+      "grid": 233
+    },
+    "skipped": {}
+  }
+}
