@@ -34,27 +34,30 @@ export function buildSoupGeometry(positions: Float64Array | Float32Array): THREE
 export function boundaryEdges(mesh: RawMesh): { positions: Float32Array; count: number } {
   const idx = mesh.indices;
   const pos = mesh.positions;
-  const useCount = new Map<string, number>();
-  const key = (a: number, b: number) => (a < b ? a * 4294967296 + b : b * 4294967296 + a).toString(36);
+  const useCount = new Map<number, number>();
+  // Same packing as src/mesh/orient.ts: exact for vertex ids below 2^26 (~67M). The old
+  // a*2^32+b key exceeded 2^53 from ~2M vertices up and silently collided.
+  const KEY = 0x4000000;
+  const key = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
 
   for (let t = 0; t < idx.length; t += 3) {
     const a = idx[t]!, b = idx[t + 1]!, c = idx[t + 2]!;
-    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
-      const k = key(u, v);
-      useCount.set(k, (useCount.get(k) ?? 0) + 1);
-    }
+    const k0 = key(a, b), k1 = key(b, c), k2 = key(c, a);
+    useCount.set(k0, (useCount.get(k0) ?? 0) + 1);
+    useCount.set(k1, (useCount.get(k1) ?? 0) + 1);
+    useCount.set(k2, (useCount.get(k2) ?? 0) + 1);
   }
 
   // Second pass: collect the actual vertex pairs for edges used once.
   const out: number[] = [];
+  const emit = (u: number, v: number): void => {
+    if (useCount.get(key(u, v)) !== 1) return;
+    out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
+    out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
+  };
   for (let t = 0; t < idx.length; t += 3) {
     const a = idx[t]!, b = idx[t + 1]!, c = idx[t + 2]!;
-    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
-      if (useCount.get(key(u, v)) === 1) {
-        out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
-        out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
-      }
-    }
+    emit(a, b); emit(b, c); emit(c, a);
   }
   return { positions: new Float32Array(out), count: out.length / 6 };
 }

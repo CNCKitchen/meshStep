@@ -13,13 +13,13 @@ for (const solid of brep.solids) {
     const surf = makeSurface(brep.table, face.surfaceId, s, brep.units.radPerAngle);
     if (!surf) { console.log(`face ${face.faceId}: makeSurface null`); continue; }
     // BOUNDARY CONTAINMENT: does the surface pass through its own trim-edge endpoints?
-    let maxBnd = 0; let bndAt: number[] = [];
+    let maxBnd = 0; let bndAt: readonly number[] = [];
     for (const loop of (face as any).loops ?? []) {
       for (const oe of loop.edges ?? []) {
         const e = brep.edges.get(oe.edgeId);
         if (!e) continue;
-        for (const pt of [e.v0, e.v1] as number[][]) {
-          const [pu, pv] = surf.project(pt as any);
+        for (const pt of [e.v0, e.v1]) {
+          const [pu, pv] = surf.project(pt);
           const q = surf.evaluate(pu, pv);
           const d = Math.hypot(q[0] - pt[0]!, q[1] - pt[1]!, q[2] - pt[2]!);
           if (d > maxBnd) { maxBnd = d; bndAt = pt; }
@@ -45,7 +45,7 @@ for (const solid of brep.solids) {
     // radial preservation: evaluate at fixed v across u must keep constant distance to axis
     const A = (surf as any).A, D = (surf as any).D;
     if (A && D) {
-      const radialOf = (p: number[]): number => {
+      const radialOf = (p: readonly number[]): number => {
         const w = [p[0] - A[0], p[1] - A[1], p[2] - A[2]];
         const a = w[0] * D[0] + w[1] * D[1] + w[2] * D[2];
         return Math.hypot(w[0] - a * D[0], w[1] - a * D[1], w[2] - a * D[2]);

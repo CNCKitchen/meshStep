@@ -1,0 +1,15 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    // Source imports use ".ts" specifiers (strip-types style); emit rewrites them to ".js"
+    // so the published dist/ is plain ESM importable from Node without a loader.
+    "rewriteRelativeImportExtensions": true
+  },
+  "include": ["src"]
+}

@@ -25,8 +25,8 @@ for (const solid of brep.solids) {
         if (!e) { kinds.push("?"); continue; }
         const ck = brep.table.typeOf(e.curveId) ?? "(complex)";
         kinds.push(ck.replace(/_CURVE.*/, "").slice(0, 8));
-        for (const pt of [e.v0, e.v1] as number[][]) {
-          const [pu, pv] = surf.project(pt as any);
+        for (const pt of [e.v0, e.v1]) {
+          const [pu, pv] = surf.project(pt);
           uMin = Math.min(uMin, pu); uMax = Math.max(uMax, pu);
           vMin = Math.min(vMin, pv); vMax = Math.max(vMax, pv);
         }

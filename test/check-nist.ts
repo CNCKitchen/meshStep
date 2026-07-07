@@ -17,7 +17,7 @@ function producer(src: string): string {
   return m ? m[1]!.slice(0, 28) : "?";
 }
 
-function meshStats(I: Uint32Array | number[], P: Float32Array | number[]) {
+function meshStats(I: Uint32Array | number[], P: Float32Array | Float64Array | number[]) {
   const nt = I.length / 3, und = new Map<string, number>();
   let sl = 0;
   for (let t = 0; t < nt; t++) {

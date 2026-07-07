@@ -1,21 +1,43 @@
 {
   "name": "meshstep",
   "version": "0.1.0",
-  "description": "STEP -> watertight process-grade mesh importer (analytic + NURBS surfaces, assemblies) for bumpmesh & infeall. Pure TypeScript, zero runtime dependencies, no WASM.",
+  "description": "STEP -> watertight process-grade mesh importer (analytic + NURBS surfaces, assemblies). Pure TypeScript, zero runtime dependencies, no WASM.",
   "type": "module",
   "license": "AGPL-3.0-only",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.18"
   },
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "src",
+    "README.md"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CNCKitchen/meshStep.git"
+  },
+  "homepage": "https://github.com/CNCKitchen/meshStep#readme",
+  "bugs": {
+    "url": "https://github.com/CNCKitchen/meshStep/issues"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
     "test": "node test/convert.ts",
+    "test:stl": "node test/stl-roundtrip.ts",
+    "char": "node test/char.ts",
     "inspect": "node test/inspect.ts",
     "entities": "node test/step-inspect.ts",
     "gapcheck": "node test/gapcheck.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm run build && npm run test:stl"
   },
   "keywords": [
     "step",
@@ -25,11 +47,12 @@
     "tessellation",
     "isotropic-remesh",
     "stl",
-    "3mf",
     "cad"
   ],
   "author": "CNC Kitchen",
   "devDependencies": {
-    "occt-import-js": "^0.0.23"
+    "@types/node": "^26.1.0",
+    "occt-import-js": "^0.0.23",
+    "typescript": "^6.0.3"
   }
 }

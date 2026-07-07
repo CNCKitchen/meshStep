@@ -57,7 +57,10 @@ export function readBinarySTL(bytes: Uint8Array): TriSoup {
 
 export function readAsciiSTL(text: string): TriSoup {
   const nums: number[] = [];
-  const re = /vertex\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)\s+(-?[\d.eE+]+)/g;
+  // Full float syntax including negative exponents ("1.234e-05"): a class like [\d.eE+] without
+  // "-" fails on the exponent sign and silently drops the whole vertex.
+  const F = String.raw`([-+]?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?)`;
+  const re = new RegExp(String.raw`vertex\s+${F}\s+${F}\s+${F}`, "g");
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     nums.push(parseFloat(m[1]!), parseFloat(m[2]!), parseFloat(m[3]!));
