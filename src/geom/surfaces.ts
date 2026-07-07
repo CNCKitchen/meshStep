@@ -419,29 +419,37 @@ class RevolutionSurface implements Surface {
 }
 
 // ---- B-spline (NURBS) surface --------------------------------------------------------------
-// Tensor-product de Boor on a single control row of homogeneous (wx,wy,wz,w) 4-vectors.
-// `span`/`base`: evaluate around an externally found knot span when `ctrl` holds only the rows
-// base..base+degree of the full net (evaluateRaw passes the u-span so unused rows are never built).
-function deBoorH(degree: number, ctrl: number[][], knots: number[], u: number, span?: number, base = 0): number[] {
-  let k: number;
-  if (span === undefined) {
-    const n = ctrl.length - 1;
-    k = degree;
-    while (k < n && knots[k + 1]! <= u) k++;
-  } else k = span;
-  const d: number[][] = [];
-  for (let j = 0; j <= degree; j++) d[j] = ctrl[k - degree + j - base]!.slice();
+// Tensor-product de Boor on homogeneous (wx,wy,wz,w) 4-vectors, flat-buffer edition: the old
+// array-of-arrays version allocated ~12 arrays per call and evaluateRaw is the hottest geometry
+// path in the pipeline. The triangle runs in place over module-level scratch (single-threaded).
+function findSpan(degree: number, nCtrl: number, knots: number[], u: number): number {
+  const nmax = nCtrl - 1;
+  let k = degree;
+  while (k < nmax && knots[k + 1]! <= u) k++;
+  return k;
+}
+
+/** In-place de Boor triangle around knot span k. On entry dst[j*4..j*4+3] holds the control
+ * 4-vectors of span rows k-degree..k; the result lands at dst[degree*4..]. Descending-j updates
+ * read d[j-1] before it is touched this pass — identical arithmetic order to the old version. */
+function deBoorTri(degree: number, knots: number[], u: number, k: number, dst: Float64Array): void {
   for (let r = 1; r <= degree; r++) {
     for (let j = degree; j >= r; j--) {
       const i = k - degree + j;
       const lo = knots[i]!, hi = knots[i + degree - r + 1]!;
       const a = hi > lo ? (u - lo) / (hi - lo) : 0;
-      const p = d[j - 1]!, q = d[j]!;
-      d[j] = [p[0]! + (q[0]! - p[0]!) * a, p[1]! + (q[1]! - p[1]!) * a, p[2]! + (q[2]! - p[2]!) * a, p[3]! + (q[3]! - p[3]!) * a];
+      const pj = (j - 1) * 4, qj = j * 4;
+      dst[qj] = dst[pj]! + (dst[qj]! - dst[pj]!) * a;
+      dst[qj + 1] = dst[pj + 1]! + (dst[qj + 1]! - dst[pj + 1]!) * a;
+      dst[qj + 2] = dst[pj + 2]! + (dst[qj + 2]! - dst[pj + 2]!) * a;
+      dst[qj + 3] = dst[pj + 3]! + (dst[qj + 3]! - dst[pj + 3]!) * a;
     }
   }
-  return d[degree]!;
 }
+
+// De Boor scratch (grown on demand): the v-direction triangle and the row of u-direction inputs.
+let dbTri = new Float64Array(4 * 8);
+let dbRow = new Float64Array(4 * 8);
 
 function expandKnots(mults: number[], vals: number[]): number[] {
   const k: number[] = [];
@@ -456,17 +464,25 @@ class BSplineSurface implements Surface {
   uPeriod = 0; vPeriod = 0;
   uSeam = 0; vSeam = 0;
   uDeg: number; vDeg: number;
-  cps: number[][][]; // [iu][iv] -> homogeneous (wx,wy,wz,w)
+  // Control net flattened to [iu * nvCps*4 + iv*4 + c] (homogeneous wx,wy,wz,w) — the nested
+  // number[][][] costs ~4x the memory and defeats de Boor's cache locality.
+  cpsF: Float64Array; nuCps: number; nvCps: number;
   uKnots: number[]; vKnots: number[];
   u0: number; u1: number; v0: number; v1: number;
-  // projection lookup grid
-  gU: number[] = []; gV: number[] = []; gP: Vec3[][] = [];
+  // projection lookup grid: gPF[(i * gV.length + j) * 3 + c] = evaluate(gU[i], gV[j])
+  gU: number[] = []; gV: number[] = []; gPF = new Float64Array(0);
   rc = Infinity;
   rcGrid: number[][] = []; // per grid CELL local min normal-turn radius (same estimate as rc)
   closedU = false; closedV = false; // patch wraps onto itself in u / v
   constructor(uDeg: number, vDeg: number, cps: number[][][], uKnots: number[], vKnots: number[]) {
-    this.uDeg = uDeg; this.vDeg = vDeg; this.cps = cps; this.uKnots = uKnots; this.vKnots = vKnots;
+    this.uDeg = uDeg; this.vDeg = vDeg; this.uKnots = uKnots; this.vKnots = vKnots;
     const nu = cps.length - 1, nv = cps[0]!.length - 1;
+    this.nuCps = nu + 1; this.nvCps = nv + 1;
+    this.cpsF = new Float64Array(this.nuCps * this.nvCps * 4);
+    for (let i = 0; i <= nu; i++) for (let j = 0; j <= nv; j++) {
+      const s = cps[i]![j]!, o = (i * this.nvCps + j) * 4;
+      this.cpsF[o] = s[0]!; this.cpsF[o + 1] = s[1]!; this.cpsF[o + 2] = s[2]!; this.cpsF[o + 3] = s[3]!;
+    }
     this.u0 = uKnots[uDeg]!; this.u1 = uKnots[nu + 1]!;
     this.v0 = vKnots[vDeg]!; this.v1 = vKnots[nv + 1]!;
     const um = (this.u0 + this.u1) / 2, vm = (this.v0 + this.v1) / 2;
@@ -507,10 +523,12 @@ class BSplineSurface implements Surface {
     const GV = Math.max(4, Math.min(1024, Math.round(Math.sqrt((BUDGET * vLen) / uLen))));
     for (let i = 0; i <= GU; i++) this.gU.push(this.u0 + ((this.u1 - this.u0) * i) / GU);
     for (let j = 0; j <= GV; j++) this.gV.push(this.v0 + ((this.v1 - this.v0) * j) / GV);
+    this.gPF = new Float64Array((GU + 1) * (GV + 1) * 3);
     for (let i = 0; i <= GU; i++) {
-      const row: Vec3[] = [];
-      for (let j = 0; j <= GV; j++) row.push(this.evaluate(this.gU[i]!, this.gV[j]!));
-      this.gP.push(row);
+      for (let j = 0; j <= GV; j++) {
+        const p = this.evaluate(this.gU[i]!, this.gV[j]!), o = (i * (GV + 1) + j) * 3;
+        this.gPF[o] = p[0]; this.gPF[o + 1] = p[1]; this.gPF[o + 2] = p[2];
+      }
     }
     // Rough min curvature radius from normal turn across a FIXED 24×24 lattice (drives adaptive
     // refinement), kept PER CELL: one degenerate spot (a lens patch pinching to a needle tip) must
@@ -542,18 +560,29 @@ class BSplineSurface implements Surface {
     this.rc = Number.isFinite(minR) ? Math.max(0.05, minR) : Infinity;
   }
   private evaluateRaw(u: number, v: number): Vec3 {
-    // The u-direction combination only reads the uDeg+1 rows around u's knot span — running the
-    // v-direction de Boor over EVERY control row (as before) computed rows/(uDeg+1)× more than
-    // needed (7.5× waste on a 30-row cubic patch). Same span rule as deBoorH: bit-identical.
-    const nu = this.cps.length - 1;
-    let k = this.uDeg;
-    while (k < nu && this.uKnots[k + 1]! <= u) k++;
-    const lo = k - this.uDeg;
-    const temp: number[][] = [];
-    for (let i = lo; i <= k; i++) temp.push(deBoorH(this.vDeg, this.cps[i]!, this.vKnots, v));
-    const h = deBoorH(this.uDeg, temp, this.uKnots, u, k, lo);
-    const w = h[3]! || 1;
-    return [h[0]! / w, h[1]! / w, h[2]! / w];
+    // The u-direction combination only reads the uDeg+1 rows around u's knot span — the v-direction
+    // de Boor runs only for those rows (rows/(uDeg+1)× fewer than the naive full sweep). Each row's
+    // triangle runs in place in dbTri; the per-row results accumulate in dbRow for the u-direction
+    // pass. Same spans, same arithmetic order: bit-identical to the array-of-arrays version.
+    const uDeg = this.uDeg, vDeg = this.vDeg;
+    const ku = findSpan(uDeg, this.nuCps, this.uKnots, u);
+    const kv = findSpan(vDeg, this.nvCps, this.vKnots, v);
+    if (dbRow.length < (uDeg + 1) * 4) dbRow = new Float64Array((uDeg + 1) * 4);
+    if (dbTri.length < (vDeg + 1) * 4) dbTri = new Float64Array((vDeg + 1) * 4);
+    const stride = this.nvCps * 4;
+    const lo = ku - uDeg, vlo = kv - vDeg;
+    const nvals = (vDeg + 1) * 4;
+    for (let j = 0; j <= uDeg; j++) {
+      const rowOff = (lo + j) * stride + vlo * 4;
+      for (let c = 0; c < nvals; c++) dbTri[c] = this.cpsF[rowOff + c]!;
+      deBoorTri(vDeg, this.vKnots, v, kv, dbTri);
+      const res = vDeg * 4, o = j * 4;
+      dbRow[o] = dbTri[res]!; dbRow[o + 1] = dbTri[res + 1]!; dbRow[o + 2] = dbTri[res + 2]!; dbRow[o + 3] = dbTri[res + 3]!;
+    }
+    deBoorTri(uDeg, this.uKnots, u, ku, dbRow);
+    const r = uDeg * 4;
+    const w = dbRow[r + 3]! || 1;
+    return [dbRow[r]! / w, dbRow[r + 1]! / w, dbRow[r + 2]! / w];
   }
   evaluate(u: number, v: number): Vec3 {
     // Wrap a seam-unwrapped coordinate back into the patch domain for a closed direction (same point
@@ -598,9 +627,10 @@ class BSplineSurface implements Surface {
     let bd2 = Infinity;
     const scan = (): [number, number] => {
       let bu = this.u0, bv = this.v0;
-      for (let i = 0; i < this.gP.length; i++) for (let j = 0; j < this.gP[i]!.length; j++) {
-        const q = this.gP[i]![j]!;
-        const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
+      const nv = this.gV.length, g = this.gPF;
+      for (let i = 0; i < this.gU.length; i++) for (let j = 0; j < nv; j++) {
+        const o = (i * nv + j) * 3;
+        const d = (g[o]! - p[0]) ** 2 + (g[o + 1]! - p[1]) ** 2 + (g[o + 2]! - p[2]) ** 2;
         if (d < bd2) { bd2 = d; bu = this.gU[i]!; bv = this.gV[j]!; }
       }
       return [bu, bv];
@@ -626,10 +656,11 @@ class BSplineSurface implements Surface {
         const span = Math.max(this.u1 - this.u0, this.v1 - this.v0);
         const lim = 4 * bd2 + 1e-12; // nodes within 2× the best grid distance
         const near: { d: number; cu: number; cv: number }[] = [];
-        for (let i = 0; i < this.gP.length; i++) {
-          for (let j = 0; j < this.gP[i]!.length; j++) {
-            const q = this.gP[i]![j]!;
-            const d = (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
+        const nv = this.gV.length, g = this.gPF;
+        for (let i = 0; i < this.gU.length; i++) {
+          for (let j = 0; j < nv; j++) {
+            const o = (i * nv + j) * 3;
+            const d = (g[o]! - p[0]) ** 2 + (g[o + 1]! - p[1]) ** 2 + (g[o + 2]! - p[2]) ** 2;
             if (d <= lim) near.push({ d, cu: this.gU[i]!, cv: this.gV[j]! });
           }
         }
