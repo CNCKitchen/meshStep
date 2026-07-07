@@ -348,7 +348,10 @@ export function sampleEdgePolyline(
     };
     const t0 = ang(v0);
     const t1 = ang(v1);
-    const full = dist(v0, v1) < Math.max(1e-7, chordTol * 1e-3);
+    // Closed-rim detection. The chordTol term is CAPPED at its default-tolerance value (0.01mm
+    // deviation -> 1e-5): a coarse conversion must not reinterpret a jitter-split micro arc
+    // (endpoints ~2e-5 apart) as a full circle and walk the whole rim into one face's boundary.
+    const full = dist(v0, v1) < Math.max(1e-7, Math.min(1e-5, chordTol * 1e-3));
     let sweep: number;
     if (full) {
       sweep = sameSense ? TWO_PI : -TWO_PI;
@@ -384,7 +387,7 @@ export function sampleEdgePolyline(
     const a = num(rec.params[2]!) * s, b = num(rec.params[3]!) * s;
     const at = (p: Vec3): number => { const d = sub(p, f.o); return Math.atan2(dot(d, f.y) / b, dot(d, f.x) / a); };
     const t0 = at(v0), t1 = at(v1);
-    const full = dist(v0, v1) < Math.max(1e-7, chordTol * 1e-3);
+    const full = dist(v0, v1) < Math.max(1e-7, Math.min(1e-5, chordTol * 1e-3)); // capped like CIRCLE above
     let sweep: number;
     if (full) sweep = sameSense ? TWO_PI : -TWO_PI;
     else if (sameSense) { let d = t1 - t0; while (d <= 0) d += TWO_PI; while (d > TWO_PI) d -= TWO_PI; sweep = d; }

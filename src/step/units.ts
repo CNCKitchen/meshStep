@@ -86,6 +86,25 @@ export function contextLengthScales(table: Table): Map<number, number> {
   return out;
 }
 
+/** The file's declared modelling tolerance in millimetres (UNCERTAINTY_MEASURE_WITH_UNIT with a
+ * LENGTH_MEASURE value): per ISO 10303, two points closer than this ARE the same point. Returns
+ * the largest declaration (multi-context assemblies repeat it per representation context) or null
+ * when the file declares none. */
+export function detectUncertainty(table: Table): number | null {
+  let best: number | null = null;
+  for (const [, u] of table.byType("UNCERTAINTY_MEASURE_WITH_UNIT")) {
+    const vP = u.params[0]; // LENGTH_MEASURE(x) or a bare number
+    const v = vP?.k === "typed" && vP.params[0]?.k === "num" ? vP.params[0].v
+      : vP?.k === "num" ? vP.v : null;
+    if (v === null || v <= 0 || u.params[1]?.k !== "ref") continue;
+    const f = unitFactor(table, ref(u.params[1]), "length");
+    if (f === null) continue;
+    const mm = v * f;
+    if (best === null || mm > best) best = mm;
+  }
+  return best;
+}
+
 export function detectUnits(table: Table): Units {
   let mmPerUnit: number | null = null;
   let radPerAngle: number | null = null;

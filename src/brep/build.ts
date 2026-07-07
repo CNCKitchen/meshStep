@@ -3,9 +3,9 @@
 // Exposes faces -> loops -> oriented edges, plus a shared edge table (sampled once each so
 // the two faces meeting at an edge get identical points => watertight seams).
 import type { Vec3 } from "../geom/vec.ts";
-import { Table, ref, refList, enumOf } from "../step/entities.ts";
+import { Table, ref, refList, enumOf, num } from "../step/entities.ts";
 import { parseStep } from "../step/parser.ts";
-import { detectUnits, contextLengthScales, type Units } from "../step/units.ts";
+import { detectUnits, detectUncertainty, contextLengthScales, type Units } from "../step/units.ts";
 import { readPoint, readPlacement, type Frame } from "../geom/placement.ts";
 import { makeCurve } from "../geom/curves.ts";
 
@@ -173,10 +173,213 @@ export interface BrepModel {
   units: Units;
   table: Table;
   scale: number;
+  /** Face entity ids dropped during construction (malformed records) — geometry that is missing
+   * from the model entirely; surfaced to consumers via the import diagnostics. */
+  droppedFaces: number[];
 }
 
 const vertexPoint = (t: Table, id: number, s: number): Vec3 =>
   readPoint(t, ref(t.record(id).params[1]!), s); // VERTEX_POINT(name, point#)
+
+/**
+ * Micro-edge healing. Exporters emit topological micro-edges bridging vertices that are the same
+ * point at modelling tolerance (a rim circle split with jittered endpoints leaves a nanometre
+ * "bridge" arc: [a]_fand_grill_b_x2 carries a 17.7nm CIRCLE edge). Downstream they poison the CDT
+ * (two boundary constraints closer than any dedup epsilon -> unenforceable -> rescue fill on ONE
+ * of the two faces -> coincident-but-unwelded cracks) and the arc sampler (once chordTol*1e-3
+ * exceeds the chord, the arc flips to "full circle" and that face's boundary walks the whole rim).
+ * STEP semantics say points within the file's uncertainty ARE one point, so heal accordingly:
+ * vertices connected by a sub-tolerance edge are unified together with every vertex COINCIDENT
+ * with them (coincidence classes keep whole junctions moving as one — snapping a lone endpoint
+ * away from a bitwise-equal but topologically unrelated vertex would split a welded junction),
+ * jittered classes snap to the class root's coordinate, and the bridge edge is dropped from its
+ * loops when its own geometric extent measures below tolerance (LINE: the chord; arcs: the
+ * sameSense-resolved sweep, trusted exactly as far as the sampler already trusts it).
+ */
+function healMicroEdges(table: Table, edges: Map<number, BEdge>, solids: BSolid[], sGlobal: number): void {
+  // Tolerance: the declared uncertainty, floored at 0.1µm (jitter below that defeats every
+  // downstream epsilon no matter what the file claims) and capped at 1µm (files routinely declare
+  // 0.01mm, which would swallow real micro-features such as 6µm annular faces).
+  const tol = Math.min(1e-3, Math.max(1e-4, detectUncertainty(table) ?? 0));
+  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+
+  // Endpoint VERTEX_POINT ids per EDGE_CURVE (composite-curve edges synthesized for
+  // CURVE_BOUNDED_SURFACE have no vertex topology and are left alone).
+  const vids = new Map<number, [number, number]>();
+  const vpos = new Map<number, Vec3>();
+  for (const [id, e] of edges) {
+    if (table.typeOf(id) !== "EDGE_CURVE") continue;
+    const rec = table.record(id);
+    if (rec.params[1]?.k !== "ref" || rec.params[2]?.k !== "ref") continue;
+    const va = ref(rec.params[1]!), vb = ref(rec.params[2]!);
+    vids.set(id, [va, vb]);
+    vpos.set(va, e.v0);
+    vpos.set(vb, e.v1);
+  }
+
+  // Union-find over vertex ids; the smallest id is the root, so the canonical coordinate is
+  // deterministic regardless of edge iteration order.
+  const parent = new Map<number, number>();
+  const find = (x: number): number => {
+    let r = x;
+    while ((parent.get(r) ?? r) !== r) r = parent.get(r)!;
+    while ((parent.get(x) ?? x) !== x) { const nx = parent.get(x)!; parent.set(x, r); x = nx; }
+    return r;
+  };
+  const union = (a: number, b: number): void => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent.set(Math.max(ra, rb), Math.min(ra, rb));
+  };
+
+  const unwrapCurve = (curveId: number): { id: number; kind: string | undefined } => {
+    let kind = table.typeOf(curveId);
+    while (kind === "SURFACE_CURVE" || kind === "SEAM_CURVE" || kind === "INTERSECTION_CURVE") {
+      curveId = ref(table.record(curveId).params[1]!);
+      kind = table.typeOf(curveId);
+    }
+    return { id: curveId, kind };
+  };
+
+  // Pass A — bridge edges: endpoints of a sub-tolerance edge are one point. Only curve kinds the
+  // heal fully understands participate (LINE/CIRCLE/ELLIPSE, unwrapped): a nearly-closed ring
+  // B-spline's two vertices are ALSO sub-tolerance apart, but unifying them would collapse the
+  // generic sampler's vertex-cut of that ring into a point (side_fan_support_x2's fan bores) —
+  // unknown kinds stay untouched.
+  const candidates: { id: number; kind: string; cid: number }[] = [];
+  const candidateIds = new Set<number>();
+  let jittered = false;
+  for (const [id, [va, vb]] of vids) {
+    if (va === vb) continue; // closed edge on one shared vertex — a rim, not a bridge
+    const e = edges.get(id)!;
+    const d = d3(e.v0, e.v1);
+    if (d >= tol) continue;
+    const { id: cid, kind } = unwrapCurve(e.curveId);
+    if (kind !== "LINE" && kind !== "CIRCLE" && kind !== "ELLIPSE") continue;
+    candidates.push({ id, kind, cid });
+    candidateIds.add(id);
+    if (d > 0) jittered = true;
+    union(va, vb);
+  }
+  if (candidates.length === 0) return; // clean topology — bit-identical fast path
+
+  // Pass B — coordinate coincidence: vertex ids at (weld-)equal coordinates must travel together
+  // when a class is snapped, or the snap SPLITS junctions that only coincided bitwise (the mesh
+  // weld quantises at 1e-6; moving one edge's endpoint 1e-4 away from an unrelated-but-coincident
+  // vertex opens a crack: side_fan_support_x2's B-spline ring junctions). 2e-6 covers the weld
+  // cell diagonal. Only needed when some bridge actually has distinct coordinates to reconcile.
+  if (jittered) {
+    const cell = 2e-6;
+    const hash = new Map<string, number[]>();
+    for (const [vid, p] of vpos) {
+      const kx = Math.round(p[0] / cell), ky = Math.round(p[1] / cell), kz = Math.round(p[2] / cell);
+      for (let ix = kx - 1; ix <= kx + 1; ix++) for (let iy = ky - 1; iy <= ky + 1; iy++) for (let iz = kz - 1; iz <= kz + 1; iz++) {
+        const others = hash.get(`${ix},${iy},${iz}`);
+        if (others) for (const o of others) { if (d3(p, vpos.get(o)!) <= cell) union(vid, o); }
+      }
+      const k = `${kx},${ky},${kz}`;
+      (hash.get(k) ?? hash.set(k, []).get(k)!).push(vid);
+    }
+  }
+
+  // A class must never degenerate an edge the heal cannot reason about: if some NON-candidate
+  // edge's two endpoints land in one class (a ring B-spline whose split vertices got bridged by a
+  // micro edge), snapping would make its endpoints bitwise-equal and collapse the generic
+  // sampler's vertex-cut of that ring. Such classes are POISONED: no snap, no drops. Classes
+  // whose coordinate spread exceeds the tolerance are poisoned too — a CHAIN of sub-tolerance
+  // bridges can span real distance, and collapsing it to one point would distort geometry.
+  const poisoned = new Set<number>();
+  for (const [id, [va, vb]] of vids) {
+    if (va === vb || candidateIds.has(id)) continue;
+    const r = find(va);
+    if (r === find(vb)) poisoned.add(r);
+  }
+  {
+    const lo = new Map<number, number[]>(), hi = new Map<number, number[]>();
+    for (const [vid, p] of vpos) {
+      const r = find(vid);
+      const l = lo.get(r), h = hi.get(r);
+      if (!l || !h) { lo.set(r, [p[0], p[1], p[2]]); hi.set(r, [p[0], p[1], p[2]]); continue; }
+      for (let k = 0; k < 3; k++) { if (p[k]! < l[k]!) l[k] = p[k]!; if (p[k]! > h[k]!) h[k] = p[k]!; }
+    }
+    for (const [r, l] of lo) {
+      const h = hi.get(r)!;
+      if (Math.hypot(h[0] - l[0], h[1] - l[1], h[2] - l[2]) > 2 * tol) poisoned.add(r);
+    }
+  }
+
+  // Which candidates to DROP from their loops: any bridge whose own geometric extent is below
+  // tolerance. A line's extent IS its chord; an arc's is its sameSense-resolved sweep — the exact
+  // normalisation sampleEdgePolyline applies, so the heal trusts the arc direction precisely as
+  // far as the sampler already does. A full-rim circle whose two coincident vertices merely got
+  // distinct ids measures 2πR and is kept; its endpoints snap bitwise-equal, which the sampler
+  // deterministically reads as the closed rim.
+  const TWO_PI = Math.PI * 2;
+  const arcExtent = (e: BEdge, curveId: number, kind: string): number => {
+    const sc = e.scale ?? sGlobal;
+    const rec = table.record(curveId);
+    const f = readPlacement(table, ref(rec.params[1]!), sc);
+    const a = num(rec.params[2]!) * sc;
+    const b = kind === "ELLIPSE" ? num(rec.params[3]!) * sc : a;
+    const ang = (p: Vec3): number => {
+      const dx = p[0] - f.o[0], dy = p[1] - f.o[1], dz = p[2] - f.o[2];
+      const px = dx * f.x[0] + dy * f.x[1] + dz * f.x[2];
+      const py = dx * f.y[0] + dy * f.y[1] + dz * f.y[2];
+      return Math.atan2(py / b, px / a);
+    };
+    let d = ang(e.v1) - ang(e.v0);
+    if (e.sameSense) { while (d <= 0) d += TWO_PI; while (d > TWO_PI) d -= TWO_PI; }
+    else { while (d >= 0) d -= TWO_PI; while (d < -TWO_PI) d += TWO_PI; }
+    return Math.abs(d) * Math.max(a, b);
+  };
+  const drop = new Set<number>();
+  for (const { id, kind, cid } of candidates) {
+    if (poisoned.has(find(vids.get(id)![0]))) continue;
+    const e = edges.get(id)!;
+    if (kind === "LINE") { drop.add(id); continue; }
+    if (arcExtent(e, cid, kind) < tol) drop.add(id);
+  }
+
+  // Snap edge endpoints to their class root's coordinate — but ONLY in classes that contain a
+  // genuinely jittered bridge (distinct coordinates) and are not poisoned. Exact-coincidence
+  // classes stay bitwise untouched, so clean junctions and their weld behaviour are preserved.
+  const dirty = new Set<number>();
+  for (const { id } of candidates) {
+    const e = edges.get(id)!;
+    if (d3(e.v0, e.v1) > 0) {
+      const r = find(vids.get(id)![0]);
+      if (!poisoned.has(r)) dirty.add(r);
+    }
+  }
+  if (dirty.size === 0 && drop.size === 0) return;
+  for (const [id, [va, vb]] of vids) {
+    const e = edges.get(id)!;
+    const ra = find(va), rb = find(vb);
+    if (ra !== va && dirty.has(ra)) { const p = vpos.get(ra)!; e.v0 = [p[0], p[1], p[2]]; }
+    if (rb !== vb && dirty.has(rb)) { const p = vpos.get(rb)!; e.v1 = [p[0], p[1], p[2]]; }
+  }
+
+  // Remove dropped bridges from their loops. The adjacent edges now share the canonical vertex
+  // coordinate bitwise, so the ring assembly stays continuous. A loop or face reduced to nothing
+  // was a sub-tolerance speck — remove it too (but NEVER touch faces that had no edge-loops to
+  // begin with: a full sphere is one face with only a VERTEX_LOOP and an empty loops array).
+  if (drop.size === 0) return;
+  for (const solid of solids) {
+    const gone = new Set<BFace>();
+    for (const face of solid.faces) {
+      let touched = false;
+      for (const loop of face.loops) {
+        if (!loop.edges.some((oe) => drop.has(oe.edgeId))) continue;
+        loop.edges = loop.edges.filter((oe) => !drop.has(oe.edgeId));
+        touched = true;
+      }
+      if (touched) {
+        face.loops = face.loops.filter((lp) => lp.edges.length > 0);
+        if (face.loops.length === 0) gone.add(face);
+      }
+    }
+    if (gone.size > 0) solid.faces = solid.faces.filter((f) => !gone.has(f));
+  }
+}
 
 export function buildBrep(src: string): BrepModel {
   const table = new Table(parseStep(src));
@@ -237,12 +440,14 @@ export function buildBrep(src: string): BrepModel {
   };
 
   const solids: BSolid[] = [];
+  const droppedFaces: number[] = [];
   const addSolid = (sid: number, shellIds: number[], open = false): void => {
     const faces: BFace[] = [];
     // A malformed face (unexpected record layout from an exotic kernel) must not kill the whole
-    // file — drop it and let the tessellator report the gap via stats.
+    // file — drop it, recording its id so the import diagnostics can report the missing geometry
+    // (the face never reaches the tessellator, so it is invisible to the facesTotal stat).
     for (const shellId of shellIds) for (const sf of resolveShellFaces(shellId, false)) {
-      try { faces.push(buildFace(sf.fid, sf.flip)); } catch { /* skipped face */ }
+      try { faces.push(buildFace(sf.fid, sf.flip)); } catch { droppedFaces.push(sf.fid); }
     }
     if (faces.length > 0) solids.push(open ? { id: sid, faces, open } : { id: sid, faces });
   };
@@ -316,5 +521,9 @@ export function buildBrep(src: string): BrepModel {
     }
   }
 
-  return { solids, edges, units, table, scale: s };
+  // Heal micro-edge topology AFTER the per-solid rescale above — it rewrites edge endpoints from
+  // the table, which would undo any earlier vertex unification.
+  healMicroEdges(table, edges, solids, s);
+
+  return { solids, edges, units, table, scale: s, droppedFaces };
 }
