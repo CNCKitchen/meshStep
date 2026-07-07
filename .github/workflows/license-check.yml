@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Stefan Hermann (CNC Kitchen) <stefan@cnckitchen.com>
+#
+# Enforces the dependency license policy from CONTRIBUTING.md §2 on every PR
+# and push: the dual-licensing model (AGPL + commercial exceptions) requires
+# that no third-party code ever ships in the library.
+#  - Core: the root package.json must declare zero runtime dependencies —
+#    the shipped library is 100% owned code. Dev-only tools (typescript,
+#    @types, the occt-import-js validation reference) are exempt but never
+#    ship.
+#  - web/ studio: license-checker against the permissive allowlist (full
+#    tree, dev included).
+name: License check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  core-zero-deps:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Library must have zero runtime dependencies
+        run: |
+          node -e '
+            const pkg = require("./package.json");
+            const deps = Object.keys(pkg.dependencies ?? {});
+            const also = ["peerDependencies", "optionalDependencies", "bundledDependencies", "bundleDependencies"]
+              .flatMap(k => Object.keys(pkg[k] ?? {}));
+            if (deps.length + also.length > 0) {
+              console.error("Runtime dependencies found:", [...deps, ...also].join(", "));
+              console.error("The library must stay zero-dependency (CONTRIBUTING.md §2).");
+              process.exit(1);
+            }
+            console.log("OK: zero runtime dependencies.");
+          '
+
+  npm-licenses-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+      - name: npm license allowlist
+        run: >-
+          npx --yes license-checker --excludePrivatePackages
+          --onlyAllow "MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;Zlib;CC0-1.0;MPL-2.0;Unicode-3.0;Unlicense;CC-BY-4.0"
+          --summary
+        working-directory: web

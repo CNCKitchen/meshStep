@@ -31,8 +31,8 @@ meshStep starts from the opposite end: **the mesh is the product.**
 
 - **Watertight per body, by construction.** Shared B-rep edges are sampled once and welded, so
   every body imports as a closed, consistently outward-oriented 2-manifold — verified as 0 open
-  edges / 0 non-manifold edges across the test corpus. Multi-body parts and assemblies stay
-  separate welded components.
+  edges / 0 non-manifold edges across the curated test corpus (see [Status](#status) for honest
+  numbers on wilder corpora). Multi-body parts and assemblies stay separate welded components.
 - **No seam twist, no sliver storm.** Every face is triangulated in its natural (u,v) parameter
   space with a robust constrained-Delaunay pass; periodic faces (cylinder/cone/sphere/torus
   seams) are unwrapped flat first, so the spiral "twist" that plagues generic B-rep tessellators
@@ -52,16 +52,22 @@ meshStep starts from the opposite end: **the mesh is the product.**
 
 ## How it compares
 
-| Route | In browser | Footprint | Mesh output | Watertight welded | Face→tri topology |
-|---|---|---|---|---|---|
-| **meshStep** | ✅ pure TS | ~42 KB gzip | uniform, low-sliver, seam-safe | ✅ guaranteed per body | ✅ |
-| [occt-import-js](https://github.com/kovacsv/occt-import-js) | ✅ WASM | ~8 MB WASM | curvature-adaptive, per face | ❌ | ✅ face ranges |
-| [opencascade.js](https://github.com/donalffons/opencascade.js) | ✅ WASM | larger (custom builds) | same OCCT mesher | ❌ | manual |
-| [cascadio](https://github.com/trimesh/cascadio) / pythonOCC / FreeCAD | ❌ Python/desktop | native wheels/app | same OCCT mesher | ❌ | varies |
-| [gmsh](https://gmsh.info) | ❌ desktop/Python | native | FE-quality, isotropic | ✅ (when it succeeds) | ⚠️ |
-| [truck](https://github.com/ricosjp/truck) / [foxtrot](https://github.com/Formlabs/foxtrot) (Rust) | ✅ via WASM | MB-scale WASM | generic; twist on periodic faces | ⚠️ | ❌ |
-| STL export from your CAD app | ❌ manual step | — | curvature-adaptive, sliver-heavy | usually | ❌ |
-| Commercial SDKs (CAD Exchanger, HOOPS) | server/native | licensed | good | ✅ | ✅ |
+| Route | In browser | Footprint | Mesh output | Watertight welded | Face→tri topology | License |
+|---|---|---|---|---|---|---|
+| **meshStep** | ✅ pure TS | ~42 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
+| [occt-import-js](https://github.com/kovacsv/occt-import-js) | ✅ WASM | ~8 MB WASM | curvature-adaptive, per face | ❌ | ✅ face ranges | LGPL-2.1 (OCCT) |
+| [opencascade.js](https://github.com/donalffons/opencascade.js) | ✅ WASM | larger (custom builds) | same OCCT mesher | ❌ | manual | LGPL-2.1 (OCCT) |
+| [cascadio](https://github.com/trimesh/cascadio) / pythonOCC / FreeCAD | ❌ Python/desktop | native wheels/app | same OCCT mesher | ❌ | varies | LGPL (bundles OCCT) |
+| [gmsh](https://gmsh.info) | ❌ desktop/Python | native | FE-quality, isotropic | ✅ (when it succeeds) | ⚠️ | GPL-2.0+ |
+| [truck](https://github.com/ricosjp/truck) / [foxtrot](https://github.com/Formlabs/foxtrot) (Rust) | ✅ via WASM | MB-scale WASM | generic; twist on periodic faces | ⚠️ | ❌ | Apache-2.0 / MIT |
+| STL export from your CAD app | ❌ manual step | — | curvature-adaptive, sliver-heavy | usually | ❌ | proprietary app |
+| Commercial SDKs (CAD Exchanger, HOOPS) | server/native | licensed | good | ✅ | ✅ | proprietary, per-seat/app |
+
+License fine print: the OCCT-based routes statically bundle an LGPL-2.1 kernel — workable, but
+with linking/relinking obligations that get murky in WASM; gmsh's GPL rules out closed-source
+embedding entirely. meshStep is AGPL-3.0 for open-source use, and because the copyright is held
+by a single owner with zero third-party code bundled, a clean commercial exception for
+closed-source products is available directly — see [COMMERCIAL.md](COMMERCIAL.md).
 
 Honest notes on the alternatives:
 
@@ -94,9 +100,7 @@ SDK for those.
 
 ## Status
 
-Everything in the repo's test set — analytic parts, NURBS parts, multi-body assemblies — imports
-**watertight (0 open, 0 non-manifold), outward-oriented, within tolerance of the reference
-geometry**, at <2% slivers.
+Coverage:
 
 - **Surfaces:** plane, cylinder, cone, sphere, torus (incl. degenerate), **B-spline / NURBS**
   (rational and complex-form), surface of linear extrusion, surface of revolution, offset surfaces.
@@ -105,12 +109,36 @@ geometry**, at <2% slivers.
 - **Structure:** multi-body parts, assemblies with full product-structure instancing,
   per-representation units, `BREP_WITH_VOIDS`; AP242 tessellated-geometry bodies pass through
   as-is.
-- **Validation:** `gapcheck` cross-checks every corpus model against OpenCASCADE output
-  (per-face deviation + watertightness) over NIST models, 25 real Printables downloads, and a
-  ~1,800-part Voron-family assembly corpus.
 
-Remaining: 3MF export, the controls/preset UI, and residual CDT edge cases on pathological
-multi-loop trims (planar and spherical). Pipeline details in [DESIGN.md](DESIGN.md).
+Robustness is tracked over four corpora of increasing wildness, cross-validated against
+OpenCASCADE output with the `gapcheck` harness (per-face deviation + watertightness). Where it
+stands (July 2026):
+
+| Corpus | Result |
+|---|---|
+| 13 curated repo models (analytic + NURBS + assemblies) | all watertight (0 open, 0 non-manifold), <2% slivers, within ~0.5% of reference |
+| 81-model characterization corpus (real Printables downloads + NIST AP242 test cases) | 70 fully clean · 9 with localized open-edge leaks (mostly NIST models) · 2 import errors |
+| Voron-family assemblies, 1,820 parts | 1,764 OK · 22 WARN · 33 FAIL · 1 timeout vs OCC cross-check at tight tolerance |
+| [ABC dataset](https://deep-geometry.github.io/abc-dataset/) chunk 0000, 1,454 wild CAD files | **142 fully clean (~10%)** — the honesty benchmark, see limitations below |
+
+### Current limitations
+
+meshStep is not (yet) an industrial-strength importer — it's tuned for the kind of parts people
+actually 3D-print, and the numbers above are deliberately honest about the rest:
+
+- **Wild CAD is hard.** On the ABC research corpus (uncurated files from many CAD systems, full
+  of degenerate, microscopic, and exotic geometry) most models currently come out with defects:
+  seam leaks on periodic surfaces, faces the CDT refuses to triangulate, or non-manifold spots.
+  The curated corpora show the same failure classes at far lower rates; both shrink with every
+  release, but if your files look like ABC, OpenCASCADE-based tools are more robust today.
+- **Pathological models can be slow.** Pure TypeScript is fast enough for interactive use on
+  print-scale parts, but ~19% of ABC models blew a 120 s budget at tight tolerances — native
+  OCCT is faster on huge or degenerate inputs.
+- **No geometry healing.** meshStep trusts the STEP file: gaps, self-intersections, or broken
+  topology in the source B-rep are not repaired, only reported.
+- Remaining features: 3MF export, the controls/preset UI, and residual CDT edge cases on
+  pathological multi-loop trims (planar and spherical). Pipeline details in
+  [DESIGN.md](DESIGN.md).
 
 ## Quick start (dev)
 
@@ -125,12 +153,46 @@ node test/check-all.ts      # watertightness check over the repo test models
 import { importStep, writeBinarySTL } from "./src/index.ts";
 const result = importStep(stepText, { surfaceDeviation: 0.01, maxEdge: 1.0 });
 // result.mesh (positions/indices), result.faceOfTri, result.solidOfTri
+if (!result.diagnostics.ok) console.warn(result.diagnostics); // see "Import diagnostics"
 writeFileSync("out.stl", writeBinarySTL(result.mesh));
 ```
 
 Options mirror Fusion's mesh-export dialog: `surfaceDeviation` (mm), `normalDeviation` (deg),
 `maxEdge` (mm), plus `remesh: true` for uniform-isotropic output (default off — the raw
 tessellation is watertight and shades cleaner).
+
+## Import diagnostics
+
+Every import returns a `diagnostics` verdict so an application can tell a trustworthy conversion
+from a suspect one — and tell the user when they'd be better served exporting a mesh directly
+from their CAD package:
+
+```ts
+const { diagnostics: d } = importStep(stepText);
+if (!d.ok) {
+  const broken = d.openEdges > 0 || d.nonManifoldEdges > 0
+    || d.warnings.some((w) => w.severity === "error");
+  showBanner(broken
+    ? "This STEP file imported with defects (missing or leaking geometry). " +
+      "Consider exporting an STL/3MF directly from your CAD software instead."
+    : "Some faces needed heuristic repairs — please inspect the result.");
+}
+```
+
+- `ok` — strict: `true` only when the mesh is closed and manifold, no faces were dropped or
+  skipped, and no heuristic repair paths fired.
+- `openEdges` / `nonManifoldEdges` — final edge-defect audit of the returned mesh (open-by-design
+  surface bodies from `openSolids` excluded). Non-zero means cracks/holes or bad welds.
+- `facesDropped` / `facesSkipped` — geometry that is *missing*: malformed face records dropped
+  while reading the B-rep, and faces the tessellator could not mesh.
+- `warnings` — structured findings with `code`, `severity`, the STEP `faceId`, and a
+  human-readable `detail`. Severity `"error"` means geometry is missing; `"warning"` means a
+  rescue path (earcut hole-bridge fill, degenerate-boundary CDT rescue, fold surgery,
+  self-intersecting trim loops) reconstructed a region heuristically — the result is usually
+  fine, but it was not derived from clean topology.
+
+`meshDefects(mesh, solidOfTri?, openSolids?)` is exported separately for re-auditing a mesh after
+downstream processing.
 
 ## Web verification studio
 
@@ -140,4 +202,9 @@ style), wireframe, and open-edge highlighting. `cd web && npm install && npm run
 
 ## License
 
-AGPL-3.0-only. Copyright held by CNC Kitchen; available for commercial licensing.
+AGPL-3.0-only. Copyright held by CNC Kitchen; commercial licenses for closed-source use are
+available — see [COMMERCIAL.md](COMMERCIAL.md). The library ships with zero third-party code, so
+the whole artifact can be licensed directly.
+
+Contributions are welcome under the CLA and dependency-license policy in
+[CONTRIBUTING.md](CONTRIBUTING.md) (enforced in CI).

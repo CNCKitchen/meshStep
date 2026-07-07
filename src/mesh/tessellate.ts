@@ -21,6 +21,7 @@ import { sampleEdgePolyline } from "../geom/curves.ts";
 import { constrainedTriangulate } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
+import { beginWarnings, takeWarnings, warn, type MeshWarning } from "./diag.ts";
 
 const TWO_PI = Math.PI * 2;
 
@@ -50,6 +51,9 @@ export interface MeshResult {
    * watertightness checks must exclude their triangles rather than report defects. */
   openSolids: number[];
   stats: { solids: number; facesTotal: number; facesTessellated: number; skipped: Record<string, number> };
+  /** Structured findings from the rescue/fallback meshing paths (dropped/skipped faces, heuristic
+   * fills, degenerate boundaries) — the per-face half of the import diagnostics. */
+  warnings: MeshWarning[];
 }
 
 const bump = (o: Record<string, number>, k: string): void => { o[k] = (o[k] ?? 0) + 1; };
@@ -666,6 +670,7 @@ function tessellateParamGrid(
       // A curved-surface fold (OpenVessel counterbore tubes) can't use a planar clip — it keeps
       // falling through to the caller's rail-ribbon fallback.
       if (surface.kind === "PLANE" && planeEarcutFill(surface, outer, holes, fid, verts, faceIds, sign, targetEdge)) {
+        warn("heuristic-fill", fid, "structural fold on a multi-loop plane — face rebuilt by earcut hole-bridge fill");
         if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT: earcut hole-bridge fill (structural multi-loop plane)`);
         return true;
       }
@@ -684,7 +689,7 @@ function tessellateParamGrid(
   {
     let over = 0;
     for (const [k, m] of all) if (m > 2 && (bound.get(k) ?? 0) < m) over++;
-    let guard = 0;
+    let guard = 0, peeled = 0;
     while (over > 0 && guard++ < 256) {
       let worst = -1, worstScore = 0;
       for (let t = v0; t < verts.length; t += 9) {
@@ -705,10 +710,12 @@ function tessellateParamGrid(
       }
       verts.splice(worst, 9);
       faceIds.splice(f0 + (worst - v0) / 9, 1);
+      peeled++;
       over = 0;
       for (const [k, m] of all) if (m > 2 && (bound.get(k) ?? 0) < m) over++;
       if (DBG && over === 0) console.error(`[grid] fid=${fid} self-overlap surgery: dropped ${guard} folded triangle(s)`);
     }
+    if (peeled > 0) warn("folded-triangles-dropped", fid, `folded (u,v) projection — ${peeled} redundant triangle(s) peeled off the face`);
   }
   return true;
 }
@@ -975,7 +982,7 @@ function gridCDT(
   for (let i = 1; i < nU; i++) for (let j = 1; j < nV; j++) tryAdd(umin + ((umax - umin) * i) / nU, vmin + ((vmax - vmin) * j) / nV);
 
   const cdtPts: P2[] = allP2.map(([u, v]) => [SX(u), SY(v)]);
-  const cdtOut = { missing: 0 };
+  const cdtOut: { missing: number; rescue?: string } = { missing: 0 };
   let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
   if (DBG) console.error(`[grid] fid=${fid} nU=${nU} nV=${nV} uSc=${uSc.toExponential(2)} vSc=${vSc.toExponential(2)} boundary=${outerIdx.length}+${holeIdx.reduce((s, h) => s + h.length, 0)} interior=${interiorIdx.length} -> cdt tris=${tris.length}${cdtOut.missing ? ` MISSING=${cdtOut.missing}` : ""}`);
   // Delaunay refinement: insert the circumcentre of any triangle whose circumdiameter exceeds the
@@ -1000,6 +1007,7 @@ function gridCDT(
   // arrays but are unreferenced. An INITIAL missing>0 keeps the rescue as before — for a
   // metric-collapsed boundary it is the only watertight fill available.
   let prevMissing = cdtOut.missing;
+  let prevRescue = cdtOut.rescue;
   // Exact-duplicate guard for refinement inserts, persistent across iterations. The per-iteration
   // dedup below hashes by the POSITION-DEPENDENT local size, so two ulp-separated circumcentres —
   // every grid rectangle is cyclic, its two diagonal triangles propose the SAME cell centre — that
@@ -1069,7 +1077,15 @@ function gridCDT(
       break;
     }
     prevMissing = cdtOut.missing;
+    prevRescue = cdtOut.rescue;
   }
+  // Surface the CDT's own distress to the import diagnostics: unenforceable boundary constraints
+  // mean the face region was reconstructed rather than derived (the class behind every remaining
+  // watertight-but-wrong result), and a rescue label means the parity flood was out-voted even
+  // with all constraints equivalence-realised. prevMissing/prevRescue describe the triangulation
+  // actually kept (a rolled-back refinement run's counts are discarded with its triangles).
+  if (prevMissing > 0) warn("cdt-degenerate-boundary", fid, `${prevMissing} boundary constraint(s) unenforceable — region rebuilt by rescue fill`);
+  else if (prevRescue) warn("cdt-degenerate-boundary", fid, `degenerate boundary (duplicate/collinear vertices) — region rebuilt by ${prevRescue} fill`);
   // Delaunay picks each quad's diagonal by circumcircle in the (flat) scaled plane, which on a
   // curved face alternates diagonal direction from quad to quad — and every alternation is a
   // shading crease (the diamond moiré on fillets). Kernel meshers look smooth because their
@@ -2504,6 +2520,10 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const skipped: Record<string, number> = {};
   let facesTotal = 0;
   let facesTessellated = 0;
+  // Collect diagnostics warnings for this run (module-level sink: tessellation is synchronous,
+  // and the deep meshing code reports without threading a sink through every signature).
+  beginWarnings();
+  for (const fid of brep.droppedFaces) warn("face-dropped", fid, "malformed face record dropped while reading the B-rep — geometry missing");
 
   // Cache each face's surface (used to dispatch tessellation).
   const faceSurf = new Map<number, Surface | null>();
@@ -2594,7 +2614,10 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           for (const id of ids) level.set(id, Math.max(level.get(id) ?? 0, f));
           break;
         }
-        if (DBG && f === 64) console.error(`[tess] micro-face densify: fid=${face.faceId} still self-intersecting at tol/64 — left as-is (genuine overlap)`);
+        if (f === 64) {
+          warn("boundary-self-intersects", face.faceId, "trim loops still self-intersect at 64× sampling density — genuine overlap in the CAD file, meshed as-is");
+          if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} still self-intersecting at tol/64 — left as-is (genuine overlap)`);
+        }
       }
     }
     for (const [id, f] of level) sampled.set(id, resample(id, f));
@@ -2613,7 +2636,11 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     for (const face of solid.faces) {
       facesTotal++;
       const surface = faceSurf.get(face.faceId) ?? null;
-      if (!surface) { bump(skipped, face.surfaceKind); continue; }
+      if (!surface) {
+        bump(skipped, face.surfaceKind);
+        warn("face-unsupported-surface", face.faceId, `surface kind ${face.surfaceKind} not supported — face skipped, geometry missing`);
+        continue;
+      }
       const sign = face.sameSense ? 1 : -1;
 
       let ok = false;
@@ -2684,6 +2711,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         trace?.(face.faceId, "untriangulated");
         if (DBG) console.error(`[tess] UNTRIANGULATED fid=${face.faceId} kind=${face.surfaceKind} loops=${face.loops.map((l) => l.edges.length).join("/")}`);
         bump(skipped, "untriangulated");
+        warn("face-untriangulated", face.faceId, `every mesher failed on this ${face.surfaceKind} face — face skipped, geometry missing`);
       }
     }
 
@@ -2725,6 +2753,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     solidOfTri: Uint32Array.from(solidOfTri),
     openSolids: brep.solids.filter((s) => s.open).map((s) => s.id),
     stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped },
+    warnings: takeWarnings(),
   };
 }
 

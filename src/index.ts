@@ -7,6 +7,7 @@ import { orientConsistent } from "./mesh/orient.ts";
 import { makeSurface, type Surface } from "./geom/surfaces.ts";
 import type { Frame } from "./geom/placement.ts";
 import type { IndexedMesh } from "./io/stl.ts";
+import { meshDefects, type ImportDiagnostics } from "./mesh/diag.ts";
 
 /** Move each part's vertices into its assembly world placement(s). Each vertex belongs to one solid
  * (bodies are welded independently), so the first instance transforms in place; a part used N times
@@ -62,9 +63,24 @@ function applyAssemblyPlacement(
   return { mesh: { positions, indices }, faceOfTri: fo, solidOfTri: so };
 }
 
+/** Assemble the consolidated conversion verdict from the tessellation warnings and a final
+ * edge-defect audit of the mesh actually returned (post remesh/placement). `ok` is strict: any
+ * missing geometry, edge defect, or heuristic repair clears it — the consumer's cue to suggest
+ * exporting a mesh directly from CAD (severity "error" / edge defects) or checking the preview
+ * (only "warning"-severity repairs). */
+function buildDiagnostics(result: MeshResult, mesh: IndexedMesh, solidOfTri: Uint32Array): ImportDiagnostics {
+  const { openEdges, nonManifoldEdges } = meshDefects(mesh, solidOfTri, result.openSolids);
+  const facesDropped = result.warnings.filter((w) => w.code === "face-dropped").length;
+  const facesSkipped = Object.values(result.stats.skipped).reduce((s, n) => s + n, 0);
+  const ok = openEdges === 0 && nonManifoldEdges === 0 && facesDropped === 0 && facesSkipped === 0
+    && result.warnings.length === 0;
+  return { ok, openEdges, nonManifoldEdges, facesDropped, facesSkipped, warnings: result.warnings };
+}
+
 export { writeBinarySTL, readSTL, type IndexedMesh, type TriSoup } from "./io/stl.ts";
 export type { MeshResult, TessOptions } from "./mesh/tessellate.ts";
 export type { BrepModel } from "./brep/build.ts";
+export { meshDefects, type ImportDiagnostics, type MeshWarning, type WarningCode, type WarningSeverity, type EdgeDefects } from "./mesh/diag.ts";
 
 export interface ImportOptions {
   /** Run the curvature-adaptive isotropic remesh (default false). The raw tessellation is already
@@ -83,8 +99,15 @@ export interface ImportOptions {
   trace?: TessOptions["trace"];
 }
 
+export interface ImportResult extends MeshResult {
+  /** Conversion verdict: check `diagnostics.ok` before trusting the mesh; when false, the
+   * warnings/counters say whether geometry is missing or leaking (advise the user to export a
+   * mesh directly from CAD) or merely heuristically repaired (advise checking the preview). */
+  diagnostics: ImportDiagnostics;
+}
+
 /** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
-export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
+export function importStep(src: string, opts: ImportOptions = {}): ImportResult {
   const surfaceDev = opts.surfaceDeviation ?? 0.01;
   const maxEdge = opts.maxEdge ?? 1.0;
   const normalDevRad = (opts.normalDeviation ?? 15) * Math.PI / 180;
@@ -108,7 +131,7 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   if (opts.remesh !== true || brep.solids.length === 0) {
     orientConsistent(result.mesh, result.solidOfTri);
     const placed = applyAssemblyPlacement(result.mesh, result.faceOfTri, result.solidOfTri, solidXf);
-    return { ...result, ...placed };
+    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri) };
   }
 
   const surf = new Map<number, Surface | null>();
@@ -125,5 +148,5 @@ export function importStep(src: string, opts: ImportOptions = {}): MeshResult {
   const solidOfTri = Uint32Array.from(r.faceOfTri, (f) => solidOfFace.get(f) ?? 0);
   orientConsistent(r.mesh, solidOfTri); // fix any triangles flipped by smoothing
   const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf);
-  return { ...result, ...placed };
+  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri) };
 }

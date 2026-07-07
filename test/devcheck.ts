@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Deviation-settings regression check: with CAD-style settings (0.01mm / 10° / 100mm max edge),
 // adjacent facets on the SAME analytic face must differ by ≤ 2·normalDev (20°). Before the fix,
 // a huge max edge silently coarsened both tolerances (hole rims ran at 5 segments — 72° apart).
