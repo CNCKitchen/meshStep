@@ -1,7 +1,7 @@
 {
   "name": "meshstep",
   "version": "0.1.0",
-  "description": "Standalone STEP -> uniform-isotropic mesh importer (analytic surfaces, v1) for bumpmesh & infeall. Pure TypeScript, zero runtime dependencies.",
+  "description": "STEP -> watertight process-grade mesh importer (analytic + NURBS surfaces, assemblies) for bumpmesh & infeall. Pure TypeScript, zero runtime dependencies, no WASM.",
   "type": "module",
   "license": "AGPL-3.0-only",
   "engines": {

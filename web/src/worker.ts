@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
-// Produces TWO meshes from one STEP file: the raw tessellation (remesh: false)
-// and the isotropically remeshed result (remesh: true), so the UI can show them
-// side by side.
+// Produces the raw tessellation (remesh: false) from one STEP file.
 import { importStep, type ImportOptions, type MeshResult } from "../../src/index.ts";
 
 export interface ConvertRequest {
@@ -19,12 +17,8 @@ export interface MeshPayload {
 
 export interface ConvertResult {
   type: "result";
-  tessellated: MeshPayload;
-  remeshed: MeshPayload;
-  stats: {
-    tessellated: MeshResult["stats"];
-    remeshed: MeshResult["stats"];
-  };
+  mesh: MeshPayload;
+  stats: MeshResult["stats"];
 }
 
 export interface ProgressMessage {
@@ -52,26 +46,17 @@ ctx.onmessage = (ev: MessageEvent<ConvertRequest>) => {
     post({ type: "progress", stage: "Tessellating…" });
     const tess = importStep(req.stepText, { ...req.opts, remesh: false });
 
-    let remeshed: MeshResult = tess;
-    if (req.opts.remesh !== false) {
-      post({ type: "progress", stage: "Remeshing (isotropic)…" });
-      remeshed = importStep(req.stepText, { ...req.opts, remesh: true });
-    }
-
-    const tPos = tess.mesh.positions;
-    const tIdx = tess.mesh.indices;
-    const rPos = remeshed.mesh.positions;
-    const rIdx = remeshed.mesh.indices;
+    const pos = tess.mesh.positions;
+    const idx = tess.mesh.indices;
 
     post(
       {
         type: "result",
-        tessellated: { positions: tPos, indices: tIdx },
-        remeshed: { positions: rPos, indices: rIdx },
-        stats: { tessellated: tess.stats, remeshed: remeshed.stats },
+        mesh: { positions: pos, indices: idx },
+        stats: tess.stats,
       },
       // Transfer the underlying buffers to avoid a copy.
-      [tPos.buffer, tIdx.buffer, rPos.buffer, rIdx.buffer],
+      [pos.buffer, idx.buffer],
     );
   } catch (err) {
     post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });

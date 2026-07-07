@@ -20,6 +20,7 @@ import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from ".
 import { sampleEdgePolyline } from "../geom/curves.ts";
 import { constrainedTriangulate } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
+import { ekey, refineTriangulation } from "./refine.ts";
 
 const TWO_PI = Math.PI * 2;
 
@@ -652,7 +653,7 @@ function tessellateParamGrid(
       // text plane faces whose flood misclassifies in/out (z_bed mirror, Meanwell, Front_Skirt_Logo).
       // A curved-surface fold (OpenVessel counterbore tubes) can't use a planar clip — it keeps
       // falling through to the caller's rail-ribbon fallback.
-      if (surface.kind === "PLANE" && planeEarcutFill(surface, outer, holes, fid, verts, faceIds, sign)) {
+      if (surface.kind === "PLANE" && planeEarcutFill(surface, outer, holes, fid, verts, faceIds, sign, targetEdge)) {
         if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT: earcut hole-bridge fill (structural multi-loop plane)`);
         return true;
       }
@@ -704,11 +705,12 @@ function tessellateParamGrid(
  * over-coverage): bridge every hole into the outer boundary and ear-clip in (u,v). Valid ONLY for a
  * plane (affine (u,v)->3D); each triangle is re-oriented by emitTri against the surface normal, so
  * the ear-clip winding is immaterial. Returns false if the clip produced nothing (leaves the face to
- * the caller's ribbon fallback). No interior points are added — a flat face needs none for accuracy;
- * the remesh pass refines size later if required. */
+ * the caller's ribbon fallback). The raw clip has no interior vertices (every triangle a boundary-
+ * to-boundary sliver), so it is refined to the face's edge target afterwards — boundary segments
+ * stay verbatim, keeping the fill watertight against the neighbouring faces. */
 function planeEarcutFill(
   surface: Surface, outer: { p3: Vec3[]; p2: P2[] }, holes: { p3: Vec3[]; p2: P2[] }[], fid: number,
-  verts: number[], faceIds: number[], sign: number,
+  verts: number[], faceIds: number[], sign: number, targetEdge: number,
 ): boolean {
   const flat: number[] = [];
   const p3: Vec3[] = [];
@@ -721,9 +723,43 @@ function planeEarcutFill(
   }
   const tri = earcut(flat, holeStarts.length ? holeStarts : null);
   if (tri.length === 0) return false;
-  const v0 = verts.length, f0 = faceIds.length;
+  // Weld duplicate (u,v) points (self-touching loops) so the refinement sees each geometric edge
+  // once — two index-distinct copies of one edge could otherwise split differently and open a
+  // T-junction between their halves.
+  const widx = new Map<string, number>();
+  const remap = new Array<number>(flat.length / 2);
+  const wpts: number[] = [];
+  const wp3: Vec3[] = [];
+  for (let i = 0; i < flat.length / 2; i++) {
+    const key = `${flat[i * 2]},${flat[i * 2 + 1]}`;
+    let w = widx.get(key);
+    if (w === undefined) { w = wpts.length / 2; widx.set(key, w); wpts.push(flat[i * 2]!, flat[i * 2 + 1]!); wp3.push(p3[i]!); }
+    remap[i] = w;
+  }
+  const wtris: number[] = [];
   for (let t = 0; t < tri.length; t += 3) {
-    emitTri(verts, faceIds, p3[tri[t]!]!, p3[tri[t + 1]!]!, p3[tri[t + 2]!]!, fid, surface, sign);
+    const a = remap[tri[t]!]!, b = remap[tri[t + 1]!]!, c = remap[tri[t + 2]!]!;
+    if (a !== b && b !== c && c !== a) wtris.push(a, b, c);
+  }
+  // Boundary segments = consecutive loop points (with wrap): never split, shared with neighbours.
+  const bnd = new Set<number>();
+  const ends = [...holeStarts, flat.length / 2];
+  let s = 0;
+  for (const e of ends) {
+    for (let i = s; i < e; i++) {
+      const j = i + 1 < e ? i + 1 : s;
+      if (remap[i]! !== remap[j]!) bnd.add(ekey(remap[i]!, remap[j]!));
+    }
+    s = e;
+  }
+  const nW = wp3.length;
+  refineTriangulation(wpts, wtris, bnd, targetEdge);
+  const v0 = verts.length, f0 = faceIds.length;
+  // Original boundary vertices keep their shared 3D polyline samples verbatim; inserted interior
+  // vertices evaluate exactly on the plane.
+  const pt3 = (i: number): Vec3 => (i < nW ? wp3[i]! : surface.evaluate(wpts[i * 2]!, wpts[i * 2 + 1]!));
+  for (let t = 0; t < wtris.length; t += 3) {
+    emitTri(verts, faceIds, pt3(wtris[t]!), pt3(wtris[t + 1]!), pt3(wtris[t + 2]!), fid, surface, sign);
   }
   if (verts.length === v0) { faceIds.length = f0; return false; }
   return true;

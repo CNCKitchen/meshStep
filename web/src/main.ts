@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./styles.css";
 import * as THREE from "three";
-import { readSTL } from "../../src/index.ts";
-import { DualViewer, type Side } from "./viewer.ts";
+import { readSTL, writeBinarySTL } from "../../src/index.ts";
+import { Viewer } from "./viewer.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
   buildIndexedGeometry,
@@ -26,6 +26,7 @@ const stepName = $("stepName");
 const refFile = $<HTMLInputElement>("refFile");
 const refName = $("refName");
 const convertBtn = $<HTMLButtonElement>("convertBtn");
+const exportBtn = $<HTMLButtonElement>("exportBtn");
 const statusEl = $("status");
 const overlay = $("overlay");
 const overlayText = $("overlayText");
@@ -41,24 +42,20 @@ const legend = $("legend");
 const legNeg = $("legNeg");
 const legPos = $("legPos");
 const legMeta = $("legMeta");
-const statsLeft = $("statsLeft");
-const statsRight = $("statsRight");
+const statsEl = $("stats");
 
 // ---- state ----
-const viewer = new DualViewer($("viewport"));
+const viewer = new Viewer($("viewport"));
 let stepText: string | null = null;
+let stepBaseName = "mesh";
 let worker: Worker | null = null;
 
-let meshLeft: RawMesh | null = null;
-let meshRight: RawMesh | null = null;
-let geoLeft: THREE.BufferGeometry | null = null;
-let geoRight: THREE.BufferGeometry | null = null;
-let openLeft = 0;
-let openRight = 0;
+let mesh: RawMesh | null = null;
+let geo: THREE.BufferGeometry | null = null;
+let openEdges = 0;
 
 let reference: ReferenceSurface | null = null;
-let devLeft: DeviationResult | null = null;
-let devRight: DeviationResult | null = null;
+let dev: DeviationResult | null = null;
 let manualRange: number | null = null; // null => auto
 
 // ---- input: STEP ----
@@ -66,6 +63,7 @@ stepFile.addEventListener("change", async () => {
   const f = stepFile.files?.[0];
   if (!f) return;
   stepText = await f.text();
+  stepBaseName = f.name.replace(/\.(step|stp)$/i, "") || "mesh";
   stepName.textContent = f.name;
   convertBtn.disabled = false;
   setStatus("");
@@ -78,11 +76,11 @@ refFile.addEventListener("change", async () => {
   try {
     const buf = await f.arrayBuffer();
     const soup = readSTL(buf);
-    const geo = buildSoupGeometry(soup.positions);
+    const geoRef = buildSoupGeometry(soup.positions);
     reference?.dispose();
-    reference = new ReferenceSurface(geo);
+    reference = new ReferenceSurface(geoRef);
     refName.textContent = `${f.name}  ·  ${soup.triangleCount.toLocaleString()} tris`;
-    viewer.setReference(geo);
+    viewer.setReference(geoRef);
     tRef.disabled = false;
     tDev.disabled = false;
     recomputeDeviation();
@@ -100,8 +98,7 @@ convertBtn.addEventListener("click", () => {
     surfaceDeviation: num("surfaceDeviation", 0.01),
     normalDeviation: num("normalDeviation", 15),
     maxEdge: num("maxEdge", 1),
-    remeshIterations: Math.round(num("remeshIterations", 8)),
-    remesh: true,
+    remesh: false,
   };
   showOverlay("Starting…");
   convertBtn.disabled = true;
@@ -133,47 +130,53 @@ function onWorkerMessage(msg: WorkerOut): void {
 }
 
 function applyResult(res: ConvertResult): void {
-  meshLeft = res.tessellated;
-  meshRight = res.remeshed;
+  mesh = res.mesh;
+  geo = buildIndexedGeometry(mesh);
 
-  geoLeft = buildIndexedGeometry(meshLeft);
-  geoRight = buildIndexedGeometry(meshRight);
+  const b = boundaryEdges(mesh);
+  openEdges = b.count;
 
-  const bl = boundaryEdges(meshLeft);
-  const br = boundaryEdges(meshRight);
-  openLeft = bl.count;
-  openRight = br.count;
-
-  viewer.setSide("left", geoLeft, bl.positions);
-  viewer.setSide("right", geoRight, br.positions);
+  viewer.setMesh(geo, b.positions);
   viewer.fit();
 
-  devLeft = devRight = null;
+  dev = null;
   recomputeDeviation();
   refreshStats();
 
   hideOverlay();
   convertBtn.disabled = false;
-  setStatus(`Done · ${triCount(meshLeft).toLocaleString()} → ${triCount(meshRight).toLocaleString()} tris`);
+  exportBtn.disabled = false;
+  setStatus(`Done · ${triCount(mesh).toLocaleString()} tris`);
 }
+
+// ---- export ----
+exportBtn.addEventListener("click", () => {
+  if (!mesh) return;
+  const stl = writeBinarySTL(mesh);
+  const blob = new Blob([stl.buffer as ArrayBuffer], { type: "model/stl" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${stepBaseName}.stl`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
 
 // ---- deviation ----
 function recomputeDeviation(): void {
-  if (!reference || !geoLeft || !geoRight) {
-    devLeft = devRight = null;
+  if (!reference || !geo) {
+    dev = null;
     legend.hidden = true;
     return;
   }
-  devLeft = reference.deviationFor(geoLeft, null);
-  devRight = reference.deviationFor(geoRight, null);
+  dev = reference.deviationFor(geo, null);
   recolorDeviation();
 }
 
 function recolorDeviation(): void {
-  if (!devLeft || !devRight) return;
-  const clamp = manualRange ?? Math.max(devLeft.maxAbs, devRight.maxAbs, 1e-9);
-  viewer.setDeviationColors("left", colorize(devLeft.signed, clamp));
-  viewer.setDeviationColors("right", colorize(devRight.signed, clamp));
+  if (!dev) return;
+  const clamp = manualRange ?? Math.max(dev.maxAbs, 1e-9);
+  viewer.setDeviationColors(colorize(dev.signed, clamp));
   updateLegend(clamp);
   refreshStats();
 }
@@ -198,8 +201,7 @@ function updateLegend(clamp: number): void {
   legNeg.textContent = `-${clamp.toFixed(3)}`;
   legPos.textContent = `+${clamp.toFixed(3)}`;
   if (manualRange == null) devRange.value = clamp.toFixed(3);
-  const m = devRight ?? devLeft;
-  legMeta.textContent = m ? `max |dev| ${m.maxAbs.toFixed(4)} · rms ${m.rms.toFixed(4)} mm` : "";
+  legMeta.textContent = dev ? `max |dev| ${dev.maxAbs.toFixed(4)} · rms ${dev.rms.toFixed(4)} mm` : "";
 }
 
 // ---- toggles ----
@@ -209,7 +211,7 @@ tRef.addEventListener("change", () => viewer.setReferenceVisible(tRef.checked));
 tDev.addEventListener("change", () => {
   viewer.setDeviation(tDev.checked);
   rangeField.hidden = !tDev.checked;
-  if (tDev.checked && (!devLeft || !devRight)) recomputeDeviation();
+  if (tDev.checked && !dev) recomputeDeviation();
   legend.hidden = !tDev.checked;
   if (tDev.checked) recolorDeviation();
 });
@@ -225,19 +227,20 @@ autoRange.addEventListener("click", () => {
 
 $<HTMLButtonElement>("fitBtn").addEventListener("click", () => viewer.fit());
 
-// ---- stats panels ----
+// ---- stats panel ----
 function refreshStats(): void {
-  statsLeft.textContent = sideStats(meshLeft, openLeft, devLeft);
-  statsRight.textContent = sideStats(meshRight, openRight, devRight);
-}
-
-function sideStats(mesh: RawMesh | null, open: number, dev: DeviationResult | null): string {
-  if (!mesh) return "";
-  const lines = [`${triCount(mesh).toLocaleString()} triangles`, `${open} open edge${open === 1 ? "" : "s"}`];
+  if (!mesh) {
+    statsEl.textContent = "";
+    return;
+  }
+  const lines = [
+    `${triCount(mesh).toLocaleString()} triangles`,
+    `${openEdges} open edge${openEdges === 1 ? "" : "s"}`,
+  ];
   if (dev && tDev.checked) {
     lines.push(`max dev ${dev.maxAbs.toFixed(4)} mm`, `rms ${dev.rms.toFixed(4)} mm`);
   }
-  return lines.join("\n");
+  statsEl.textContent = lines.join("\n");
 }
 
 // ---- small utils ----

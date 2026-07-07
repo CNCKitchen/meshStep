@@ -297,6 +297,127 @@ class ExtrusionSurface implements Surface {
   curvatureRadius(): number { return this.curve.minRadius(); }
 }
 
+/** SURFACE_OF_REVOLUTION: the swept (profile) curve C(v) rotated about an axis (point A, unit
+ * direction D). S(u,v) = A + Rodrigues(C(v)−A, D, u): u is the revolution angle (periodic, 2π,
+ * seam at ±π like the other analytic surfaces), v the profile-curve parameter. At u=0 the surface
+ * IS the profile, so cylinder/cone/sphere/torus are all special cases of this one construction.
+ * Inversion matches on (axial, radial) coordinates — both preserved by the rotation — so it stays
+ * correct even when the profile touches or crosses the axis (a sphere-like pole), where a
+ * fixed-meridian angle would be ambiguous. */
+class RevolutionSurface implements Surface {
+  kind = "SURFACE_OF_REVOLUTION";
+  periodicU = true;
+  uSeam = Math.PI;
+  uPeriod = 2 * Math.PI;
+  periodicV = false;
+  vPeriod?: number;
+  vSeam?: number;
+  curve: Curve3;
+  A: Vec3;
+  D: Vec3;
+  t0: number;
+  t1: number;
+  // profile samples in (axial, radial) space for the v-inversion seed
+  private sv: number[] = [];
+  private sa: number[] = [];
+  private sr: number[] = [];
+  constructor(curve: Curve3, A: Vec3, D: Vec3) {
+    this.curve = curve; this.A = A; this.D = normalize(D);
+    this.t0 = curve.t0; this.t1 = curve.t1;
+    if (curve.closed) { this.periodicV = true; this.vPeriod = this.t1 - this.t0; this.vSeam = this.t0; }
+    const N = 128;
+    for (let i = 0; i <= N; i++) {
+      const v = this.t0 + ((this.t1 - this.t0) * i) / N;
+      const [a, rho] = this.axialRadial(curve.evaluate(v));
+      this.sv.push(v); this.sa.push(a); this.sr.push(rho);
+    }
+  }
+  /** Decompose a point's offset from the axis into (distance along D, distance perpendicular). */
+  private axialRadial(p: Vec3): [number, number] {
+    const w = sub(p, this.A);
+    const a = dot(w, this.D);
+    const rad = sub(w, scale(this.D, a));
+    return [a, Math.hypot(rad[0], rad[1], rad[2])];
+  }
+  /** Rotate a point about the axis by angle u (cu=cos u, su=sin u). */
+  private rotPoint(p: Vec3, cu: number, su: number): Vec3 {
+    const w = sub(p, this.A);
+    const dw = dot(this.D, w);
+    const cxw = cross(this.D, w);
+    const k = dw * (1 - cu);
+    return [
+      this.A[0] + w[0] * cu + cxw[0] * su + this.D[0] * k,
+      this.A[1] + w[1] * cu + cxw[1] * su + this.D[1] * k,
+      this.A[2] + w[2] * cu + cxw[2] * su + this.D[2] * k,
+    ];
+  }
+  /** Rotate a free vector (direction) about the axis by angle u. */
+  private rotVec(w: Vec3, cu: number, su: number): Vec3 {
+    const dw = dot(this.D, w);
+    const cxw = cross(this.D, w);
+    const k = dw * (1 - cu);
+    return [w[0] * cu + cxw[0] * su + this.D[0] * k, w[1] * cu + cxw[1] * su + this.D[1] * k, w[2] * cu + cxw[2] * su + this.D[2] * k];
+  }
+  private tangent(v: number): Vec3 {
+    const e = 1e-5 * Math.max(1, this.t1 - this.t0);
+    const a = this.curve.evaluate(Math.max(this.t0, v - e));
+    const b = this.curve.evaluate(Math.min(this.t1, v + e));
+    return sub(b, a);
+  }
+  evaluate(u: number, v: number): Vec3 {
+    if (this.periodicV && this.vPeriod) v = this.t0 + (((v - this.t0) % this.vPeriod) + this.vPeriod) % this.vPeriod;
+    return this.rotPoint(this.curve.evaluate(v), Math.cos(u), Math.sin(u));
+  }
+  project(p: Vec3): [number, number] {
+    const [ap, rp] = this.axialRadial(p);
+    // v: profile parameter whose (axial, radial) matches the query — seeded from the sample table,
+    // then golden-section refined on the same 2D objective.
+    let bi = 0, bf = Infinity;
+    for (let i = 0; i < this.sv.length; i++) {
+      const da = this.sa[i]! - ap, dr = this.sr[i]! - rp, f = da * da + dr * dr;
+      if (f < bf) { bf = f; bi = i; }
+    }
+    const cost = (v: number): number => { const [a, rho] = this.axialRadial(this.curve.evaluate(v)); const da = a - ap, dr = rho - rp; return da * da + dr * dr; };
+    let lo = this.sv[Math.max(0, bi - 1)]!, hi = this.sv[Math.min(this.sv.length - 1, bi + 1)]!;
+    const g = 0.6180339887;
+    let c1 = hi - g * (hi - lo), c2 = lo + g * (hi - lo);
+    let f1 = cost(c1), f2 = cost(c2);
+    for (let it = 0; it < 24 && hi - lo > 1e-9 * (this.t1 - this.t0 || 1); it++) {
+      if (f1 < f2) { hi = c2; c2 = c1; f2 = f1; c1 = hi - g * (hi - lo); f1 = cost(c1); }
+      else { lo = c1; c1 = c2; f1 = f2; c2 = lo + g * (hi - lo); f2 = cost(c2); }
+    }
+    const v = (lo + hi) / 2;
+    // u: signed rotation about D from the profile point's radial direction to the query's.
+    const w = sub(p, this.A);
+    const dw = dot(this.D, w);
+    const radP = sub(w, scale(this.D, dw));
+    const wc = sub(this.curve.evaluate(v), this.A);
+    const radC = sub(wc, scale(this.D, dot(this.D, wc)));
+    const nP = Math.hypot(radP[0], radP[1], radP[2]), nC = Math.hypot(radC[0], radC[1], radC[2]);
+    if (nP < 1e-9 || nC < 1e-9) return [0, v]; // on the axis (pole): angle is arbitrary
+    const cosA = dot(radC, radP) / (nC * nP);
+    const sinA = dot(cross(radC, radP), this.D) / (nC * nP);
+    return [Math.atan2(sinA, cosA), v];
+  }
+  normal(u: number, v: number): Vec3 {
+    const cu = Math.cos(u), su = Math.sin(u);
+    const S = this.rotPoint(this.curve.evaluate(v), cu, su);
+    const Su = cross(this.D, sub(S, this.A));        // parallel-circle tangent
+    const Sv = this.rotVec(this.tangent(v), cu, su); // meridian tangent
+    let n = cross(Su, Sv);
+    let len = Math.hypot(n[0], n[1], n[2]);
+    if (len < 1e-14) { n = cross(Sv, this.D); len = Math.hypot(n[0], n[1], n[2]); } // on axis: fall back
+    return len > 1e-14 ? [n[0] / len, n[1] / len, n[2] / len] : this.D;
+  }
+  curvatureRadius(_u: number, v: number): number {
+    const [, rho] = this.axialRadial(this.curve.evaluate(v)); // parallel-circle radius (tight near axis)
+    const mr = this.curve.minRadius();                        // meridian radius of curvature
+    let r = rho > 1e-6 ? rho : Infinity;
+    if (Number.isFinite(mr)) r = Math.min(r, mr);
+    return Number.isFinite(r) ? Math.max(1e-3, r) : Infinity;
+  }
+}
+
 // ---- B-spline (NURBS) surface --------------------------------------------------------------
 // Tensor-product de Boor on a single control row of homogeneous (wx,wy,wz,w) 4-vectors.
 function deBoorH(degree: number, ctrl: number[][], knots: number[], u: number): number[] {
@@ -596,6 +717,15 @@ export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface 
       const mag = num(vec.params[2]!) * s;
       return new ExtrusionSurface(curve, [dir[0] * mag, dir[1] * mag, dir[2] * mag]);
     }
+    case "SURFACE_OF_REVOLUTION": {
+      // (name, swept_curve#, axis_position#) — axis_position is an AXIS1_PLACEMENT(name, location, axis?).
+      const curve = makeCurve(t, ref(r.params[1]!), s, aRad);
+      if (!curve) return null;
+      const ax = t.record(ref(r.params[2]!));
+      const A = readPoint(t, ref(ax.params[1]!), s);
+      const D = ax.params[2] && ax.params[2].k === "ref" ? readDirection(t, ref(ax.params[2])) : [0, 0, 1] as Vec3;
+      return new RevolutionSurface(curve, A, D);
+    }
     case "B_SPLINE_SURFACE_WITH_KNOTS":
       return makeBSplineSurface(t, id, s);
     case "PLANE":
@@ -620,7 +750,7 @@ export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface 
       return base ? new OffsetSurface(base, num(r.params[2]!) * s) : null;
     }
     default:
-      return null; // SURFACE_OF_LINEAR_EXTRUSION and other swept surfaces — phase 2
+      return null; // unsupported surface kind
   }
 }
 

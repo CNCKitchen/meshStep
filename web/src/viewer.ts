@@ -2,9 +2,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
-export type Side = "left" | "right";
-
-interface SideContent {
+interface Content {
   group: THREE.Group;
   solid: THREE.Mesh | null;
   wire: THREE.LineSegments | null;
@@ -17,15 +15,15 @@ const REF_COLOR = 0x33dd88;
 const EDGE_COLOR = 0xff3b30;
 
 /**
- * Two synced viewports rendered into a single canvas via scissor regions.
- * A single shared camera + OrbitControls guarantees the views stay locked.
+ * A single orbit-controlled viewport showing the tessellated mesh, with optional
+ * wireframe, open-edge highlight, and a reference-STL overlay / deviation colors.
  */
-export class DualViewer {
+export class Viewer {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
   private controls: OrbitControls;
-  private sides: Record<Side, SideContent>;
+  private content: Content;
   private container: HTMLElement;
 
   // toggle state
@@ -38,7 +36,6 @@ export class DualViewer {
     this.container = container;
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.setScissorTest(true);
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(0x14181d);
@@ -50,7 +47,7 @@ export class DualViewer {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
 
-    // Lights (shared scene).
+    // Lights.
     const hemi = new THREE.HemisphereLight(0xffffff, 0x404048, 1.0);
     this.scene.add(hemi);
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
@@ -60,12 +57,9 @@ export class DualViewer {
     fill.position.set(-1, -0.5, -1);
     this.scene.add(fill);
 
-    const mk = (): SideContent => {
-      const group = new THREE.Group();
-      this.scene.add(group);
-      return { group, solid: null, wire: null, edges: null, reference: null };
-    };
-    this.sides = { left: mk(), right: mk() };
+    const group = new THREE.Group();
+    this.scene.add(group);
+    this.content = { group, solid: null, wire: null, edges: null, reference: null };
 
     const grid = new THREE.GridHelper(200, 20, 0x2a3038, 0x20252b);
     (grid.material as THREE.Material).depthWrite = false;
@@ -80,55 +74,33 @@ export class DualViewer {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     this.renderer.setSize(w, h, true);
-    this.camera.aspect = w / 2 / h;
+    this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
   }
 
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.controls.update();
-    const w = this.container.clientWidth;
-    const h = this.container.clientHeight;
-    const halfW = Math.floor(w / 2);
-
-    // Left viewport: show only left group.
-    this.setGroupVisible("left", true);
-    this.setGroupVisible("right", false);
-    this.renderer.setViewport(0, 0, halfW, h);
-    this.renderer.setScissor(0, 0, halfW, h);
-    this.renderer.render(this.scene, this.camera);
-
-    // Right viewport: show only right group.
-    this.setGroupVisible("left", false);
-    this.setGroupVisible("right", true);
-    this.renderer.setViewport(halfW, 0, w - halfW, h);
-    this.renderer.setScissor(halfW, 0, w - halfW, h);
     this.renderer.render(this.scene, this.camera);
   };
 
-  private setGroupVisible(side: Side, v: boolean): void {
-    this.sides[side].group.visible = v;
-  }
-
   private applyVisibility(): void {
-    for (const side of ["left", "right"] as Side[]) {
-      const c = this.sides[side];
-      if (c.wire) c.wire.visible = this.showWire;
-      if (c.edges) c.edges.visible = this.showEdges;
-      if (c.reference) c.reference.visible = this.showReference;
-      if (c.solid) {
-        const m = c.solid.material as THREE.MeshStandardMaterial;
-        m.vertexColors = this.deviationOn && !!c.solid.geometry.getAttribute("color");
-        m.color.set(m.vertexColors ? 0xffffff : BASE_COLOR);
-        m.needsUpdate = true;
-      }
+    const c = this.content;
+    if (c.wire) c.wire.visible = this.showWire;
+    if (c.edges) c.edges.visible = this.showEdges;
+    if (c.reference) c.reference.visible = this.showReference;
+    if (c.solid) {
+      const m = c.solid.material as THREE.MeshStandardMaterial;
+      m.vertexColors = this.deviationOn && !!c.solid.geometry.getAttribute("color");
+      m.color.set(m.vertexColors ? 0xffffff : BASE_COLOR);
+      m.needsUpdate = true;
     }
   }
 
-  /** Replace the solid + wireframe + open-edge geometry for one side. */
-  setSide(side: Side, geometry: THREE.BufferGeometry, boundaryPositions: Float32Array): void {
-    const c = this.sides[side];
-    this.disposeSideMeshes(c);
+  /** Replace the solid + wireframe + open-edge geometry. */
+  setMesh(geometry: THREE.BufferGeometry, boundaryPositions: Float32Array): void {
+    const c = this.content;
+    this.disposeMeshes(c);
 
     const mat = new THREE.MeshStandardMaterial({
       color: BASE_COLOR,
@@ -156,36 +128,33 @@ export class DualViewer {
     this.applyVisibility();
   }
 
-  /** Set (or clear) the reference overlay; shown in both viewports. */
+  /** Set (or clear) the reference overlay. */
   setReference(geometry: THREE.BufferGeometry | null): void {
-    for (const side of ["left", "right"] as Side[]) {
-      const c = this.sides[side];
-      if (c.reference) {
-        c.group.remove(c.reference);
-        (c.reference.material as THREE.Material).dispose();
-        c.reference = null;
-      }
-      if (geometry) {
-        const mat = new THREE.MeshStandardMaterial({
-          color: REF_COLOR,
-          transparent: true,
-          opacity: 0.28,
-          metalness: 0.0,
-          roughness: 1.0,
-          side: THREE.DoubleSide,
-          depthWrite: false,
-        });
-        // Both sides share the same geometry instance.
-        c.reference = new THREE.Mesh(geometry, mat);
-        c.reference.visible = this.showReference;
-        c.group.add(c.reference);
-      }
+    const c = this.content;
+    if (c.reference) {
+      c.group.remove(c.reference);
+      (c.reference.material as THREE.Material).dispose();
+      c.reference = null;
+    }
+    if (geometry) {
+      const mat = new THREE.MeshStandardMaterial({
+        color: REF_COLOR,
+        transparent: true,
+        opacity: 0.28,
+        metalness: 0.0,
+        roughness: 1.0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      });
+      c.reference = new THREE.Mesh(geometry, mat);
+      c.reference.visible = this.showReference;
+      c.group.add(c.reference);
     }
   }
 
-  /** Apply (or clear) per-vertex deviation colors for one side's solid mesh. */
-  setDeviationColors(side: Side, colors: Float32Array | null): void {
-    const c = this.sides[side];
+  /** Apply (or clear) per-vertex deviation colors on the solid mesh. */
+  setDeviationColors(colors: Float32Array | null): void {
+    const c = this.content;
     if (!c.solid) return;
     const geo = c.solid.geometry;
     if (colors) {
@@ -201,15 +170,11 @@ export class DualViewer {
   setReferenceVisible(v: boolean): void { this.showReference = v; this.applyVisibility(); }
   setDeviation(v: boolean): void { this.deviationOn = v; this.applyVisibility(); }
 
-  /** Frame the camera to the combined content. */
+  /** Frame the camera to the content. */
   fit(): void {
-    const box = new THREE.Box3();
-    let has = false;
-    for (const side of ["left", "right"] as Side[]) {
-      const s = this.sides[side].solid;
-      if (s) { box.expandByObject(s); has = true; }
-    }
-    if (!has) return;
+    const s = this.content.solid;
+    if (!s) return;
+    const box = new THREE.Box3().expandByObject(s);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
@@ -223,7 +188,7 @@ export class DualViewer {
     this.controls.update();
   }
 
-  private disposeSideMeshes(c: SideContent): void {
+  private disposeMeshes(c: Content): void {
     if (c.solid) {
       c.group.remove(c.solid);
       c.solid.geometry.dispose();

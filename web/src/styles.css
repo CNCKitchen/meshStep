@@ -72,6 +72,14 @@ button.primary {
 button.primary:hover { filter: brightness(1.1); }
 button.primary:disabled { background: var(--line); color: var(--muted); cursor: not-allowed; }
 
+button.secondary {
+  width: 100%; background: var(--panel-2); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px; padding: 9px;
+  font-size: 14px; font-weight: 600; cursor: pointer; margin-top: 8px; transition: 0.15s;
+}
+button.secondary:hover { border-color: var(--accent); }
+button.secondary:disabled { color: var(--muted); border-color: var(--line); cursor: not-allowed; }
+
 .status { font-size: 12px; color: var(--muted); margin: 8px 0 0; min-height: 14px; }
 .status.error { color: var(--danger); }
 
@@ -98,25 +106,17 @@ button.primary:disabled { background: var(--line); color: var(--muted); cursor: 
 #stage { position: relative; overflow: hidden; }
 #viewport { position: absolute; inset: 0; }
 #viewport canvas { display: block; }
-#viewport::after {
-  content: ""; position: absolute; top: 0; bottom: 0; left: 50%;
-  width: 1px; background: var(--line); pointer-events: none;
-}
 .vp-label {
-  position: absolute; top: 12px; font-size: 12px; font-weight: 600;
+  position: absolute; top: 12px; left: 12px; font-size: 12px; font-weight: 600;
   background: rgba(0,0,0,0.45); padding: 5px 10px; border-radius: 5px;
   color: var(--text); pointer-events: none; backdrop-filter: blur(4px);
 }
-.vp-left { left: 12px; }
-.vp-right { left: calc(50% + 12px); }
 .vp-stats {
-  position: absolute; bottom: 12px; font-size: 11px; color: var(--muted);
+  position: absolute; bottom: 12px; left: 12px; font-size: 11px; color: var(--muted);
   background: rgba(0,0,0,0.45); padding: 6px 10px; border-radius: 5px;
   pointer-events: none; font-variant-numeric: tabular-nums; line-height: 1.5;
   backdrop-filter: blur(4px); white-space: pre;
 }
-.vp-stats-left { left: 12px; }
-.vp-stats-right { left: calc(50% + 12px); }
 .hint {
   position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
   font-size: 11px; color: var(--muted); background: rgba(0,0,0,0.4);

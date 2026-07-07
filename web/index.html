@@ -39,11 +39,8 @@
             <label for="maxEdge">Max edge length <span class="unit">mm</span></label>
             <input type="number" id="maxEdge" value="1" step="0.1" min="0.01" />
           </div>
-          <div class="field">
-            <label for="remeshIterations">Remesh iterations</label>
-            <input type="number" id="remeshIterations" value="8" step="1" min="1" max="40" />
-          </div>
           <button id="convertBtn" class="primary" disabled>Convert</button>
+          <button id="exportBtn" class="secondary" disabled>Export STL…</button>
           <p class="status" id="status"></p>
         </section>
 
@@ -78,11 +75,9 @@
 
       <main id="stage">
         <div id="viewport"></div>
-        <div class="vp-label vp-left">Tessellated</div>
-        <div class="vp-label vp-right">Tessellated + Remeshed</div>
-        <div class="vp-stats vp-stats-left" id="statsLeft"></div>
-        <div class="vp-stats vp-stats-right" id="statsRight"></div>
-        <div class="hint">drag to orbit · scroll to zoom · views are synced</div>
+        <div class="vp-label">Tessellated</div>
+        <div class="vp-stats" id="stats"></div>
+        <div class="hint">drag to orbit · scroll to zoom</div>
         <button id="fitBtn" class="fit">Fit view</button>
         <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p></div>
       </main>

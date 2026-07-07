@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Browser verification UI for meshStep: STEP -> mesh -> remesh, with synced dual views, reference STL overlay, deviation analysis, wireframe and open-edge highlighting.",
+  "description": "Browser verification UI for meshStep: STEP -> mesh, with reference STL overlay, deviation analysis, wireframe and open-edge highlighting.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
