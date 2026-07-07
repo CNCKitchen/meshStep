@@ -592,6 +592,12 @@ class BSplineSurface implements Surface {
     return this.evaluateRaw(u, v);
   }
   private normalAt(u: number, v: number): Vec3 {
+    // Wrap a seam-unwrapped coordinate exactly like evaluate() does BEFORE clamping: a caller in
+    // an unwrapped chart (gridCDT's uv centroids) would otherwise clamp to the far knot end and
+    // get the normal of the wrong side of the surface (GoProHandlePod: 62% signed-volume loss
+    // from systematically mis-oriented seam-adjacent triangles).
+    if (this.closedU && this.uPeriod > 0) u = this.u0 + (((u - this.u0) % this.uPeriod) + this.uPeriod) % this.uPeriod;
+    if (this.closedV && this.vPeriod > 0) v = this.v0 + (((v - this.v0) % this.vPeriod) + this.vPeriod) % this.vPeriod;
     const e = 1e-4 * Math.max(1, this.u1 - this.u0);
     const ev = 1e-4 * Math.max(1, this.v1 - this.v0);
     const cu = Math.min(Math.max(u, this.u0 + e), this.u1 - e);

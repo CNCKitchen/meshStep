@@ -116,9 +116,9 @@
     "skipped": {}
   },
   "GoProHandlePod": {
-    "hash": "c4750bee0dd7acacacf895398aafddd9d634880fef4dc95d085de27257dea270",
-    "verts": 326265,
-    "tris": 652538,
+    "hash": "c14d0b3ba46e6ea205d02b9ec84262b688932d40be61544640e2742dda7da92a",
+    "verts": 326264,
+    "tris": 652536,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 34353.955,
@@ -457,7 +457,7 @@
     "skipped": {}
   },
   "newtestmodels/OpenVessel": {
-    "hash": "0f9bbb696b95874e4773d47ca84a339eafde9101e0c593d90386ca51f4c24be1",
+    "hash": "b3dfe8127835d5d8075ae1b9226ceafaa65b19cc68ef4c6f51ed268effca17fa",
     "verts": 95937,
     "tris": 191890,
     "openEdges": 0,
@@ -471,7 +471,7 @@
     "skipped": {}
   },
   "newtestmodels/ov_pokal": {
-    "hash": "c0859ba15499e57f38cdf2b6fb86ece89edf42f974fc944821bbf8038dc9954d",
+    "hash": "ae43a313ffdbe6d1efb0b44782faa0214e7d90e8bc9a46ce660b90b1065fb530",
     "verts": 1926056,
     "tris": 3852108,
     "openEdges": 0,
@@ -751,7 +751,7 @@
     "skipped": {}
   },
   "sourcemodels/Model 1 Ekstra lid": {
-    "hash": "ceccd6229af9415d58ef88073cb5e40f96d1ed60bf69fe4903c0f00ec123831e",
+    "hash": "17c5cfb01b260bd2b24ce5ad10cfc19a8c97dea50ffba911e7d2579ca70ec052",
     "verts": 52187,
     "tris": 104370,
     "openEdges": 0,

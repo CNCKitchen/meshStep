@@ -54,15 +54,23 @@ export interface MeshResult {
 
 const bump = (o: Record<string, number>, k: string): void => { o[k] = (o[k] ?? 0) + 1; };
 
-/** Emit a triangle, oriented so its normal points outward (surface normal × same_sense sign). */
+/** Emit a triangle, oriented so its normal points outward (surface normal × same_sense sign).
+ * `refN` short-circuits the orientation reference: callers that know the triangle's (u,v) pass
+ * surface.normal(u,v) directly — without it the 3D centroid is inverse-mapped first, which on a
+ * B-spline is a full Newton solve PER TRIANGLE (formerly the hottest line on curved models). */
 function emitTri(
   verts: number[], faceIds: number[], a: Vec3, b: Vec3, c: Vec3, fid: number, surface: Surface, sign: number,
+  refN?: Vec3,
 ): void {
   const ng = cross([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
   if (ng[0] * ng[0] + ng[1] * ng[1] + ng[2] * ng[2] < 1e-18) return; // degenerate / zero-area
-  const cen: Vec3 = [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
-  const [u, v] = surface.project(cen);
-  const outward = dot(ng, surface.normal(u, v)) * sign;
+  let nrm = refN;
+  if (!nrm) {
+    const cen: Vec3 = [(a[0] + b[0] + c[0]) / 3, (a[1] + b[1] + c[1]) / 3, (a[2] + b[2] + c[2]) / 3];
+    const [u, v] = surface.project(cen);
+    nrm = surface.normal(u, v);
+  }
+  const outward = dot(ng, nrm) * sign;
   if (outward >= 0) verts.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
   else verts.push(a[0], a[1], a[2], c[0], c[1], c[2], b[0], b[1], b[2]);
   faceIds.push(fid);
@@ -762,8 +770,9 @@ function planeEarcutFill(
   // Original boundary vertices keep their shared 3D polyline samples verbatim; inserted interior
   // vertices evaluate exactly on the plane.
   const pt3 = (i: number): Vec3 => (i < nW ? wp3[i]! : surface.evaluate(wpts[i * 2]!, wpts[i * 2 + 1]!));
+  const planeN = surface.normal(0, 0); // PLANE-only mesher: one constant orientation reference
   for (let t = 0; t < wtris.length; t += 3) {
-    emitTri(verts, faceIds, pt3(wtris[t]!), pt3(wtris[t + 1]!), pt3(wtris[t + 2]!), fid, surface, sign);
+    emitTri(verts, faceIds, pt3(wtris[t]!), pt3(wtris[t + 1]!), pt3(wtris[t + 2]!), fid, surface, sign, planeN);
   }
   if (verts.length === v0) { faceIds.length = f0; return false; }
   return true;
@@ -1185,7 +1194,15 @@ function gridCDT(
     if (!flips) break;
   }
   if (DBG) console.error(`[grid] fid=${fid} final tris=${tris.length} pts=${cdtPts.length}`);
-  for (const [a, b, c] of tris) emitTri(verts, faceIds, allP3[a]!, allP3[b]!, allP3[c]!, fid, surface, sign);
+  // Every vertex carries its (u,v) — orient by the surface normal at the triangle's uv centroid
+  // instead of inverse-mapping the 3D centroid (a Newton solve per triangle on B-splines). The
+  // pcurves are seam-unwrapped into one continuous chart, so averaging u/v across a triangle is
+  // safe; evaluate/normal wrap periodic coordinates themselves.
+  for (const [a, b, c] of tris) {
+    const A2 = allP2[a]!, B2 = allP2[b]!, C2 = allP2[c]!;
+    const nrm = surface.normal((A2[0] + B2[0] + C2[0]) / 3, (A2[1] + B2[1] + C2[1]) / 3);
+    emitTri(verts, faceIds, allP3[a]!, allP3[b]!, allP3[c]!, fid, surface, sign, nrm);
+  }
   return tris.length > 0;
 }
 
