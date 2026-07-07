@@ -171,6 +171,516 @@
     },
     "skipped": {}
   },
+  "newtestmodels/boomerang-v2": {
+    "hash": "f0d57d8dcc75b90771b87ad2574531b41bb1461834d3b7c34ab828e8db101500",
+    "verts": 247792,
+    "tris": 487379,
+    "openEdges": 8211,
+    "nonManifoldEdges": 0,
+    "volume": 95880.758,
+    "dispatch": {
+      "grid": 143
+    },
+    "skipped": {}
+  },
+  "newtestmodels/bottle-cage": {
+    "hash": "04165999ae12f7d0d0a098ebd17cc2babcd0c72f211c11a35bae00d3927d834d",
+    "verts": 243867,
+    "tris": 487886,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 48294.763,
+    "dispatch": {
+      "grid": 1143,
+      "thinFace": 2
+    },
+    "skipped": {}
+  },
+  "newtestmodels/build_tray_v3": {
+    "hash": "ba559136587727d230bc285fabc922331922013e9a0326a45ac2421da461e165",
+    "verts": 674394,
+    "tris": 1348776,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 566764.837,
+    "dispatch": {
+      "grid": 351
+    },
+    "skipped": {}
+  },
+  "newtestmodels/cat-napkin-holder": {
+    "hash": "147654f3c2035bd4dd787bb07d7e67b423ff263018e07b43c508bfec22865ca5",
+    "verts": 165750,
+    "tris": 331496,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 212821.195,
+    "dispatch": {
+      "grid": 238
+    },
+    "skipped": {}
+  },
+  "newtestmodels/cmf-phone-2-pro-cover": {
+    "hash": "9d0219fcb99688a2e6fbc82e95882969a944b44371022d841d390ba411a00558",
+    "verts": 335501,
+    "tris": 671030,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 15438.77,
+    "dispatch": {
+      "grid": 178
+    },
+    "skipped": {}
+  },
+  "newtestmodels/core-one-replicator-arches": {
+    "hash": "b270395e87dce978b75c7f8be14e69b700129be8968c6ecaedfa49290b883e56",
+    "verts": 35332,
+    "tris": 70624,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 3686.989,
+    "dispatch": {
+      "grid": 208
+    },
+    "skipped": {}
+  },
+  "newtestmodels/core-one-replicator-base": {
+    "hash": "2c1d8bbc74a42f807c038d4090ac1eb87cb483c053068d62f15e81daeda472e1",
+    "verts": 90801,
+    "tris": 181838,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 31398.36,
+    "dispatch": {
+      "grid": 377
+    },
+    "skipped": {}
+  },
+  "newtestmodels/core-one-replicator-buttons": {
+    "hash": "b0f9d8ea187b3143c331588f78e7ab1f8be8b93c792cca8676258698a2f659dc",
+    "verts": 36747,
+    "tris": 73330,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 3509.303,
+    "dispatch": {
+      "grid": 656
+    },
+    "skipped": {}
+  },
+  "newtestmodels/core-one-replicator-letters": {
+    "hash": "10c9c6d8cfe44186f908abf1413b16c57002942402c223e4f9ca18514d6b0b33",
+    "verts": 9773,
+    "tris": 19562,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 361.298,
+    "dispatch": {
+      "grid": 344
+    },
+    "skipped": {}
+  },
+  "newtestmodels/core-one-replicator-side-panel-base": {
+    "hash": "a21a0899347eddfa20ef60aafb722a48ae1e92c69738eec54f067e0af2cbe69e",
+    "verts": 25925,
+    "tris": 51902,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 10311.024,
+    "dispatch": {
+      "grid": 64
+    },
+    "skipped": {}
+  },
+  "newtestmodels/core-one-replicator-side-panel-buttons": {
+    "hash": "6bc84e431ae91893f8f3db7970e7915f3fb14cc11b8dbd56711f0be239cb2751",
+    "verts": 15763,
+    "tris": 31478,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 1678.263,
+    "dispatch": {
+      "grid": 204
+    },
+    "skipped": {}
+  },
+  "newtestmodels/fidgetclicker_v30": {
+    "hash": "985d83ac3d842e423c96ba0f0e1d6d5bcac04ace26d4fdd22332046cbdfe953e",
+    "verts": 46258,
+    "tris": 92520,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 10279.004,
+    "dispatch": {
+      "grid": 1375
+    },
+    "skipped": {}
+  },
+  "newtestmodels/furniture-leg": {
+    "hash": "a4b13fc2049779da2d6a140c6d37f6e3d19bd4a777ebafddd65a47c60f575a3a",
+    "verts": 36888,
+    "tris": 73796,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 21039.813,
+    "dispatch": {
+      "grid": 257
+    },
+    "skipped": {}
+  },
+  "newtestmodels/GARMIN_MOUNT_v15": {
+    "hash": "67d94eb1d5278e179d503909f6ec4671664e383314461616d152c3c287066238",
+    "verts": 2772,
+    "tris": 5544,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 807.592,
+    "dispatch": {
+      "grid": 43
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Goblin drone V3": {
+    "hash": "11f404b7b1840d6e8384a0386cc2425f7f4c7cde23c120d94b00ab3c94622610",
+    "verts": 121874,
+    "tris": 243992,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 28945.392,
+    "dispatch": {
+      "grid": 912,
+      "ribbon": 4,
+      "thinFace": 4
+    },
+    "skipped": {}
+  },
+  "newtestmodels/handle_v4_two-tooth": {
+    "hash": "08eb285ec4d495ac4123409bd5f950d75ba2e0a3492df1920e5151439f501321",
+    "verts": 43946,
+    "tris": 87888,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 35048.689,
+    "dispatch": {
+      "grid": 206
+    },
+    "skipped": {}
+  },
+  "newtestmodels/holder-w50-h150-c20-m6": {
+    "hash": "ba21f8011d555005b9d953b130db194b52f06d71e7dfc8a4daaf671c808d7f89",
+    "verts": 74666,
+    "tris": 149344,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 97038.482,
+    "dispatch": {
+      "band": 7,
+      "grid": 124
+    },
+    "skipped": {}
+  },
+  "newtestmodels/holder-w50-h150-c20-m6_2": {
+    "hash": "1808c64f4894e2a7e6c6cfaff20c12ba41a2ab6726b05852fa2265deb51b0076",
+    "verts": 74589,
+    "tris": 149190,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 97037.197,
+    "dispatch": {
+      "grid": 131
+    },
+    "skipped": {}
+  },
+  "newtestmodels/insect_water_station_impr": {
+    "hash": "33ec3b733d38fe0d70d9c651426d1011087b28f58456cd694f55ef4ca00567a4",
+    "verts": 257443,
+    "tris": 515050,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 137374.504,
+    "dispatch": {
+      "grid": 542
+    },
+    "skipped": {}
+  },
+  "newtestmodels/insert_small": {
+    "hash": "f49f37a0e0ae507647345e8f4c16b3ecd1cf784b68bc4d460436964e0ea47d03",
+    "verts": 227573,
+    "tris": 455142,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 17251.403,
+    "dispatch": {
+      "grid": 226
+    },
+    "skipped": {}
+  },
+  "newtestmodels/jb-weld-replacement-cap": {
+    "hash": "d8cfe3b676ef24564d2201c00b61d960d86b164dda6738f01acf5b72b25a3709",
+    "verts": 2702,
+    "tris": 5400,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 695.443,
+    "dispatch": {
+      "grid": 34
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Model 1 Ekstra lid": {
+    "hash": "fa5c17e5f501bdc4aab0b48fc0023a72e0385a054f298b0975c73d1854dc754d",
+    "verts": 52177,
+    "tris": 104350,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 17761.999,
+    "dispatch": {
+      "grid": 402
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Ontos_V2": {
+    "hash": "4a4af6cea44c7d614e42d63506578457a7178cec1139e6885d00275cc4aea408",
+    "verts": 2766678,
+    "tris": 5533285,
+    "openEdges": 405,
+    "nonManifoldEdges": 0,
+    "volume": 3040991.1,
+    "dispatch": {
+      "band": 274,
+      "cone": 7,
+      "coneSlice": 1,
+      "grid": 5036,
+      "sphereCap": 1,
+      "unroll": 37
+    },
+    "skipped": {}
+  },
+  "newtestmodels/OpenVessel": {
+    "hash": "0f9bbb696b95874e4773d47ca84a339eafde9101e0c593d90386ca51f4c24be1",
+    "verts": 95937,
+    "tris": 191890,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 17307.082,
+    "dispatch": {
+      "grid": 312,
+      "sphereCap": 1,
+      "thinFace": 4
+    },
+    "skipped": {}
+  },
+  "newtestmodels/ov_pokal": {
+    "hash": "c0859ba15499e57f38cdf2b6fb86ece89edf42f974fc944821bbf8038dc9954d",
+    "verts": 1926056,
+    "tris": 3852108,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 3043734.463,
+    "dispatch": {
+      "cone": 1,
+      "grid": 4063
+    },
+    "skipped": {}
+  },
+  "newtestmodels/pi 3  Simple stand ver.1 STEP FILE": {
+    "hash": "faf24aa9747dad6e6e6ab648e838587859f344c98a1d4c20868f50c3242d16d5",
+    "verts": 31913,
+    "tris": 63894,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 7639.467,
+    "dispatch": {
+      "grid": 150
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Pool_Nozzle": {
+    "hash": "2f7ccee04151b825b082696f489a7c5e6021eeddeef9899068c82620c70aad7f",
+    "verts": 74505,
+    "tris": 149034,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 43546.587,
+    "dispatch": {
+      "grid": 102
+    },
+    "skipped": {}
+  },
+  "newtestmodels/qidi-box-desiccant-vessel": {
+    "hash": "8cbed0a9623dcafc21d9f536b22e69a6698e56220df08742d18637d12041d0ba",
+    "verts": 352250,
+    "tris": 706204,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 96842.887,
+    "dispatch": {
+      "grid": 1974
+    },
+    "skipped": {}
+  },
+  "newtestmodels/rivet-tool": {
+    "hash": "cf7f9573d9341fa20fc802d9fe3354b5752472059e161c2bdd8327a294816591",
+    "verts": 8004,
+    "tris": 16004,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 1776.029,
+    "dispatch": {
+      "grid": 68
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Rugged Box Parametric V2": {
+    "hash": "3df0fe6a6b78fc66e4d410349824cfb0f347d033ddaa6e770b3dda3868c50395",
+    "verts": 225404,
+    "tris": 450856,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 110038.568,
+    "dispatch": {
+      "grid": 634
+    },
+    "skipped": {}
+  },
+  "newtestmodels/shoe_hanging_clips_3_sizes": {
+    "hash": "691eff1c58f388c8068cb1e4ae143d6c38a0ee1bbb81b882bd9a919d243d67f4",
+    "verts": 95080,
+    "tris": 190196,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 115251.289,
+    "dispatch": {
+      "grid": 543
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Spacemouse TPU sock": {
+    "hash": "d047b9c55d001b08c640dac6230d639004940eb90b0c3bd7654ec3e6330d6eeb",
+    "verts": 88072,
+    "tris": 176144,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 3142.069,
+    "dispatch": {
+      "grid": 34
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Stealthburner_CW2_body": {
+    "hash": "bd461b7584eea5434be5d68d7430c0d7ba93cf32bbbd5459ea6f21765cbe38f2",
+    "verts": 182630,
+    "tris": 365322,
+    "openEdges": 0,
+    "nonManifoldEdges": 11,
+    "volume": 42220.814,
+    "dispatch": {
+      "grid": 1192,
+      "thinFace": 2
+    },
+    "skipped": {}
+  },
+  "newtestmodels/StingStopp_4000_Base Version 1.1": {
+    "hash": "86b636fc32a52011e41e6f91bdf7ce282ce5d6da75763c7e91d5a8b7161d6d75",
+    "verts": 195938,
+    "tris": 391872,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 107416.605,
+    "dispatch": {
+      "band": 5,
+      "grid": 729
+    },
+    "skipped": {}
+  },
+  "newtestmodels/StingStopp_4000_Top Version 1.0": {
+    "hash": "19005cd4f69493e266102ac6adeec782d0a2ca33203e000c33b2581d8f82d17f",
+    "verts": 95079,
+    "tris": 190158,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 45471.921,
+    "dispatch": {
+      "band": 6,
+      "grid": 250
+    },
+    "skipped": {}
+  },
+  "newtestmodels/turbinewhistle_a8-i8_t4": {
+    "hash": "6a2ca809022eb6d941692c18d25b3b76c4d01a2c8e2cb9f3e25fc43e6cbbb0ca",
+    "verts": 53375,
+    "tris": 106826,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 9931.386,
+    "dispatch": {
+      "grid": 243,
+      "thinFace": 1
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Voron_Design_Cube_v8": {
+    "hash": "c6fc8845faac9abc3c0b2c77e9fd17c76e62e79f1ba0f05f6782f34fbca6f3c0",
+    "verts": 14982,
+    "tris": 29976,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 20502.891,
+    "dispatch": {
+      "grid": 127
+    },
+    "skipped": {}
+  },
+  "newtestmodels/wall-hook": {
+    "hash": "61c91593d8c6b822eb3d8845544af039e1cce67427ae21823243ff061d0769a7",
+    "verts": 22058,
+    "tris": 44120,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 18956.085,
+    "dispatch": {
+      "grid": 79
+    },
+    "skipped": {}
+  },
+  "newtestmodels/wallganizer": {
+    "hash": "",
+    "verts": 0,
+    "tris": 0,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 0,
+    "dispatch": {},
+    "skipped": {},
+    "error": "Map maximum size exceeded"
+  },
+  "newtestmodels/wio-tracker-l1-eink-case-v1_3-back": {
+    "hash": "af1e168915e14eaf995e4ec47a42043cac80c1b746f725f192b3d0aba31d6aa5",
+    "verts": 28689,
+    "tris": 57374,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 10596.033,
+    "dispatch": {
+      "band": 1,
+      "grid": 121
+    },
+    "skipped": {}
+  },
+  "newtestmodels/wio-tracker-l1-eink-case-v1_3-front": {
+    "hash": "a3443c8ae7b65fa0ee18943374b32862a222924ba5534c1fe0bc3452e6823e61",
+    "verts": 42965,
+    "tris": 85974,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 17182.731,
+    "dispatch": {
+      "band": 12,
+      "grid": 298,
+      "unroll": 1
+    },
+    "skipped": {}
+  },
   "roundedCube": {
     "hash": "116701aa2dc8b50bb13cf3e4f10957d8cc5f67577367fe4fada75022c265f87d",
     "verts": 7238,
@@ -190,6 +700,324 @@
       "nonManifoldEdges": 0,
       "volume": 7803.011
     }
+  },
+  "sourcemodels/furniture-leg": {
+    "hash": "708c7e06a7a0a3cc35fd0c254b095f7d36d97cdb2e4eef72e686d6b677736fa3",
+    "verts": 37348,
+    "tris": 74716,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 21038.954,
+    "dispatch": {
+      "grid": 267
+    },
+    "skipped": {}
+  },
+  "sourcemodels/GARMIN_MOUNT_v15 (1)": {
+    "hash": "c69774ad1c41dada235594ee52ffdb92e8e7e3457967f55acd5dc46ca6a60fcf",
+    "verts": 2788,
+    "tris": 5576,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 807.592,
+    "dispatch": {
+      "grid": 43
+    },
+    "skipped": {}
+  },
+  "sourcemodels/Goblin drone V3 (extra reinforced) (1)": {
+    "hash": "3af96d963203f50cd3dca56472ba446fd34ed18ece19c5f79499c94614cdb126",
+    "verts": 122447,
+    "tris": 245138,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 28945.424,
+    "dispatch": {
+      "grid": 912,
+      "thinFace": 8
+    },
+    "skipped": {}
+  },
+  "sourcemodels/handle_v4_two-tooth": {
+    "hash": "ad7dbc43b3fe86a6a81cf84ff4b5a16bee4066da07b59c59899204bba39b70a2",
+    "verts": 44174,
+    "tris": 88344,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 34873.857,
+    "dispatch": {
+      "grid": 206
+    },
+    "skipped": {}
+  },
+  "sourcemodels/Model 1 Ekstra lid": {
+    "hash": "ceccd6229af9415d58ef88073cb5e40f96d1ed60bf69fe4903c0f00ec123831e",
+    "verts": 52187,
+    "tris": 104370,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 17762.028,
+    "dispatch": {
+      "grid": 402
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ctc_01_asme1_ap242-e1": {
+    "hash": "1fc01804ae73c571554c72c527b8e279c697055cdfc515f9dc7d67e928443e55",
+    "verts": 3987611,
+    "tris": 7975258,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 14644956.378,
+    "dispatch": {
+      "coneSlice": 4,
+      "grid": 113
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ctc_02_asme1_ap242-e2": {
+    "hash": "",
+    "verts": 0,
+    "tris": 0,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 0,
+    "dispatch": {},
+    "skipped": {},
+    "error": "Invalid array length"
+  },
+  "sourcemodels/nist_ctc_03_asme1_ap242-e2": {
+    "hash": "562b373222ae0477ed024a651f4fc4ddf946ceb91276cdb6867765d59b313c37",
+    "verts": 719969,
+    "tris": 1440002,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 332120.205,
+    "dispatch": {
+      "grid": 120
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ctc_04_asme1_ap242-e1": {
+    "hash": "71f7f9831bdc4859b3c44fa34f4abce58d59569ebb46d3a8fcec97171c2e84f1",
+    "verts": 2595540,
+    "tris": 5191100,
+    "openEdges": 110,
+    "nonManifoldEdges": 0,
+    "volume": 17524432.676,
+    "dispatch": {
+      "grid": 484
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ctc_05_asme1_ap242-e1": {
+    "hash": "2af289c796e2c873fc7fdd13af2df8e50a88ce665ff8b72db68d3a4adc5169e9",
+    "verts": 1529133,
+    "tris": 3058302,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 12695067.158,
+    "dispatch": {
+      "band": 36,
+      "cone": 10,
+      "grid": 109,
+      "unroll": 1
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ftc_06_asme1_ap242-e2": {
+    "hash": "f36663c2efc292fafc20de9262913dec770a7e4135738f98c8937c945a41e62e",
+    "verts": 841235,
+    "tris": 1682506,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 3291213.298,
+    "dispatch": {
+      "coneSlice": 4,
+      "grid": 183
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ftc_07_asme1_ap242-e2": {
+    "hash": "51d54f74cc118d2648b7adba081f62093e53da514fa295a2f545277724074480",
+    "verts": 980084,
+    "tris": 1960186,
+    "openEdges": 34,
+    "nonManifoldEdges": 0,
+    "volume": 1726324.927,
+    "dispatch": {
+      "coneSlice": 16,
+      "grid": 290
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ftc_08_asme1_ap242-e1-tg": {
+    "hash": "d38fcb4f541e12991b7dc6de63d12aa41c6ac90f41dff02dba7a17e03ea825d6",
+    "verts": 1636,
+    "tris": 3368,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 503280.82,
+    "dispatch": {},
+    "skipped": {}
+  },
+  "sourcemodels/nist_ftc_08_asme1_ap242-e2": {
+    "hash": "a2695a4987e5357bc003fd96b26d3ee05c7d2f3956f2c02f7bca3cb542371d2d",
+    "verts": 457758,
+    "tris": 915612,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 503640.056,
+    "dispatch": {
+      "band": 20,
+      "grid": 227
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ftc_09_asme1_ap242-e1": {
+    "hash": "5169c59061cfb642583bfdbafd09878beb998a74a016502468bbcaad1cd48fc4",
+    "verts": 187397,
+    "tris": 374672,
+    "openEdges": 244,
+    "nonManifoldEdges": 0,
+    "volume": 137211.567,
+    "dispatch": {
+      "grid": 163
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ftc_10_asme1_ap242-e2": {
+    "hash": "b97f7e1aefdbd1633fd9e481074a2f635a1882e3a7e11f2f7abe75d3a874aaf1",
+    "verts": 172756,
+    "tris": 343956,
+    "openEdges": 1648,
+    "nonManifoldEdges": 0,
+    "volume": 187499.751,
+    "dispatch": {
+      "coneSlice": 16,
+      "grid": 266
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_ftc_11_asme1_ap242-e2": {
+    "hash": "3e3f4740e1ce8554a4b86a25cb73665ac8f69c38eb1b28033404265134bf4f82",
+    "verts": 143928,
+    "tris": 287856,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 5119.899,
+    "dispatch": {
+      "band": 6,
+      "grid": 36
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_stc_06_asme1_ap242-e3": {
+    "hash": "dd08849f9198703a9898171ca5aade4e3a2969fe81da353a16087fc45c7ae115",
+    "verts": 207093,
+    "tris": 414222,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 3323533.716,
+    "dispatch": {
+      "band": 34,
+      "cone": 2,
+      "grid": 101,
+      "sphereCap": 3,
+      "unroll": 4
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_stc_07_asme1_ap242-e3": {
+    "hash": "a2a1eab9735410057bb771b8f9127d5c83ce4080b8f52c614f3da0015be8d76f",
+    "verts": 980005,
+    "tris": 1960028,
+    "openEdges": 34,
+    "nonManifoldEdges": 0,
+    "volume": 1726324.667,
+    "dispatch": {
+      "coneSlice": 16,
+      "grid": 290
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_stc_08_asme1_ap242-e3": {
+    "hash": "ce15bd6692e38ac9888d38c1ea3e1a4c6be5e2c8acfe5a6a007b5b5734e464b8",
+    "verts": 473936,
+    "tris": 947694,
+    "openEdges": 272,
+    "nonManifoldEdges": 0,
+    "volume": 387254.122,
+    "dispatch": {
+      "grid": 271
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_stc_09_asme1_ap242-e3": {
+    "hash": "efe3c550762cd8fd75115ab4ec0246e0961a7533da2ad736c0d4eb135acb55c2",
+    "verts": 186341,
+    "tris": 372814,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 136451.962,
+    "dispatch": {
+      "grid": 125
+    },
+    "skipped": {}
+  },
+  "sourcemodels/nist_stc_10_asme1_ap242-e2": {
+    "hash": "4a19856204bd1030a4f8cc19d31ac7f7b292a86803610495249f83e10b360e7b",
+    "verts": 216196,
+    "tris": 432476,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 188349.013,
+    "dispatch": {
+      "band": 40,
+      "cone": 8,
+      "grid": 202,
+      "unroll": 6
+    },
+    "skipped": {}
+  },
+  "sourcemodels/OpenVessel": {
+    "hash": "fcb905b0356839e4a83f6b41ca36a136d4af4339743de0c651dccaab1edb8dce",
+    "verts": 95326,
+    "tris": 190668,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 17306.804,
+    "dispatch": {
+      "grid": 319,
+      "sphereCap": 1,
+      "thinFace": 4
+    },
+    "skipped": {}
+  },
+  "sourcemodels/Pool_Nozzle (1)": {
+    "hash": "5ccdd6c51d6ee42e56568e0354e03ef45a58c087ebb24013dd46d34affe72923",
+    "verts": 74020,
+    "tris": 148064,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 43547.641,
+    "dispatch": {
+      "grid": 125
+    },
+    "skipped": {}
+  },
+  "sourcemodels/turbinewhistle_a8-i8_t4": {
+    "hash": "1347a50ecb1087478d90e4eeae628562c47d0344ed9140ec12b231a3f3e95fbb",
+    "verts": 52643,
+    "tris": 105362,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 9932.088,
+    "dispatch": {
+      "grid": 281,
+      "thinFace": 1
+    },
+    "skipped": {}
   },
   "sphere": {
     "hash": "a4f94aa76cbf517504e0215a42cf205b32b8717ff51ea0eaa1c07dbf82a0eaa6",

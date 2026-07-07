@@ -27,15 +27,20 @@ const baselinePath = join(root, "test", "char-baseline.json");
 // bare keys; folder models are keyed "folder/name" (OpenVessel etc. exist in both folders).
 const MODEL_DIRS = ["", "sourcemodels", "newtestmodels"];
 const STEP_RE = /\.(step|stp)$/i;
-// Models slower than ~10s stay out of the default per-stage check; --full runs them all.
+// Models slower than ~8s (measured 2026-07-07) stay out of the default per-stage check;
+// --full runs them all.
 const SLOW = new Set([
   "GoProHandlePod",
   "newtestmodels/wallganizer", "newtestmodels/ov_pokal", "newtestmodels/Ontos_V2",
   "newtestmodels/Goblin drone V3", "sourcemodels/Goblin drone V3 (extra reinforced) (1)",
   "newtestmodels/bottle-cage", "newtestmodels/qidi-box-desiccant-vessel",
-  "newtestmodels/Stealthburner_CW2_body",
-  "sourcemodels/nist_ftc_09_asme1_ap242-e1", "sourcemodels/nist_stc_09_asme1_ap242-e3",
-  "sourcemodels/nist_stc_10_asme1_ap242-e2", "sourcemodels/nist_ftc_08_asme1_ap242-e2",
+  "newtestmodels/Stealthburner_CW2_body", "newtestmodels/boomerang-v2",
+  "newtestmodels/build_tray_v3", "newtestmodels/cmf-phone-2-pro-cover",
+  "newtestmodels/insect_water_station_impr", "newtestmodels/insert_small",
+  "sourcemodels/nist_ftc_06_asme1_ap242-e2", "sourcemodels/nist_ftc_07_asme1_ap242-e2",
+  "sourcemodels/nist_ftc_08_asme1_ap242-e2", "sourcemodels/nist_ftc_09_asme1_ap242-e1",
+  "sourcemodels/nist_stc_07_asme1_ap242-e3", "sourcemodels/nist_stc_08_asme1_ap242-e3",
+  "sourcemodels/nist_stc_09_asme1_ap242-e3", "sourcemodels/nist_stc_10_asme1_ap242-e2",
 ]);
 // Small models also frozen through the OPTIONAL remesh pass (split/flip/collapse/smooth), so
 // remesh.ts refactors are protected too. Kept to fast models — remesh multiplies runtime.
