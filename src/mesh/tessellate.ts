@@ -252,8 +252,10 @@ function assembleWire(surface: Surface, pcs: EdgePC[], forced?: Int8Array): { p3
 
 /** Count strict self-intersections of a closed 2D polygon (segments sharing a vertex don't count).
  * Sorted-bbox sweep in x keeps it near-linear at boundary density; `cap` early-outs a hopeless
- * candidate during the phase-C search. */
-function countSelfIntersections(pts: P2[], cap = 1 << 30): number {
+ * candidate during the phase-C search. `pairs` (optional) collects the crossing segment-index
+ * pairs — the micro-face densifier uses their loop-distance to tell a curable local zigzag from
+ * genuine trim overlap. */
+function countSelfIntersections(pts: P2[], cap = 1 << 30, pairs?: [number, number][]): number {
   const n = pts.length;
   if (n < 4) return 0;
   const x0 = new Float64Array(n), x1 = new Float64Array(n), y0 = new Float64Array(n), y1 = new Float64Array(n);
@@ -275,6 +277,7 @@ function countSelfIntersections(pts: P2[], cap = 1 << 30): number {
       const p = pts[i]!, q = pts[(i + 1) % n]!, r = pts[j]!, s = pts[(j + 1) % n]!;
       const d1 = orient2(r, s, p), d2 = orient2(r, s, q), d3 = orient2(p, q, r), d4 = orient2(p, q, s);
       if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) {
+        pairs?.push([i, j]);
         if (++count >= cap) break;
       }
     }
@@ -982,6 +985,29 @@ function gridCDT(
   for (let i = 1; i < nU; i++) for (let j = 1; j < nV; j++) tryAdd(umin + ((umax - umin) * i) / nU, vmin + ((vmax - vmin) * j) / nV);
 
   const cdtPts: P2[] = allP2.map(([u, v]) => [SX(u), SY(v)]);
+  // TANGENT-PINCH WELD. A hole tangent to the boundary arrives as ONE loop whose tangency vertex
+  // appears twice, bitwise-equal in (u,v) AND 3D. Inserting the second copy exactly ON the first
+  // corrupts the incremental triangulation (zero-area fans along any collinear boundary run
+  // through the pinch: LCD Case Hinge's tangent hinge bores at coarse sampling lose the loop's
+  // closing constraint, invisible to every equivalence rescue because the covering edge is
+  // LONGER than the constraint). Alias the later occurrence to the first so the polygon pinches
+  // at one vertex index. ISOLATED pinches only — a coincident RUN is a slit's out-and-back legs,
+  // whose distinct indices the parity flood needs as separate walls (Z Bearing Block's ring).
+  for (const idx of [outerIdx, ...holeIdx]) {
+    const n = idx.length;
+    if (n < 4) continue;
+    const seen = new Map<string, number>(); // exact (u,v)+3D key -> position of first occurrence
+    for (let i = 0; i < n; i++) {
+      const v = idx[i]!;
+      const k = `${cdtPts[v]![0]},${cdtPts[v]![1]},${allP3[v]![0]},${allP3[v]![1]},${allP3[v]![2]}`;
+      const first = seen.get(k);
+      if (first === undefined) { seen.set(k, i); continue; }
+      const co = (x: number, y: number): boolean =>
+        cdtPts[idx[x]!]![0] === cdtPts[idx[y]!]![0] && cdtPts[idx[x]!]![1] === cdtPts[idx[y]!]![1];
+      const isolated = !co((first + n - 1) % n, (i + 1) % n) && !co((first + 1) % n, (i + n - 1) % n);
+      if (isolated) idx[i] = idx[first]!;
+    }
+  }
   const cdtOut: { missing: number; rescue?: string } = { missing: 0 };
   let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
   if (DBG) console.error(`[grid] fid=${fid} nU=${nU} nV=${nV} uSc=${uSc.toExponential(2)} vSc=${vSc.toExponential(2)} boundary=${outerIdx.length}+${holeIdx.reduce((s, h) => s + h.length, 0)} interior=${interiorIdx.length} -> cdt tris=${tris.length}${cdtOut.missing ? ` MISSING=${cdtOut.missing}` : ""}`);
@@ -2588,18 +2614,32 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           if (p[2] < lo2) lo2 = p[2]; if (p[2] > hi2) hi2 = p[2];
         }
       }
-      if (nPts > 128) continue;
-      // Only faces a few chord-lengths across: coarse chords can only swing across each other when
-      // the whole face is comparable to the tolerance budget. A LARGER face whose small polygon
-      // still self-intersects does so from pinched/doubled edges or genuine trim overlap —
-      // densifying those perturbs the neighbours' pinch handling for nothing (OpenVessel's 6mm
-      // counterbore rims at 0.002mm tolerance went watertight -> 12 open under a blind version).
-      if (Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) > 16 * chordTol) continue;
+      if (nPts > 512) continue;
+      // Two admission paths. SMALL faces (a few chord-lengths across, the original criterion):
+      // any crossing pattern qualifies — coarse chords can only swing across each other when the
+      // whole face is comparable to the tolerance budget. LARGER faces qualify only when EVERY
+      // crossing is LOCAL (near-adjacent segments of the loop): that is one tightly-curved edge
+      // run zigzagging under coarse sampling (skirt-corner fillets, z_endstop's rounded strip
+      // ends), which densification provably cures. Distant-pair crossings on a large face are
+      // the pinch/genuine-overlap class where densifying perturbs the neighbours' pinch handling
+      // for nothing (OpenVessel's 6mm counterbore rims at 0.002mm tolerance went watertight ->
+      // 12 open under a blind version; Ontos' tangent letter engravings never become simple).
+      const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * chordTol;
+      let nonLocal = false;
       const tangledLoops = face.loops.filter((lp) => {
         const p2 = loopParam(surface, lp, sampled).p2;
-        return p2.length >= 4 && countSelfIntersections(p2, 1) > 0;
+        if (p2.length < 4) return false;
+        const pairs: [number, number][] = [];
+        if (countSelfIntersections(p2, 64, pairs) === 0) return false;
+        if (!small) {
+          const n = p2.length;
+          for (const [i, j] of pairs) {
+            if (Math.min((j - i + n) % n, (i - j + n) % n) > 8) { nonLocal = true; break; }
+          }
+        }
+        return true;
       });
-      if (tangledLoops.length === 0) continue;
+      if (tangledLoops.length === 0 || nonLocal) continue;
       for (const f of [4, 16, 64]) {
         const probe = new Map(sampled);
         const ids = new Set<number>();

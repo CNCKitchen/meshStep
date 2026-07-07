@@ -782,7 +782,26 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     for (const ck of constraints) {
       if (edgeTris.has(ck)) continue;
       const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
-      console.error(`[cdt]   STILL-MISSING ${a}-${b}: A=(${points[a]![0]},${points[a]![1]}) B=(${points[b]![0]},${points[b]![1]})`);
+      const A = points[a]!, B = points[b]!;
+      console.error(`[cdt]   STILL-MISSING ${a}-${b}: A=(${A[0]},${A[1]}) B=(${B[0]},${B[1]})`);
+      const ex = B[0] - A[0], ey = B[1] - A[1], l2 = ex * ex + ey * ey;
+      for (let v = 0; v < n; v++) {
+        if (v === a || v === b) continue;
+        const P = points[v]!;
+        const t = l2 > 0 ? ((P[0] - A[0]) * ex + (P[1] - A[1]) * ey) / l2 : 0;
+        const dx = P[0] - (A[0] + t * ex), dy = P[1] - (A[1] + t * ey);
+        const d = Math.hypot(dx, dy);
+        if (d < 1e-5 * Math.sqrt(l2) && t > -0.5 && t < 1.5) {
+          console.error(`[cdt]     near-line v${v}: (${P[0]},${P[1]}) t=${t.toFixed(6)} d=${d.toExponential(2)}`);
+        }
+      }
+      for (let t = 0; t < m.nt; t++) {
+        if (m.dead[t]) continue;
+        const o = t * 3;
+        const vs = [m.tv[o]!, m.tv[o + 1]!, m.tv[o + 2]!];
+        if (!vs.includes(a) && !vs.includes(b)) continue;
+        console.error(`[cdt]     tri ${t}: ${vs.map((v) => `${v}${v >= n ? "S" : ""}=(${pts[v]![0].toFixed(4)},${pts[v]![1].toFixed(4)})`).join(" ")}`);
+      }
     }
   }
   if (missing === 0) {
