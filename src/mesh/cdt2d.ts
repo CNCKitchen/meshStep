@@ -525,15 +525,33 @@ function enforceByRetriangulation(m: Cdt, pts: P2[], a: number, b: number, const
       }
     }
   }
-  if (!nextOf.has(a) || !nextOf.has(b)) return false;
+  const sdbg = DBG && !!process.env.MESHSTEP_SLICEDBG;
+  if (!nextOf.has(a) || !nextOf.has(b)) { if (sdbg) console.error(`[cdt]     enforce ${a}-${b}: bail endpoint not on cavity boundary`); return false; }
   const loop: number[] = [];
   let cur = a;
-  for (let g = 0; g <= edges; g++) { loop.push(cur); const nx = nextOf.get(cur); if (nx === undefined) return false; cur = nx; if (cur === a) break; }
-  if (cur !== a || loop.length !== edges) return false; // not one simple loop
+  for (let g = 0; g <= edges; g++) { loop.push(cur); const nx = nextOf.get(cur); if (nx === undefined) { if (sdbg) console.error(`[cdt]     enforce ${a}-${b}: bail cavity chain break at v${cur}`); return false; } cur = nx; if (cur === a) break; }
+  if (cur !== a || loop.length !== edges) { if (sdbg) console.error(`[cdt]     enforce ${a}-${b}: bail cavity not one loop (${loop.length}/${edges})`); return false; } // not one simple loop
   const ia = loop.indexOf(a), ib = loop.indexOf(b);
-  const path1: number[] = [], path2: number[] = [];
+  let path1: number[] = [], path2: number[] = [];
   for (let i = ia; ; i = (i + 1) % loop.length) { path1.push(loop[i]!); if (i === ib) break; }
   for (let i = ib; ; i = (i + 1) % loop.length) { path2.push(loop[i]!); if (i === ia) break; }
+  // A slit boundary legitimately visits one (u,v) point twice (out-and-back legs, coincident by
+  // design — see slitCollapse). When both copies land on this cavity's walk they are ADJACENT
+  // coincident vertices, and no ear survives: the duplicate sits exactly ON every candidate ear's
+  // vertex (Z Bearing Block's sphere: the ring-at-slit-tip pair walks into the cavity of a
+  // boundary constraint two edges away). Coincident neighbours are one point — clip through one
+  // representative; the 3D weld unifies them again downstream.
+  const dedupAdjacent = (path: number[]): number[] => {
+    const outp: number[] = [];
+    for (const v of path) {
+      const prev = outp[outp.length - 1];
+      if (prev !== undefined && pts[prev]![0] === pts[v]![0] && pts[prev]![1] === pts[v]![1]) continue;
+      outp.push(v);
+    }
+    return outp;
+  };
+  path1 = dedupAdjacent(path1);
+  path2 = dedupAdjacent(path2);
   const newTris: [number, number, number][] = [];
   // Clip each side with the protected constraints as mandatory diagonals: split the polygon at the
   // chord and clip the two sub-polygons, so the chord edge is guaranteed present in the fill. A
@@ -551,13 +569,13 @@ function enforceByRetriangulation(m: Cdt, pts: P2[], a: number, b: number, const
     }
     return earClip(pts, path, newTris);
   };
-  if (!clipWithChords(path1, chords) || !clipWithChords(path2, chords)) return false;
+  if (!clipWithChords(path1, chords) || !clipWithChords(path2, chords)) { if (sdbg) console.error(`[cdt]     enforce ${a}-${b}: bail ear-clip failed (paths ${path1.length}/${path2.length})`); return false; }
   // Area-conservation guard: the fill must tile exactly the deleted cavity. If areas disagree the
   // cavity loop was self-folded (a degenerate periodic seam) — abort rather than corrupt the mesh.
   const triArea = (x: number, y: number, z: number): number => Math.abs(orient(pts[x]!, pts[y]!, pts[z]!));
   let oldA = 0; for (const t of crossed) { const o = t * 3; oldA += triArea(m.tv[o]!, m.tv[o + 1]!, m.tv[o + 2]!); }
   let newA = 0; for (const [x, y, z] of newTris) newA += triArea(x, y, z);
-  if (Math.abs(newA - oldA) > 1e-3 * (oldA + 1e-12)) return false;
+  if (Math.abs(newA - oldA) > 1e-3 * (oldA + 1e-12)) { if (sdbg) console.error(`[cdt]     enforce ${a}-${b}: bail area mismatch old=${oldA} new=${newA}`); return false; }
   for (const t of crossed) m.kill(t);
   // Neighbour links intentionally left broken (-1): the flood fill rebuilds adjacency fresh.
   for (const [x, y, z] of newTris) m.alloc(x, y, z, -1, -1, -1);
@@ -568,9 +586,11 @@ function enforceByRetriangulation(m: Cdt, pts: P2[], a: number, b: number, const
  * Triangulate the region bounded by loops[0] (outer) minus loops[1..] (holes), using all listed
  * points (loop vertices + interior). Returns triangle index triples into `points`.
  */
-export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: { missing: number }): [number, number, number][] {
+export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: { missing: number; rescue?: string }): [number, number, number][] {
   const n = points.length;
-  if (out) out.missing = 0;
+  // Reset BOTH out fields: callers reuse one out object across refinement re-runs, and a stale
+  // rescue label from a previous run would mis-flag a clean triangulation.
+  if (out) { out.missing = 0; out.rescue = undefined; }
   if (n < 3) return [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
   for (const p of points) {
@@ -758,6 +778,13 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   for (const ck of constraints) if (!edgeTris.has(ck)) missing++;
   if (out) out.missing = missing;
   if (DBG && missing > 0) console.error(`[cdt] missing=${missing}/${constraints.size} pts=${n} loops=[${loops.map((l) => l.length).join(",")}] interior=${interior.length} flood=${flood.length}`);
+  if (DBG && process.env.MESHSTEP_SLICEDBG && missing > 0) {
+    for (const ck of constraints) {
+      if (edgeTris.has(ck)) continue;
+      const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
+      console.error(`[cdt]   STILL-MISSING ${a}-${b}: A=(${points[a]![0]},${points[a]![1]}) B=(${points[b]![0]},${points[b]![1]})`);
+    }
+  }
   if (missing === 0) {
     if (chainRealized === 0 || loops.length !== 1) return flood;
     // Constraints realised only by EQUIVALENCE (duplicate pair / collinear chain): the parity flood
@@ -808,6 +835,9 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
       if (d < dBest) { best = cand; dBest = d; label = name; }
     }
     if (DBG) console.error(`[cdt]   equivalence-realised: flood=${defects(flood)} rescue=${alt ? defects(alt) : "-"} geom=${defects(geom0)} -> ${label}`);
+    // The parity flood was NOT trusted here — report which rescue produced the region so the
+    // caller can surface a diagnostics warning (missing stays 0 on this path).
+    if (out && label !== "flood") out.rescue = label;
     return best;
   }
 
