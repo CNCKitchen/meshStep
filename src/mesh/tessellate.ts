@@ -1011,7 +1011,7 @@ function gridCDT(
   };
   for (const p of cdtPts) dupSeen.add(dupKey(p[0], p[1]));
   for (let iter = 0; iter < maxIter && interiorIdx.length < cap; iter++) {
-    const fresh: P2[] = [];
+    const fresh: [number, number, number][] = []; // (px, py, local size) — sizeDist carried to the dedup pass
     for (const [a, b, c] of tris) {
       const A = cdtPts[a]!, B = cdtPts[b]!, C = cdtPts[c]!;
       const d = 2 * (A[0] * (B[1] - C[1]) + B[0] * (C[1] - A[1]) + C[0] * (A[1] - B[1]));
@@ -1020,24 +1020,27 @@ function gridCDT(
       let px = (a2 * (B[1] - C[1]) + b2 * (C[1] - A[1]) + c2 * (A[1] - B[1])) / d;
       let py = (a2 * (C[0] - B[0]) + b2 * (A[0] - C[0]) + c2 * (B[0] - A[0])) / d;
       const r = Math.hypot(px - A[0], py - A[1]);
-      const [sz] = sizeDist(px, py);
+      let [sz, dist] = sizeDist(px, py);
       // Refine where the circumradius exceeds 0.65× the local size: fills the graded band near a
       // fine boundary (fillet-into-chamfer), follows intra-face curvature the base grid under-sampled,
       // and improves Delaunay quality generally. The remesh later coarsens over-dense flat regions.
       if (r <= sz * 0.65) continue;
       let u = px / uSc, v = py / vSc;
-      if (!inRegion([u, v])) { px = (A[0] + B[0] + C[0]) / 3; py = (A[1] + B[1] + C[1]) / 3; u = px / uSc; v = py / vSc; if (!inRegion([u, v])) continue; }
-      const [sz2, dist2] = sizeDist(px, py);
-      if (dist2 < 0.5 * sz2) continue;
-      fresh.push([px, py]);
+      if (!inRegion([u, v])) {
+        px = (A[0] + B[0] + C[0]) / 3; py = (A[1] + B[1] + C[1]) / 3; u = px / uSc; v = py / vSc;
+        if (!inRegion([u, v])) continue;
+        [sz, dist] = sizeDist(px, py); // moved to the centroid — re-query there
+      }
+      if (dist < 0.5 * sz) continue;
+      fresh.push([px, py, sz]);
     }
     if (!fresh.length) break;
     // Dedup new points that fall within ~half a local size of each other (avoid over-insertion).
     const acc = new Map<number, [number, number][]>();
     let added = false;
-    for (const [px, py] of fresh) {
+    for (const [px, py, sz] of fresh) {
       if (dupHas(px, py)) continue;
-      const [sz] = sizeDist(px, py), hx = Math.floor(px / sz), hy = Math.floor(py / sz);
+      const hx = Math.floor(px / sz), hy = Math.floor(py / sz);
       let ok = true;
       for (let gx = hx - 1; gx <= hx + 1 && ok; gx++) for (let gy = hy - 1; gy <= hy + 1 && ok; gy++) {
         for (const [qx, qy] of acc.get(hkey(gx, gy)) ?? []) if ((px - qx) ** 2 + (py - qy) ** 2 < (0.5 * sz) ** 2) ok = false;

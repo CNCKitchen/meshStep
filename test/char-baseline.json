@@ -9,7 +9,15 @@
     "dispatch": {
       "grid": 27
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "cc84f8f5e0ab434787cc49ca169b11285923e20eab581b030d0cad1630601cd2",
+      "verts": 21950,
+      "tris": 43896,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 103224.126
+    }
   },
   "cone": {
     "hash": "583d3c63f04279dc0655517470cd29e6765cd741006be220492ac51deadd7541",
@@ -22,7 +30,15 @@
       "cone": 1,
       "grid": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "825e52a0df6e1ac012317f150bb51debe302860e9433667b452e7db4d7426e83",
+      "verts": 2377,
+      "tris": 4750,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 2090.463
+    }
   },
   "cube": {
     "hash": "89be59829c87efdff31ed3e6d78265d0e6f2fc900888f1d4946b902716f2d56c",
@@ -34,7 +50,15 @@
     "dispatch": {
       "grid": 6
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "c0ad5e6e59dcb84794b4a3451324f0bbf794fc16c7151dacf955d8ac76bf9b4e",
+      "verts": 3078,
+      "tris": 6152,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 8000
+    }
   },
   "cylinder": {
     "hash": "63116f3662b0cc1358885b178b218193f91a8879ccefbb36d5541e82cdaa11bc",
@@ -46,7 +70,15 @@
     "dispatch": {
       "grid": 3
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "3dcb2c4e0b143bed946d2611d5972aec9a573139ba0738f4a60a5f8429b5abe7",
+      "verts": 2407,
+      "tris": 4810,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 6276.063
+    }
   },
   "cylinderWithHole": {
     "hash": "322dffca62439b72a06bb2b6ac2184371849bc39dd540c25e5a91d49fca4dfd7",
@@ -58,7 +90,15 @@
     "dispatch": {
       "grid": 4
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "dd43897da1b819c0d2e21c9db1cba072c582ccb02eaa4cf8b15dbb2a4738358d",
+      "verts": 4821,
+      "tris": 9642,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 4758.888
+    }
   },
   "everything": {
     "hash": "c4a2c6165d948008700aa445b106c9d57cc9d254169c4cf9992be80f83cc517c",
@@ -109,7 +149,15 @@
     "dispatch": {
       "grid": 95
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "5f5d640846e9ad9a126984384d68c250dc9d2b1857574f7a50087fcc5e3e59b4",
+      "verts": 9654,
+      "tris": 19316,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 5615.486
+    }
   },
   "MicHolder_Inserts": {
     "hash": "b534b28a29d323cc78b20cecbd5069cf9c8ccb80ef16e59233e36ef34504125a",
@@ -133,7 +181,15 @@
     "dispatch": {
       "grid": 26
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "a073b8ef87eef9337f1d98bb0617d4c50f26171b338710af6e82a939c6f361ae",
+      "verts": 11670,
+      "tris": 23336,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 7803.011
+    }
   },
   "sphere": {
     "hash": "a4f94aa76cbf517504e0215a42cf205b32b8717ff51ea0eaa1c07dbf82a0eaa6",
@@ -145,7 +201,15 @@
     "dispatch": {
       "sphereFull": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "remesh": {
+      "hash": "936fa9968753f09a7da576f0689c9771ffeccd4d94694dcdeca87c16baa7a204",
+      "verts": 1628,
+      "tris": 3252,
+      "openEdges": 0,
+      "nonManifoldEdges": 0,
+      "volume": 4174.219
+    }
   },
   "splineThing": {
     "hash": "08c4d845bbec1ed9ece1e3fad5520d6e6b18ee977949028a34e6d795cba9a4b4",

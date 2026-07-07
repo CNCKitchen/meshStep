@@ -97,14 +97,15 @@ function insertPoint(tris: Tri[], pts: P2[], pi: number, hint: number, free: num
       if (inCircle(pts[nt.v[0]!]!, pts[nt.v[1]!]!, pts[nt.v[2]!]!, pts[pi]!)) { seen.add(nb); stack.push(nb); }
     }
   }
-  // Cavity boundary edges (oriented so the cavity is to the left).
-  const bset = new Set(bad);
+  // Cavity boundary edges (oriented so the cavity is to the left). `seen` holds exactly the
+  // cavity set (start + every triangle whose circumcircle contained p), so it doubles as the
+  // membership test — no separate set.
   const edges: { a: number; b: number; ext: number }[] = [];
   for (const t of bad) {
     const tri = tris[t]!;
     for (let e = 0; e < 3; e++) {
       const nb = tri.n[e]!;
-      if (nb >= 0 && bset.has(nb)) continue;
+      if (nb >= 0 && seen.has(nb)) continue;
       edges.push({ a: tri.v[e]!, b: tri.v[(e + 1) % 3]!, ext: nb });
     }
   }
@@ -640,19 +641,22 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
       const a = edgeTris.get(k); if (a) a.push(i); else edgeTris.set(k, [i]);
     }
   }
-  const inside = new Map<number, boolean>();
+  // 1 = outside, 2 = inside, 0 = unseen. Head-index BFS: q.shift() moves the whole queue per pop
+  // (quadratic on big faces); the head pointer visits in the identical order for free.
+  const inside = new Int8Array(tris.length);
   const startT = tris.findIndex((t) => !t.dead && (t.v[0] >= n || t.v[1] >= n || t.v[2] >= n));
   if (startT < 0) return [];
-  const q = [startT]; inside.set(startT, false);
-  while (q.length) {
-    const t = q.shift()!;
-    const st = inside.get(t)!;
+  const q = [startT]; inside[startT] = 1;
+  for (let head = 0; head < q.length; head++) {
+    const t = q[head]!;
+    const st = inside[t] === 2;
     const tri = tris[t]!;
     for (let e = 0; e < 3; e++) {
-      const isC = constraints.has(ckey(tri.v[e]!, tri.v[(e + 1) % 3]!));
-      for (const nb of edgeTris.get(ckey(tri.v[e]!, tri.v[(e + 1) % 3]!)) ?? []) {
-        if (nb === t || inside.has(nb)) continue;
-        inside.set(nb, isC ? !st : st);
+      const k = ckey(tri.v[e]!, tri.v[(e + 1) % 3]!);
+      const isC = constraints.has(k);
+      for (const nb of edgeTris.get(k) ?? []) {
+        if (nb === t || inside[nb]) continue;
+        inside[nb] = (isC ? !st : st) ? 2 : 1;
         q.push(nb);
       }
     }
@@ -662,7 +666,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   for (let i = 0; i < tris.length; i++) {
     const t = tris[i]!;
     if (t.dead || t.v[0] >= n || t.v[1] >= n || t.v[2] >= n) continue;
-    if (inside.get(i) === true) flood.push([t.v[0], t.v[1], t.v[2]]);
+    if (inside[i] === 2) flood.push([t.v[0], t.v[1], t.v[2]]);
   }
 
   // Count boundary constraints the CDT couldn't realise. When every constraint is present the parity
@@ -685,7 +689,8 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     for (const loop of loops) for (let i = 0; i < loop.length; i++) raw.add(ckey(loop[i]!, loop[(i + 1) % loop.length]!));
     const defects = (cand: [number, number, number][]): number => {
       const fe = new Map<number, number>();
-      for (const [a, b, c] of cand) for (const [x, y] of [[a, b], [b, c], [c, a]] as const) fe.set(ckey(x, y), (fe.get(ckey(x, y)) ?? 0) + 1);
+      const feAdd = (x: number, y: number): void => { const k = ckey(x, y); fe.set(k, (fe.get(k) ?? 0) + 1); };
+      for (const [a, b, c] of cand) { feAdd(a, b); feAdd(b, c); feAdd(c, a); }
       let bad = 0;
       for (const [k, cnt] of fe) {
         const isB = raw.has(k) || constraints.has(k);
@@ -773,7 +778,8 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     // (an edge shared by >2 triangles, i.e. an unavoidable knot on a tangled closed-v seam) is the
     // chaos worse than a clean hole, so emit nothing for those.
     const fe = new Map<number, number>();
-    for (const [a, b, cc] of flood) for (const [x, y] of [[a, b], [b, cc], [cc, a]] as const) fe.set(ckey(x, y), (fe.get(ckey(x, y)) ?? 0) + 1);
+    const feAdd = (x: number, y: number): void => { const k = ckey(x, y); fe.set(k, (fe.get(k) ?? 0) + 1); };
+    for (const [a, b, cc] of flood) { feAdd(a, b); feAdd(b, cc); feAdd(cc, a); }
     let floodNm = 0; for (const v of fe.values()) if (v > 2) floodNm++;
     return floodNm > 0 ? [] : flood;
   }

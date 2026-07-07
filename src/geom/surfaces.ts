@@ -420,12 +420,17 @@ class RevolutionSurface implements Surface {
 
 // ---- B-spline (NURBS) surface --------------------------------------------------------------
 // Tensor-product de Boor on a single control row of homogeneous (wx,wy,wz,w) 4-vectors.
-function deBoorH(degree: number, ctrl: number[][], knots: number[], u: number): number[] {
-  const n = ctrl.length - 1;
-  let k = degree;
-  while (k < n && knots[k + 1]! <= u) k++;
+// `span`/`base`: evaluate around an externally found knot span when `ctrl` holds only the rows
+// base..base+degree of the full net (evaluateRaw passes the u-span so unused rows are never built).
+function deBoorH(degree: number, ctrl: number[][], knots: number[], u: number, span?: number, base = 0): number[] {
+  let k: number;
+  if (span === undefined) {
+    const n = ctrl.length - 1;
+    k = degree;
+    while (k < n && knots[k + 1]! <= u) k++;
+  } else k = span;
   const d: number[][] = [];
-  for (let j = 0; j <= degree; j++) d[j] = ctrl[k - degree + j]!.slice();
+  for (let j = 0; j <= degree; j++) d[j] = ctrl[k - degree + j - base]!.slice();
   for (let r = 1; r <= degree; r++) {
     for (let j = degree; j >= r; j--) {
       const i = k - degree + j;
@@ -537,9 +542,16 @@ class BSplineSurface implements Surface {
     this.rc = Number.isFinite(minR) ? Math.max(0.05, minR) : Infinity;
   }
   private evaluateRaw(u: number, v: number): Vec3 {
+    // The u-direction combination only reads the uDeg+1 rows around u's knot span — running the
+    // v-direction de Boor over EVERY control row (as before) computed rows/(uDeg+1)× more than
+    // needed (7.5× waste on a 30-row cubic patch). Same span rule as deBoorH: bit-identical.
+    const nu = this.cps.length - 1;
+    let k = this.uDeg;
+    while (k < nu && this.uKnots[k + 1]! <= u) k++;
+    const lo = k - this.uDeg;
     const temp: number[][] = [];
-    for (let i = 0; i < this.cps.length; i++) temp.push(deBoorH(this.vDeg, this.cps[i]!, this.vKnots, v));
-    const h = deBoorH(this.uDeg, temp, this.uKnots, u);
+    for (let i = lo; i <= k; i++) temp.push(deBoorH(this.vDeg, this.cps[i]!, this.vKnots, v));
+    const h = deBoorH(this.uDeg, temp, this.uKnots, u, k, lo);
     const w = h[3]! || 1;
     return [h[0]! / w, h[1]! / w, h[2]! / w];
   }

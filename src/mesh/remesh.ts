@@ -69,13 +69,16 @@ function projectToFace(s: State, faceId: number, p: Vec3): Vec3 {
 function edgeTriMap(s: State): Map<number, number[]> {
   const m = new Map<number, number[]>();
   const nt = s.tris.length / 3;
+  // Unrolled — the tuple-array idiom allocates 4 arrays per triangle, and this map is rebuilt
+  // several times per remesh iteration over the whole mesh.
+  const add = (u: number, v: number, t: number): void => {
+    const k = ekey(u, v);
+    const arr = m.get(k);
+    if (arr) arr.push(t); else m.set(k, [t]);
+  };
   for (let t = 0; t < nt; t++) {
     const a = s.tris[t * 3]!, b = s.tris[t * 3 + 1]!, c = s.tris[t * 3 + 2]!;
-    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
-      const k = ekey(u, v);
-      const arr = m.get(k);
-      if (arr) arr.push(t); else m.set(k, [t]);
-    }
+    add(a, b, t); add(b, c, t); add(c, a, t);
   }
   return m;
 }

@@ -24,22 +24,27 @@ import { importStep } from "../src/index.ts";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = join(root, "test", "char-baseline.json");
 const SLOW = new Set(["GoProHandlePod"]);
+// Small models also frozen through the OPTIONAL remesh pass (split/flip/collapse/smooth), so
+// remesh.ts refactors are protected too. Kept to fast models — remesh multiplies runtime.
+const REMESH = new Set(["cube", "cylinder", "cone", "sphere", "roundedCube", "cylinderWithHole", "LampenHalter", "chamferFillet"]);
 const QUANT = 1e9; // 1e-9 mm — same identity the pipeline's own weld/audit quantization implies
 
-interface ModelRecord {
+interface MeshRecord {
   hash: string;
   verts: number;
   tris: number;
   openEdges: number;
   nonManifoldEdges: number;
   volume: number;
-  dispatch: Record<string, number>;
-  skipped: Record<string, number>;
 }
 
-function characterize(src: string): ModelRecord {
-  const dispatch: Record<string, number> = {};
-  const res = importStep(src, { trace: (_fid, mesher) => { dispatch[mesher] = (dispatch[mesher] ?? 0) + 1; } });
+interface ModelRecord extends MeshRecord {
+  dispatch: Record<string, number>;
+  skipped: Record<string, number>;
+  remesh?: MeshRecord;
+}
+
+function meshRecord(res: ReturnType<typeof importStep>): MeshRecord {
   const P = res.mesh.positions, I = res.mesh.indices;
 
   // --- hash: quantized positions + connectivity + attribution (byte order: little-endian x64)
@@ -74,10 +79,6 @@ function characterize(src: string): ModelRecord {
           - P[a + 1]! * (P[b]! * P[c + 2]! - P[b + 2]! * P[c]!)
           + P[a + 2]! * (P[b]! * P[c + 1]! - P[b + 1]! * P[c]!);
   }
-
-  // sort dispatch/skipped keys so the baseline JSON is diff-stable
-  const sortRec = (o: Record<string, number>): Record<string, number> =>
-    Object.fromEntries(Object.entries(o).sort(([x], [y]) => x.localeCompare(y)));
   return {
     hash: h.digest("hex"),
     verts: P.length / 3,
@@ -85,9 +86,23 @@ function characterize(src: string): ModelRecord {
     openEdges: open,
     nonManifoldEdges: nonManifold,
     volume: Number((vol6 / 6).toFixed(3)),
+  };
+}
+
+function characterize(src: string, withRemesh: boolean): ModelRecord {
+  const dispatch: Record<string, number> = {};
+  const res = importStep(src, { trace: (_fid, mesher) => { dispatch[mesher] = (dispatch[mesher] ?? 0) + 1; } });
+
+  // sort dispatch/skipped keys so the baseline JSON is diff-stable
+  const sortRec = (o: Record<string, number>): Record<string, number> =>
+    Object.fromEntries(Object.entries(o).sort(([x], [y]) => x.localeCompare(y)));
+  const rec: ModelRecord = {
+    ...meshRecord(res),
     dispatch: sortRec(dispatch),
     skipped: sortRec(res.stats.skipped),
   };
+  if (withRemesh) rec.remesh = meshRecord(importStep(src, { remesh: true }));
+  return rec;
 }
 
 // --- CLI ------------------------------------------------------------------------------------
@@ -107,7 +122,7 @@ let drift = 0;
 
 for (const m of models) {
   const t0 = Date.now();
-  const rec = characterize(readFileSync(join(root, `${m}.step`), "utf8"));
+  const rec = characterize(readFileSync(join(root, `${m}.step`), "utf8"), REMESH.has(m));
   const ms = Date.now() - t0;
   results[m] = rec;
   const base = baseline[m];
@@ -126,6 +141,12 @@ for (const m of models) {
   }
   if (JSON.stringify(rec.skipped) !== JSON.stringify(base.skipped)) {
     diffs.push(`skipped ${JSON.stringify(base.skipped)} -> ${JSON.stringify(rec.skipped)}`);
+  }
+  if (base.remesh && rec.remesh) {
+    if (rec.remesh.hash !== base.remesh.hash) diffs.push("remesh hash");
+    for (const k of ["verts", "tris", "openEdges", "nonManifoldEdges", "volume"] as const) {
+      if (rec.remesh[k] !== base.remesh[k]) diffs.push(`remesh.${k} ${base.remesh[k]} -> ${rec.remesh[k]}`);
+    }
   }
   if (diffs.length) { drift++; console.log(`DIFF ${m.padEnd(24)} ${diffs.join("; ")}`); }
   else console.log(`ok   ${m.padEnd(24)} tris=${String(rec.tris).padStart(7)} ${ms}ms`);
