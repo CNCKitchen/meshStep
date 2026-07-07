@@ -32,7 +32,7 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "node test/convert.ts",
     "test:stl": "node test/stl-roundtrip.ts",
-    "char": "node test/char.ts",
+    "char": "node --max-old-space-size=16384 test/char.ts",
     "inspect": "node test/inspect.ts",
     "entities": "node test/step-inspect.ts",
     "gapcheck": "node test/gapcheck.ts",

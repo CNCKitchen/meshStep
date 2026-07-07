@@ -23,7 +23,20 @@ import { importStep } from "../src/index.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = join(root, "test", "char-baseline.json");
-const SLOW = new Set(["GoProHandlePod"]);
+// Model discovery: repo root plus the two local (gitignored) corpus folders. Root models keep
+// bare keys; folder models are keyed "folder/name" (OpenVessel etc. exist in both folders).
+const MODEL_DIRS = ["", "sourcemodels", "newtestmodels"];
+const STEP_RE = /\.(step|stp)$/i;
+// Models slower than ~10s stay out of the default per-stage check; --full runs them all.
+const SLOW = new Set([
+  "GoProHandlePod",
+  "newtestmodels/wallganizer", "newtestmodels/ov_pokal", "newtestmodels/Ontos_V2",
+  "newtestmodels/Goblin drone V3", "sourcemodels/Goblin drone V3 (extra reinforced) (1)",
+  "newtestmodels/bottle-cage", "newtestmodels/qidi-box-desiccant-vessel",
+  "newtestmodels/Stealthburner_CW2_body",
+  "sourcemodels/nist_ftc_09_asme1_ap242-e1", "sourcemodels/nist_stc_09_asme1_ap242-e3",
+  "sourcemodels/nist_stc_10_asme1_ap242-e2", "sourcemodels/nist_ftc_08_asme1_ap242-e2",
+]);
 // Small models also frozen through the OPTIONAL remesh pass (split/flip/collapse/smooth), so
 // remesh.ts refactors are protected too. Kept to fast models — remesh multiplies runtime.
 const REMESH = new Set(["cube", "cylinder", "cone", "sphere", "roundedCube", "cylinderWithHole", "LampenHalter", "chamferFillet"]);
@@ -42,6 +55,8 @@ interface ModelRecord extends MeshRecord {
   dispatch: Record<string, number>;
   skipped: Record<string, number>;
   remesh?: MeshRecord;
+  /** Import threw — the message is baselined so a model starting/stopping to error is a DIFF. */
+  error?: string;
 }
 
 function meshRecord(res: ReturnType<typeof importStep>): MeshRecord {
@@ -108,30 +123,58 @@ function characterize(src: string, withRemesh: boolean): ModelRecord {
 // --- CLI ------------------------------------------------------------------------------------
 const argv = process.argv.slice(2);
 const update = argv.includes("--update");
+// --resume: with --update, skip models already in the baseline — recovery for a crashed long run
+// (a giant model can OOM the process; run via npm run char which raises the heap limit).
+const resume = argv.includes("--resume");
 const full = argv.includes("--full");
 const named = argv.filter((a) => !a.startsWith("--"));
 
-let models = readdirSync(root).filter((f) => f.endsWith(".step")).map((f) => f.slice(0, -5)).sort();
-if (named.length) models = models.filter((m) => named.includes(m));
-else if (!full) models = models.filter((m) => !SLOW.has(m));
+let models: { key: string; file: string }[] = [];
+for (const dir of MODEL_DIRS) {
+  const abs = dir ? join(root, dir) : root;
+  if (!existsSync(abs)) continue;
+  for (const f of readdirSync(abs)) {
+    if (!STEP_RE.test(f)) continue;
+    const name = f.replace(STEP_RE, "");
+    models.push({ key: dir ? `${dir}/${name}` : name, file: join(abs, f) });
+  }
+}
+models.sort((a, b) => a.key.localeCompare(b.key));
+if (named.length) models = models.filter((m) => named.some((q) => m.key === q || m.key.endsWith(`/${q}`) || m.key === q.replace(STEP_RE, "")));
+else if (!full) models = models.filter((m) => !SLOW.has(m.key));
 
 const baseline: Record<string, ModelRecord> = existsSync(baselinePath)
   ? JSON.parse(readFileSync(baselinePath, "utf8")) : {};
 const results: Record<string, ModelRecord> = {};
 let drift = 0;
 
-for (const m of models) {
+const writeBaseline = (): void => {
+  const merged = { ...baseline, ...results };
+  const sorted = Object.fromEntries(Object.entries(merged).sort(([x], [y]) => x.localeCompare(y)));
+  writeFileSync(baselinePath, JSON.stringify(sorted, null, 2) + "\n");
+};
+
+for (const { key: m, file } of models) {
+  if (update && resume && baseline[m]) { console.log(`skip ${m.padEnd(40)} (already baselined)`); continue; }
   const t0 = Date.now();
-  const rec = characterize(readFileSync(join(root, `${m}.step`), "utf8"), REMESH.has(m));
+  let rec: ModelRecord;
+  try {
+    rec = characterize(readFileSync(file, "utf8"), REMESH.has(m));
+  } catch (e) {
+    rec = { hash: "", verts: 0, tris: 0, openEdges: 0, nonManifoldEdges: 0, volume: 0, dispatch: {}, skipped: {}, error: (e as Error).message };
+  }
   const ms = Date.now() - t0;
   results[m] = rec;
   const base = baseline[m];
   if (update || !base) {
-    console.log(`${update ? "base" : "NEW "} ${m.padEnd(24)} tris=${String(rec.tris).padStart(7)} open=${rec.openEdges} nm=${rec.nonManifoldEdges} vol=${rec.volume} ${ms}ms`);
+    const tag = rec.error ? `ERROR ${rec.error.slice(0, 60)}` : `tris=${String(rec.tris).padStart(7)} open=${rec.openEdges} nm=${rec.nonManifoldEdges} vol=${rec.volume}`;
+    console.log(`${update ? "base" : "NEW "} ${m.padEnd(40)} ${tag} ${ms}ms`);
+    if (update) writeBaseline(); // incremental: a crash (OOM on a giant model) loses one model, not the run
     if (!update && !base) drift++;
     continue;
   }
   const diffs: string[] = [];
+  if ((rec.error ?? "") !== (base.error ?? "")) diffs.push(`error "${base.error ?? ""}" -> "${rec.error ?? ""}"`);
   if (rec.hash !== base.hash) diffs.push("hash");
   for (const k of ["verts", "tris", "openEdges", "nonManifoldEdges", "volume"] as const) {
     if (rec[k] !== base[k]) diffs.push(`${k} ${base[k]} -> ${rec[k]}`);
@@ -148,16 +191,14 @@ for (const m of models) {
       if (rec.remesh[k] !== base.remesh[k]) diffs.push(`remesh.${k} ${base.remesh[k]} -> ${rec.remesh[k]}`);
     }
   }
-  if (diffs.length) { drift++; console.log(`DIFF ${m.padEnd(24)} ${diffs.join("; ")}`); }
-  else console.log(`ok   ${m.padEnd(24)} tris=${String(rec.tris).padStart(7)} ${ms}ms`);
+  if (diffs.length) { drift++; console.log(`DIFF ${m.padEnd(40)} ${diffs.join("; ")}`); }
+  else console.log(`ok   ${m.padEnd(40)} tris=${String(rec.tris).padStart(7)} ${ms}ms`);
 }
 
 if (update) {
   // merge: keep baseline entries for models not run this time (e.g. slow ones skipped)
-  const merged = { ...baseline, ...results };
-  const sorted = Object.fromEntries(Object.entries(merged).sort(([x], [y]) => x.localeCompare(y)));
-  writeFileSync(baselinePath, JSON.stringify(sorted, null, 2) + "\n");
-  console.log(`baseline written: ${Object.keys(sorted).length} models -> test/char-baseline.json`);
+  writeBaseline();
+  console.log(`baseline written: ${Object.keys({ ...baseline, ...results }).length} models -> test/char-baseline.json`);
 } else if (drift) {
   console.error(`${drift} model(s) drifted from baseline (or missing). If intended: node test/char.ts --update${full ? " --full" : ""}`);
   process.exit(1);
