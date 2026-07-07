@@ -496,9 +496,9 @@
     "skipped": {}
   },
   "newtestmodels/Pool_Nozzle": {
-    "hash": "2f7ccee04151b825b082696f489a7c5e6021eeddeef9899068c82620c70aad7f",
-    "verts": 74505,
-    "tris": 149034,
+    "hash": "30b39b41fcd5c5c7b623ffc041d86c4c4c047f09a1e1216427bc9ca7a95ca8f2",
+    "verts": 74504,
+    "tris": 149032,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 43546.587,
@@ -995,7 +995,7 @@
     "skipped": {}
   },
   "sourcemodels/Pool_Nozzle (1)": {
-    "hash": "5ccdd6c51d6ee42e56568e0354e03ef45a58c087ebb24013dd46d34affe72923",
+    "hash": "e5cff0064b57af048530e56ba9213a66bb8009a8f66a4852a13f09a8a6b95aae",
     "verts": 74020,
     "tris": 148064,
     "openEdges": 0,
