@@ -665,6 +665,16 @@ function tessellateParamGrid(
     // mesh between the shared rails (OpenVessel counterbore tubes).
     verts.length = v0; faceIds.length = f0;
     if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true) || overCovered()) {
+      // KEYHOLE DE-SLIT retry: a hole reachable only through a zero-width corridor folds exactly
+      // here (the corridor's doubled samples over-cover their own segments once the refinement's
+      // inserts push the re-CDT across them — Meanwell's notched sphere caps at coarse
+      // tolerance). Retry with the corridor removed and the enclosed outline as a real hole; the
+      // retry is a no-op (fails fast) for faces without a de-slit candidate.
+      verts.length = v0; faceIds.length = f0;
+      if (gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true, true) && !overCovered()) {
+        if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT: de-slit retry is fold-free`);
+        return true;
+      }
       verts.length = v0; faceIds.length = f0;
       // The un-refined base CDT still folds — a STRUCTURAL fold. On a PLANE the (u,v)->3D map is
       // affine, so the region can be filled watertight without any parity flood: bridge every hole
@@ -793,7 +803,7 @@ function planeEarcutFill(
 function gridCDT(
   surface: Surface, outer: { p3: Vec3[]; p2: P2[] }, holes: { p3: Vec3[]; p2: P2[] }[], fid: number,
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
-  allowAniso = true, noRefine = false,
+  allowAniso = true, noRefine = false, forceDeslit = false,
 ): boolean {
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
   for (const q of outer.p2) {
@@ -985,6 +995,71 @@ function gridCDT(
   for (let i = 1; i < nU; i++) for (let j = 1; j < nV; j++) tryAdd(umin + ((umax - umin) * i) / nU, vmin + ((vmax - vmin) * j) / nV);
 
   const cdtPts: P2[] = allP2.map(([u, v]) => [SX(u), SY(v)]);
+  // KEYHOLE DE-SLIT candidate. A hole joined to the outer boundary by a zero-width corridor
+  // arrives as ONE loop that walks the corridor out, circles the hole, and walks the same
+  // samples back — every corridor point is a 3D-bitwise pair (Meanwell's sphere caps: a round
+  // vent behind a 2-segment corridor). The doubled corridor corrupts the CDT, and welding it
+  // would be WRONG (a single corridor wall would parity-split the face interior); removing the
+  // corridor and emitting the enclosed outline as the hole it is meshes cleanly. BUT the same
+  // coincident-run signature also describes slit rings the equivalence machinery already meshes
+  // watertight, and no cover-space geometry test separates them reliably (Z Bearing Block's
+  // seam-lens ring reads as a perfect interior keyhole). So this only BUILDS the candidate —
+  // the decision is OUTCOME-VERIFIED below: triangulate with the original loops first and adopt
+  // the de-slit variant only when the original demonstrably fails to cover its own boundary.
+  let altOuter: number[] | null = null;
+  const altHoles: number[][] = [];
+  {
+    const key3 = (v: number): string => `${allP3[v]![0]},${allP3[v]![1]},${allP3[v]![2]}`;
+    const near2i = (a: number, b: number): boolean =>
+      Math.abs(cdtPts[a]![0] - cdtPts[b]![0]) <= 1e-6 && Math.abs(cdtPts[a]![1] - cdtPts[b]![1]) <= 1e-6;
+    const inPoly = (p: P2, poly: number[]): boolean => {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const A = cdtPts[poly[i]!]!, B = cdtPts[poly[j]!]!;
+        if ((A[1] > p[1]) !== (B[1] > p[1]) && p[0] < ((B[0] - A[0]) * (p[1] - A[1])) / (B[1] - A[1]) + A[0]) inside = !inside;
+      }
+      return inside;
+    };
+    let cur = outerIdx;
+    for (let guard = 0; guard < 8; guard++) {
+      const n = cur.length;
+      if (n < 8) break;
+      const firstAt = new Map<string, number>();
+      let done = true;
+      for (let jj = 0; jj < n && done; jj++) {
+        const k = key3(cur[jj]!);
+        const ii = firstAt.get(k);
+        if (ii === undefined) { firstAt.set(k, jj); continue; }
+        if (!near2i(cur[ii]!, cur[jj]!)) continue;
+        // grow the corridor to its maximal extent: outward to the mouth, inward to the far end
+        let i = ii, j = jj;
+        while (i - 1 >= 0 && j + 1 < n
+          && key3(cur[i - 1]!) === key3(cur[j + 1]!) && near2i(cur[i - 1]!, cur[j + 1]!)) { i--; j++; }
+        let m = 0;
+        while (i + m + 1 < j - m - 1
+          && key3(cur[i + m + 1]!) === key3(cur[j - m - 1]!)
+          && near2i(cur[i + m + 1]!, cur[j - m - 1]!)) m++;
+        if (m === 0) continue; // point pinch — the weld below owns it
+        const mid = cur.slice(i + m, j - m); // far pinch point once + enclosed outline
+        const wrap = [...cur.slice(0, i + 1), ...cur.slice(j + 1)];
+        if (mid.length < 3 || wrap.length < 3) continue;
+        // Which piece is the hole? The loop may START on either side of the corridor, so decide
+        // by containment (the piece whose far point lies inside the other is the enclosed one).
+        const farOf = (p: number[], at: number): P2 => cdtPts[p[(at + (p.length >> 1)) % p.length]!]!;
+        let outer: number[], hole: number[];
+        if (inPoly(farOf(mid, 0), wrap)) { outer = wrap; hole = mid; }
+        else if (inPoly(farOf(wrap, i), mid)) { outer = mid; hole = wrap; }
+        else continue; // neither encloses the other — leave alone
+        if (DBG) console.error(`[deslit] fid=${fid} candidate corridor (${i},${j}) m=${m} -> outer=${outer.length} hole=${hole.length}`);
+        altHoles.push(hole);
+        cur = outer;
+        done = false; // rescan — the loop may hide further keyholes
+      }
+      if (done) break;
+    }
+    if (altHoles.length > 0) altOuter = cur;
+  }
+
   // TANGENT-PINCH WELD. A hole tangent to the boundary arrives as ONE loop whose tangency vertex
   // appears twice, bitwise-equal in (u,v) AND 3D. Inserting the second copy exactly ON the first
   // corrupts the incremental triangulation (zero-area fans along any collinear boundary run
@@ -993,9 +1068,9 @@ function gridCDT(
   // LONGER than the constraint). Alias the later occurrence to the first so the polygon pinches
   // at one vertex index. ISOLATED pinches only — a coincident RUN is a slit's out-and-back legs,
   // whose distinct indices the parity flood needs as separate walls (Z Bearing Block's ring).
-  for (const idx of [outerIdx, ...holeIdx]) {
+  const weldPinches = (idx: number[]): void => {
     const n = idx.length;
-    if (n < 4) continue;
+    if (n < 4) return;
     const seen = new Map<string, number>(); // exact (u,v)+3D key -> position of first occurrence
     for (let i = 0; i < n; i++) {
       const v = idx[i]!;
@@ -1007,9 +1082,67 @@ function gridCDT(
       const isolated = !co((first + n - 1) % n, (i + 1) % n) && !co((first + 1) % n, (i + n - 1) % n);
       if (isolated) idx[i] = idx[first]!;
     }
+  };
+  for (const idx of [outerIdx, ...holeIdx]) weldPinches(idx);
+  if (altOuter) { weldPinches(altOuter); for (const h of altHoles) weldPinches(h); }
+  if (DBG && Number(process.env.MESHSTEP_DUMPCDT) === fid) {
+    console.error(`@@CDTDUMP@@${JSON.stringify({ fid, outerIdx, holeIdx, cdtPts, p3: allP3 })}@@END@@`);
   }
   const cdtOut: { missing: number; rescue?: string } = { missing: 0 };
   let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
+  // OUTCOME-VERIFIED DE-SLIT. Adopt the keyhole candidate only when the original loops
+  // demonstrably fail: count boundary segments absent from the triangulation's edges (the exact
+  // signature of a leaking face — the mate samples the same shared polyline and finds no twin).
+  // Z Bearing Block's slit ring covers all its boundary via the equivalence machinery (0 defects
+  // -> candidate discarded); Meanwell's keyhole caps leave 7+ segments uncovered -> the de-slit
+  // variant, which covers everything, wins.
+  if (altOuter) {
+    // Coverage is judged by 3D IDENTITY, not point index: an equivalence-realised constraint is
+    // covered by its duplicate twin's edge (same 3D points, different indices — Z Bearing Block's
+    // slit legs), while a genuinely missing segment has no 3D twin either.
+    const gid = new Map<string, number>();
+    const g = (v: number): number => {
+      const k = `${allP3[v]![0]},${allP3[v]![1]},${allP3[v]![2]}`;
+      let id = gid.get(k);
+      if (id === undefined) { id = gid.size; gid.set(k, id); }
+      return id;
+    };
+    // Multiplicity-aware: a segment the loop walks TWICE (a zero-width corridor/slit) must be
+    // covered by two triangle edges — one per side. Z Bearing Block's slit genuinely has both
+    // sides (0 defects); Meanwell's leaking keyhole covers only one leg (defect per segment).
+    const coverDefects = (T: [number, number, number][], loopsSet: number[][]): number => {
+      const key = (x: number, y: number): number => { const a = g(x), b = g(y); return a < b ? a * 0x8000000 + b : b * 0x8000000 + a; };
+      const have = new Map<number, number>();
+      for (const [x, y, z] of T) for (const k of [key(x, y), key(y, z), key(z, x)]) have.set(k, (have.get(k) ?? 0) + 1);
+      const want = new Map<number, number>();
+      for (const lp of loopsSet) for (let i = 0; i < lp.length; i++) {
+        const x = lp[i]!, y = lp[(i + 1) % lp.length]!;
+        if (g(x) !== g(y)) { const k = key(x, y); want.set(k, (want.get(k) ?? 0) + 1); }
+      }
+      let bad = 0;
+      for (const [k, w] of want) bad += Math.max(0, w - (have.get(k) ?? 0));
+      return bad;
+    };
+    const d0 = forceDeslit ? Infinity : coverDefects(tris, [outerIdx, ...holeIdx]);
+    if (d0 > 0) {
+      const altOut: { missing: number; rescue?: string } = { missing: 0 };
+      const altTris = constrainedTriangulate(cdtPts, [altOuter, ...altHoles], interiorIdx, altOut);
+      // Adopt only a FULLY clean alternative: a seam-straddling slit ring's de-slit variant is
+      // always partially uncovered (the ring lands outside the outer on the cover), while a
+      // genuine keyhole's variant covers everything.
+      const d1 = forceDeslit ? 0 : coverDefects(altTris, [altOuter, ...altHoles]);
+      if (DBG) console.error(`[deslit] fid=${fid} outcome: original defects=${d0}, de-slit defects=${d1} -> ${d1 === 0 && d1 < d0 ? "ADOPT" : "keep original"}`);
+      if (d1 === 0 && d1 < d0) {
+        outerIdx.length = 0;
+        outerIdx.push(...altOuter);
+        holeIdx.length = 0;
+        for (const h of altHoles) holeIdx.push(h);
+        tris = altTris;
+        cdtOut.missing = altOut.missing;
+        cdtOut.rescue = altOut.rescue;
+      }
+    }
+  }
   if (DBG) console.error(`[grid] fid=${fid} nU=${nU} nV=${nV} uSc=${uSc.toExponential(2)} vSc=${vSc.toExponential(2)} boundary=${outerIdx.length}+${holeIdx.reduce((s, h) => s + h.length, 0)} interior=${interiorIdx.length} -> cdt tris=${tris.length}${cdtOut.missing ? ` MISSING=${cdtOut.missing}` : ""}`);
   // Delaunay refinement: insert the circumcentre of any triangle whose circumdiameter exceeds the
   // local size field — this grades the mesh from the fine boundary into the interior (fillet runs
