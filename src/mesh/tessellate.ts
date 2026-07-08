@@ -3173,47 +3173,77 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
     triangulateRing(P, ring, use, ek, per, outI, outF, faceAt.get(ring[0]!)!);
     for (const v of ring) filled.add(v);
   }
-  // UNDIRECTED pass (big only): a notch between two faces whose local windings disagree around it
-  // has no consistent directed cycle — the walk above bails at a doubled-outgoing vertex — but the
-  // undirected ring is still closed (every vertex borders exactly two open edges). Same size and
-  // planarity gates; the fan is wound against the ring's first owned edge, and the global
-  // orientation pass downstream settles any triangles the disagreeing side flips.
+  // UNDIRECTED pass (big only): what the directed walk can't close. Two shapes land here: a notch
+  // between faces whose local windings disagree (no consistent directed cycle — the directed walk
+  // bails at its doubled-outgoing vertex), and a PINCHED ring — two or three holes sharing a
+  // vertex (figure-8), whose pinch carries two outgoing directed edges and so poisons every
+  // directed walk through it (all 17 ABC near-watertight models left after the directed pass are
+  // exactly this shape: degree spectrum {2:n, 4:1-2}, no odd vertices). Walk a trail over the
+  // unused open edges, popping a simple cycle each time the trail revisits a vertex still on its
+  // path (Hierholzer-style); every popped cycle faces the same micro/patch gates as the directed
+  // pass, so a pinch simply decomposes into its constituent holes. Each cycle is wound against the
+  // direction the majority of its edges are traversed by their owning triangles; the orientation
+  // pass downstream settles any stragglers.
   if (big) {
-    const adj = new Map<number, [number, number][]>(); // vertex -> [other, faceOf][]
+    const dirOpen = new Set<number>(); // a->b as traversed by the owning triangle (winding vote)
+    const edges: { a: number; b: number; face: number; used: boolean }[] = [];
+    const inc = new Map<number, number[]>(); // vertex -> incident open-edge ids
     for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
       const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
       if (use.get(ek(a, b)) !== 1) continue;
-      (adj.get(a) ?? adj.set(a, []).get(a)!).push([b, faceOf[i / 3]!]);
-      (adj.get(b) ?? adj.set(b, []).get(b)!).push([a, faceOf[i / 3]!]);
+      dirOpen.add(a * KEY + b);
+      if (filled.has(a) || filled.has(b)) continue; // already closed by the directed pass
+      const id = edges.length;
+      edges.push({ a, b, face: faceOf[i / 3]!, used: false });
+      (inc.get(a) ?? inc.set(a, []).get(a)!).push(id);
+      (inc.get(b) ?? inc.set(b, []).get(b)!).push(id);
     }
-    const visited = new Set<number>();
-    for (const [start, nb] of adj) {
-      if (filled.has(start) || visited.has(start) || nb.length !== 2) continue;
-      const ring: number[] = [start];
-      visited.add(start);
-      let prev = start, cur = nb[0]![0], per = 0, ok = true;
-      for (let g = 0; g <= 64; g++) {
-        const link = adj.get(cur);
-        if (!link || link.length !== 2 || filled.has(cur)) { ok = false; break; }
-        per += Math.hypot(P[prev * 3]! - P[cur * 3]!, P[prev * 3 + 1]! - P[cur * 3 + 1]!, P[prev * 3 + 2]! - P[cur * 3 + 2]!);
-        if (per > perCap || g === 64) { ok = false; break; }
-        if (cur === start) break;
-        ring.push(cur);
-        const next = link[0]![0] === prev ? link[1]![0] : link[0]![0];
-        prev = cur; cur = next;
+    const cursor = new Map<number, number>();
+    const unusedAt = (v: number): number => {
+      const list = inc.get(v);
+      if (!list) return -1;
+      let c = cursor.get(v) ?? 0;
+      while (c < list.length && edges[list[c]!]!.used) c++;
+      cursor.set(v, c);
+      return c < list.length ? list[c]! : -1;
+    };
+    for (let seed = 0; seed < edges.length; seed++) {
+      if (edges[seed]!.used) continue;
+      const path: number[] = [edges[seed]!.a];
+      const at = new Map<number, number>([[edges[seed]!.a, 0]]);
+      let cur = edges[seed]!.a;
+      for (let guard = 0; guard <= edges.length; guard++) {
+        const eid = unusedAt(cur);
+        if (eid < 0) break; // dead end (odd-degree residue) — leftover path stays open
+        const E = edges[eid]!;
+        E.used = true;
+        const next = E.a === cur ? E.b : E.a;
+        if (!at.has(next)) { path.push(next); at.set(next, path.length - 1); cur = next; continue; }
+        // trail closed a simple cycle: pop it off the path and gate it like any other ring
+        const i0 = at.get(next)!;
+        const ring = path.slice(i0);
+        for (let k = i0 + 1; k < path.length; k++) at.delete(path[k]!);
+        path.length = i0 + 1;
+        cur = next;
+        const n = ring.length;
+        if (n < 3) continue; // doubled edge between one vertex pair — nothing to fill
+        let per = 0;
+        for (let i = 0; i < n; i++) per += Math.hypot(
+          P[ring[i]! * 3]! - P[ring[(i + 1) % n]! * 3]!,
+          P[ring[i]! * 3 + 1]! - P[ring[(i + 1) % n]! * 3 + 1]!,
+          P[ring[i]! * 3 + 2]! - P[ring[(i + 1) % n]! * 3 + 2]!);
+        const okFill = per <= tol || (n <= MAXN && per <= perCap && (n === 3 || planarDev(ring) <= Math.max(FLAT * per, big.dev)));
+        if (!okFill) {
+          if (DBG) console.error(`[fill] undirected cycle not filled: len=${n} per=${per.toFixed(3)} dev=${planarDev(ring).toExponential(2)}`);
+          continue;
+        }
+        let agree = 0;
+        for (let i = 0; i < n; i++) if (dirOpen.has(ring[i]! * KEY + ring[(i + 1) % n]!)) agree++;
+        const r = 2 * agree >= n ? ring : ring.slice().reverse();
+        triangulateRing(P, r, use, ek, per, outI, outF, E.face);
+        for (const v of ring) filled.add(v);
+        if (DBG) console.error(`[fill] undirected ring filled: len=${n} per=${per.toFixed(3)}`);
       }
-      if (!ok || cur !== start || ring.length < 3 || ring.length > MAXN
-        || (ring.length > 3 && planarDev(ring) > Math.max(FLAT * per, big.dev))) {
-        for (const v of ring) visited.add(v); // ring-global gates: rejected from one start, rejected from all
-        continue;
-      }
-      for (const v of ring) filled.add(v);
-      // Wind against the first edge's owner traversal (ring[0]->ring[1] if the owner walked it
-      // that way, the fill pairs it opposite); best-effort for the rest.
-      const fwd = (faceAt.get(ring[0]!) !== undefined && nxt.get(ring[0]!) === ring[1]!);
-      const r = fwd ? ring : ring.slice().reverse();
-      triangulateRing(P, r, use, ek, per, outI, outF, nb[0]![1]);
-      if (DBG) console.error(`[fill] undirected ring filled: len=${ring.length} per=${per.toFixed(3)}`);
     }
   }
   return { indices: outI, faceOf: outF };
