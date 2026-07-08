@@ -2898,7 +2898,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       ? { indices: z.indices, faceOf: keptFaceIds }
       : zipTJunctions(z.positions, z.indices, keptFaceIds, 0.02);
     const fill = fillMicroHoles(z.positions, tj.indices, tj.faceOf, 0.05,
-      solid.open ? undefined : { perim: 24 * chordTol, dev: 0.75 * chordTol });
+      solid.open ? undefined : { edge: targetEdge, dev: 0.75 * chordTol });
     for (const x of z.positions) positions.push(x);
     for (const ix of tj.indices) indices.push(ix + voff);
     for (const ix of fill.indices) indices.push(ix + voff);
@@ -3086,19 +3086,29 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
 }
 
 /**
- * Fill micro-holes left at degenerate tips: an open-edge loop whose whole perimeter is below the
- * sliver tolerance is a pinhole (a few µm-scale triangles collapsed at a B-spline pole/tip, whose
- * ring vertices are all mutually edge-connected, so the vertex zip can't close it) — not a real
- * gap. Fan it shut, wound opposite the ring so it pairs manifold-consistently with the surrounding
- * triangles. Real openings have perimeters orders of magnitude larger and are left alone.
- * `big` additionally accepts SMALL NEAR-PLANAR rings (≤ 8 vertices, perimeter ≤ big.perim, every
- * vertex within big.dev of the ring's best-fit plane): in a closed solid every open ring is by
- * definition a meshing defect — the B-rep itself is watertight — and a small flat ring is a patch
- * of surface the face mesher failed to cover (a parity-flood notch between two dropped constraints,
- * Ontos #91640), which a fan restores on-surface. A genuine deep notch or a failed face's long rim
- * fails the planarity / size gates and is left as a clean gap.
+ * Fill small open-ring holes. Both classes are defects by construction in a closed solid — the
+ * B-rep itself is watertight, so every open ring is meshing loss, and the only question is whether
+ * a local fill stays near the true surface:
+ *  - micro (perimeter ≤ tol): a pinhole at a collapsed B-spline pole/tip whose ring vertices are
+ *    all mutually edge-connected, so the vertex zip can't close it. Filled in open shells too.
+ *  - patch (`big`, closed solids only): a small missing surface patch — a strip the CDT parity
+ *    flood dropped between constraints (Ontos #91640), a seam sliver whose partner rail never got
+ *    emitted, a corner triangle lost to the weld's degenerate-collapse drop. Empirically (ABC
+ *    chunk-0: 169 residual rings across the 138 near-watertight seam-leak models) these rings have
+ *    ≤ 20 vertices and best-fit-plane deviation ≤ 0.12 of their perimeter, while their ABSOLUTE
+ *    perimeter runs to 40 target-edge lengths (straight rails sample as single long segments) — so
+ *    the gates are a vertex cap and a PROPORTIONAL flatness cap, not an absolute size cap:
+ *    n ≤ 24 and dev ≤ max(0.15·per, big.dev) (a 3-ring is trivially planar and always accepted;
+ *    big.dev keeps the legacy sub-chordTol notch fills). A genuine deep notch fails the flatness
+ *    gate; a failed face's rim fails the vertex cap (curved rims sample densely, one vertex per
+ *    ~target edge) or the 64·edge walk bail. The fill's deviation from the true surface is bounded
+ *    by the ring's own near-planarity — the same chord-error scale the surrounding mesh commits.
+ * Rings are triangulated min-area (see triangulateRing) rather than fanned: the dominant residual
+ * shape is an elongated zigzag slit, where a fan from one rail end folds over the opposite rail
+ * while the min-area triangulation stitches rail-to-rail like the ribbon meshers. Fill triangles
+ * are wound opposite the directed ring so they pair manifold-consistently with their neighbours.
  */
-function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number, big?: { perim: number; dev: number }): { indices: number[]; faceOf: number[] } {
+function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number, big?: { edge: number; dev: number }): { indices: number[]; faceOf: number[] } {
   const KEY = 2 ** 26;
   const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
   const use = new Map<number, number>();
@@ -3130,10 +3140,12 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
     for (const v of ring) mx = Math.max(mx, Math.abs((P[v * 3]! - cx) * nx + (P[v * 3 + 1]! - cy) * ny + (P[v * 3 + 2]! - cz) * nz));
     return mx;
   };
-  const perCap = Math.max(tol, big?.perim ?? 0);
+  const MAXN = 24;   // patch-ring vertex cap (biggest observed defect ring: 20)
+  const FLAT = 0.15; // patch-ring planar-deviation cap, as a fraction of ring perimeter
+  const perCap = big ? 64 * big.edge : tol;
   const outI: number[] = [], outF: number[] = [];
   const seen = new Set<number>();
-  const filled = new Set<number>(); // vertices of rings actually fanned (seen also marks rejected walks)
+  const filled = new Set<number>(); // vertices of rings actually filled (seen also marks rejected walks)
   for (const start of nxt.keys()) {
     if (seen.has(start)) continue;
     const ring: number[] = [];
@@ -3153,13 +3165,12 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
       continue;
     }
     const micro = per <= tol;
-    const flat = !micro && !!big && ring.length <= 8 && per <= big.perim && planarDev(ring) <= big.dev;
-    if (!micro && !flat) {
-      if (DBG) console.error(`[fill] ring not filled: len=${ring.length} per=${per.toFixed(3)} dev=${planarDev(ring).toExponential(2)} bigPerim=${big?.perim.toFixed(3)} bigDev=${big?.dev.toFixed(3)}`);
+    const patch = !micro && !!big && ring.length <= MAXN && (ring.length === 3 || planarDev(ring) <= Math.max(FLAT * per, big.dev));
+    if (!micro && !patch) {
+      if (DBG) console.error(`[fill] ring not filled: len=${ring.length} per=${per.toFixed(3)} dev=${planarDev(ring).toExponential(2)}`);
       continue;
     }
-    // Fan, reversed relative to the directed ring so each ring edge is paired b->a.
-    for (let i = 1; i + 1 < ring.length; i++) { outI.push(ring[0]!, ring[i + 1]!, ring[i]!); outF.push(faceAt.get(ring[0]!)!); }
+    triangulateRing(P, ring, use, ek, per, outI, outF, faceAt.get(ring[0]!)!);
     for (const v of ring) filled.add(v);
   }
   // UNDIRECTED pass (big only): a notch between two faces whose local windings disagree around it
@@ -3181,27 +3192,75 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
       const ring: number[] = [start];
       visited.add(start);
       let prev = start, cur = nb[0]![0], per = 0, ok = true;
-      for (let g = 0; g <= 8; g++) {
+      for (let g = 0; g <= 64; g++) {
         const link = adj.get(cur);
         if (!link || link.length !== 2 || filled.has(cur)) { ok = false; break; }
         per += Math.hypot(P[prev * 3]! - P[cur * 3]!, P[prev * 3 + 1]! - P[cur * 3 + 1]!, P[prev * 3 + 2]! - P[cur * 3 + 2]!);
-        if (per > big.perim) { ok = false; break; }
+        if (per > perCap || g === 64) { ok = false; break; }
         if (cur === start) break;
         ring.push(cur);
         const next = link[0]![0] === prev ? link[1]![0] : link[0]![0];
         prev = cur; cur = next;
       }
-      if (!ok || cur !== start || ring.length < 3 || ring.length > 8 || planarDev(ring) > big.dev) continue;
+      if (!ok || cur !== start || ring.length < 3 || ring.length > MAXN
+        || (ring.length > 3 && planarDev(ring) > Math.max(FLAT * per, big.dev))) {
+        for (const v of ring) visited.add(v); // ring-global gates: rejected from one start, rejected from all
+        continue;
+      }
       for (const v of ring) filled.add(v);
       // Wind against the first edge's owner traversal (ring[0]->ring[1] if the owner walked it
-      // that way, the fan pairs it opposite); best-effort for the rest.
+      // that way, the fill pairs it opposite); best-effort for the rest.
       const fwd = (faceAt.get(ring[0]!) !== undefined && nxt.get(ring[0]!) === ring[1]!);
       const r = fwd ? ring : ring.slice().reverse();
-      for (let i = 1; i + 1 < r.length; i++) { outI.push(r[0]!, r[i + 1]!, r[i]!); outF.push(nb[0]![1]); }
-      if (DBG) console.error(`[fill] undirected flat ring filled: len=${ring.length} per=${per.toFixed(3)}`);
+      triangulateRing(P, r, use, ek, per, outI, outF, nb[0]![1]);
+      if (DBG) console.error(`[fill] undirected ring filled: len=${ring.length} per=${per.toFixed(3)}`);
     }
   }
   return { indices: outI, faceOf: outF };
+}
+
+/**
+ * Minimum-area triangulation of a closed 3D ring (classic interval DP, O(n³), n ≤ 65 here). Area
+ * is the right objective for hole patches: a flat notch gets the natural planar triangulation and
+ * an elongated zigzag slit gets stitched rail-to-rail with near-zero-area triangles, where a fan
+ * from one rail end would fold across the opposite rail. Chords that already exist as mesh edges
+ * carry a penalty far above any real area so the fill never manufactures a non-manifold edge
+ * (interior chords are otherwise new vertex pairs, used exactly twice within the fill). Triangles
+ * are emitted wound AGAINST ring order — DP triangle (i,m,j), i<m<j, as (ring[j],ring[m],ring[i])
+ * — so every ring edge is traversed opposite its owning open edge and pairs manifold-consistently.
+ */
+function triangulateRing(P: Float64Array, ring: number[], use: Map<number, number>, ek: (a: number, b: number) => number, per: number, outI: number[], outF: number[], face: number): void {
+  const n = ring.length;
+  if (n < 3) return;
+  if (n === 3) { outI.push(ring[2]!, ring[1]!, ring[0]!); outF.push(face); return; }
+  const X = (i: number): number => P[ring[i]! * 3]!, Y = (i: number): number => P[ring[i]! * 3 + 1]!, Z = (i: number): number => P[ring[i]! * 3 + 2]!;
+  const area = (i: number, m: number, j: number): number => {
+    const ux = X(m) - X(i), uy = Y(m) - Y(i), uz = Z(m) - Z(i);
+    const vx = X(j) - X(i), vy = Y(j) - Y(i), vz = Z(j) - Z(i);
+    return 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+  };
+  // Ring edges (j = i+1, and the closing pair 0,n-1) are the hole boundary — free. Interior chords
+  // cost their existing-edge penalty once, charged where the DP creates them as a split boundary.
+  const pen = (i: number, j: number): number => (j - i <= 1 || (i === 0 && j === n - 1)) ? 0 : (use.has(ek(ring[i]!, ring[j]!)) ? 1e6 * per * per : 0);
+  const cost = new Float64Array(n * n);
+  const split = new Int32Array(n * n).fill(-1);
+  for (let len = 2; len < n; len++) for (let i = 0; i + len < n; i++) {
+    const j = i + len;
+    let bc = Infinity, bm = -1;
+    for (let m = i + 1; m < j; m++) {
+      const c = cost[i * n + m]! + cost[m * n + j]! + area(i, m, j) + pen(i, m) + pen(m, j);
+      if (c < bc) { bc = c; bm = m; }
+    }
+    cost[i * n + j] = bc; split[i * n + j] = bm;
+  }
+  const stack: [number, number][] = [[0, n - 1]];
+  while (stack.length) {
+    const [i, j] = stack.pop()!;
+    if (j - i < 2) continue;
+    const m = split[i * n + j]!;
+    outI.push(ring[j]!, ring[m]!, ring[i]!); outF.push(face);
+    stack.push([i, m], [m, j]);
+  }
 }
 
 /** Weld coincident triangle-soup vertices into an indexed mesh (positions quantised to eps). */
