@@ -887,10 +887,10 @@
     "skipped": {}
   },
   "sourcemodels/nist_ftc_10_asme1_ap242-e2": {
-    "hash": "b97f7e1aefdbd1633fd9e481074a2f635a1882e3a7e11f2f7abe75d3a874aaf1",
+    "hash": "8e1af6268e0fb7321b7cf4964a9f1da812f7bd9fc16273855463a0f40404a8e0",
     "verts": 172756,
-    "tris": 343956,
-    "openEdges": 1648,
+    "tris": 344492,
+    "openEdges": 1112,
     "nonManifoldEdges": 0,
     "volume": 187499.751,
     "dispatch": {

@@ -3785,6 +3785,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     for (const f of fill.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
   }
 
+  // Sew jointly-closing open shells across solids (see sewSolids). Only OPEN boundary rings can
+  // pair, so closed bodies in a genuine assembly are never bridged.
+  if (brep.solids.length > 1) {
+    const openIds = new Set(brep.solids.filter((s) => s.open).map((s) => s.id));
+    const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds);
+    if (sewn > 0) warn("heuristic-fill", -1, `${sewn} coincident open rim pair(s) sewn across solids`);
+  }
+
   // No precise B-rep? Fall back to AP242 tessellated geometry (a pre-faceted body in the file).
   if (brep.solids.length === 0) {
     const tg = readTessellated(brep);
@@ -4015,6 +4023,180 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
  * while the min-area triangulation stitches rail-to-rail like the ribbon meshers. Fill triangles
  * are wound opposite the directed ring so they pair manifold-consistently with their neighbours.
  */
+/**
+ * CROSS-SOLID SEWING (rec ④ centerpiece). Solids are welded independently and kept disjoint — the
+ * right call for genuine assemblies — but a large ABC class models ONE part as several open
+ * shells that only close JOINTLY: a bare cylinder tube as its own 1-face solid, its two cap disks
+ * in another solid (the run7 seam-leak census: 444 of 561 leaking models are multi-solid, and the
+ * dominant open-edge class sits exactly ON a shared model edge that both solids carry as their
+ * own edge entity, sampled separately). Each such junction shows up here as TWO coincident open
+ * boundary RINGS in different solids. Pair them geometrically (mutual pointwise proximity within
+ * the sew tolerance — the two polylines sample the same true curve, so they differ by chord sag)
+ * and loft an INDEX-based ribbon between existing vertices: every previously-open segment gains
+ * exactly one partner triangle (manifold), no new vertices, bodies stay separable by solidOfTri
+ * except for the bridging ribbon.
+ *
+ * Safety: only OPEN boundary rings participate, so closed bodies in a true assembly (a screw
+ * resting in a hole — coincident faces, no open edges) are never touched; a ring is sewn at most
+ * once, to its best mutual match, and only when BOTH rings track each other everywhere (a rim
+ * half-covered by two caps fails the mutual gate and stays open rather than sewn wrong).
+ */
+function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>): number {
+  const KEY = 2 ** 26;
+  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
+  const use = new Map<number, number>();
+  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+    const k = ek(I[i + e]!, I[i + (e + 1) % 3]!);
+    use.set(k, (use.get(k) ?? 0) + 1);
+  }
+  // Directed boundary edges and their owning triangle; walk simple rings (skip ambiguous pinches).
+  const nxt = new Map<number, number>();
+  const triAt = new Map<number, number>();
+  const multi = new Set<number>();
+  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+    const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
+    if (use.get(ek(a, b)) !== 1) continue;
+    if (nxt.has(a)) multi.add(a);
+    nxt.set(a, b); triAt.set(a, i / 3);
+  }
+  type Ring = { v: number[]; solid: number; fid: number; per: number; frac: number[]; cx: number; cy: number; cz: number; r: number };
+  const rings: Ring[] = [];
+  const seen = new Set<number>();
+  for (const start of nxt.keys()) {
+    if (seen.has(start)) continue;
+    const v: number[] = [];
+    let cur = start, ok = true;
+    for (let guard = 0; guard <= nxt.size; guard++) {
+      if (multi.has(cur)) { ok = false; break; }
+      v.push(cur); seen.add(cur);
+      const n = nxt.get(cur);
+      if (n === undefined) { ok = false; break; }
+      cur = n;
+      if (cur === start) break;
+      if (guard === nxt.size) ok = false;
+    }
+    if (!ok || v.length < 3) continue;
+    const t0 = triAt.get(start)!;
+    let per = 0, cx = 0, cy = 0, cz = 0;
+    for (let i = 0; i < v.length; i++) {
+      const a = v[i]!, b = v[(i + 1) % v.length]!;
+      per += Math.hypot(P[b * 3]! - P[a * 3]!, P[b * 3 + 1]! - P[a * 3 + 1]!, P[b * 3 + 2]! - P[a * 3 + 2]!);
+      cx += P[a * 3]!; cy += P[a * 3 + 1]!; cz += P[a * 3 + 2]!;
+    }
+    cx /= v.length; cy /= v.length; cz /= v.length;
+    let r = 0;
+    for (const a of v) r = Math.max(r, Math.hypot(P[a * 3]! - cx, P[a * 3 + 1]! - cy, P[a * 3 + 2]! - cz));
+    const frac = [0];
+    for (let i = 1; i <= v.length; i++) {
+      const a = v[i - 1]!, b = v[i % v.length]!;
+      frac.push(frac[i - 1]! + Math.hypot(P[b * 3]! - P[a * 3]!, P[b * 3 + 1]! - P[a * 3 + 1]!, P[b * 3 + 2]! - P[a * 3 + 2]!));
+    }
+    const tot = frac[frac.length - 1]! || 1;
+    rings.push({ v, solid: solidOfTri[t0]!, fid: faceOfTri[t0]!, per, frac: frac.slice(0, v.length).map((x) => x / tot), cx, cy, cz, r });
+  }
+  if (DBG) console.error(`[tess] sewSolids: ${rings.length} open rings: ${rings.slice(0, 12).map((r) => `s${r.solid}×${r.v.length}(per=${r.per.toFixed(2)})`).join(" ")}`);
+  if (rings.length < 2) return 0;
+  // Mutual pointwise proximity, strided; a ring pair must coincide BOTH ways.
+  const distToRing = (x: number, y: number, z: number, R: Ring): number => {
+    let best = Infinity;
+    for (let i = 0; i < R.v.length; i++) {
+      const a = R.v[i]!, b = R.v[(i + 1) % R.v.length]!;
+      const ax = P[a * 3]!, ay = P[a * 3 + 1]!, az = P[a * 3 + 2]!;
+      const ex = P[b * 3]! - ax, ey = P[b * 3 + 1]! - ay, ez = P[b * 3 + 2]! - az;
+      const l2 = ex * ex + ey * ey + ez * ez;
+      let t = l2 > 0 ? ((x - ax) * ex + (y - ay) * ey + (z - az) * ez) / l2 : 0;
+      t = t < 0 ? 0 : t > 1 ? 1 : t;
+      const d = (x - ax - t * ex) ** 2 + (y - ay - t * ey) ** 2 + (z - az - t * ez) ** 2;
+      if (d < best) best = d;
+    }
+    return Math.sqrt(best);
+  };
+  const matchScore = (A: Ring, B: Ring): number => {
+    const st = Math.max(1, Math.floor(A.v.length / 48));
+    let worst = 0;
+    for (let i = 0; i < A.v.length; i += st) {
+      const a = A.v[i]!;
+      const d = distToRing(P[a * 3]!, P[a * 3 + 1]!, P[a * 3 + 2]!, B);
+      if (d > worst) worst = d;
+      if (worst > tol) return Infinity;
+    }
+    return worst;
+  };
+  const paired = new Set<number>();
+  let sewn = 0;
+  for (let i = 0; i < rings.length; i++) {
+    if (paired.has(i)) continue;
+    const A = rings[i]!;
+    let bj = -1, bScore = Infinity;
+    for (let j = 0; j < rings.length; j++) {
+      if (j === i || paired.has(j)) continue;
+      const B = rings[j]!;
+      if (B.solid === A.solid) continue;
+      // Watertightness accounting excludes open (surface-model) bodies per TRIANGLE, so a ribbon
+      // between an excluded and an included shell just moves the open line — sew like with like.
+      if (openIds.has(A.solid) !== openIds.has(B.solid)) continue;
+      if (Math.hypot(B.cx - A.cx, B.cy - A.cy, B.cz - A.cz) > 0.5 * (A.r + B.r) + tol) continue;
+      if (Math.abs(A.per - B.per) > 0.2 * Math.max(A.per, B.per) + 4 * tol) continue;
+      const s = Math.max(matchScore(A, B), matchScore(B, A));
+      if (s < bScore) { bScore = s; bj = j; }
+    }
+    if (bj < 0 || bScore > tol) continue;
+    const B = rings[bj]!;
+    paired.add(i); paired.add(bj);
+    // Ribbon: rails = A REVERSED and B in the direction that tracks it — the loft's triangles then
+    // traverse each previously-open segment OPPOSITE to its owning triangle (manifold pairing).
+    const c1 = A.v.slice().reverse();
+    const f1 = ((): number[] => {
+      const f = [0];
+      for (let k = 1; k <= c1.length; k++) {
+        const a = c1[k - 1]!, b = c1[k % c1.length]!;
+        f.push(f[k - 1]! + Math.hypot(P[b * 3]! - P[a * 3]!, P[b * 3 + 1]! - P[a * 3 + 1]!, P[b * 3 + 2]! - P[a * 3 + 2]!));
+      }
+      const tot = f[f.length - 1]! || 1;
+      return f.slice(0, c1.length).map((x) => x / tot);
+    })();
+    // Rotate B to start nearest c1[0], flip if the reverse tracks c1 better at the quarter point.
+    let bi = 0, bd = Infinity;
+    for (let k = 0; k < B.v.length; k++) {
+      const d = Math.hypot(P[B.v[k]! * 3]! - P[c1[0]! * 3]!, P[B.v[k]! * 3 + 1]! - P[c1[0]! * 3 + 1]!, P[B.v[k]! * 3 + 2]! - P[c1[0]! * 3 + 2]!);
+      if (d < bd) { bd = d; bi = k; }
+    }
+    let c2 = [...B.v.slice(bi), ...B.v.slice(0, bi)];
+    const at = (c: number[], f: number): number => c[Math.min(c.length - 1, Math.round(f * c.length)) % c.length]!;
+    const q1 = at(c1, 0.25);
+    const rev = [c2[0]!, ...c2.slice(1).reverse()];
+    const dq = (v: number, w: number): number => Math.hypot(P[v * 3]! - P[w * 3]!, P[v * 3 + 1]! - P[w * 3 + 1]!, P[v * 3 + 2]! - P[w * 3 + 2]!);
+    if (dq(at(rev, 0.25), q1) < dq(at(c2, 0.25), q1)) c2 = rev;
+    const f2 = ((): number[] => {
+      const f = [0];
+      for (let k = 1; k <= c2.length; k++) {
+        const a = c2[k - 1]!, b = c2[k % c2.length]!;
+        f.push(f[k - 1]! + Math.hypot(P[b * 3]! - P[a * 3]!, P[b * 3 + 1]! - P[a * 3 + 1]!, P[b * 3 + 2]! - P[a * 3 + 2]!));
+      }
+      const tot = f[f.length - 1]! || 1;
+      return f.slice(0, c2.length).map((x) => x / tot);
+    })();
+    // Cyclic two-rail loft by arc-length fraction (stitchRings' pairing, index-based).
+    const na = c1.length, nb = c2.length;
+    const fa = (k: number): number => (k >= na ? 1 : f1[k]!);
+    const fb = (k: number): number => (k >= nb ? 1 : f2[k]!);
+    let ia = 0, ib = 0;
+    while (ia < na || ib < nb) {
+      if (ia < na && (ib >= nb || fa(ia) < fb(ib))) {
+        I.push(c1[ia % na]!, c1[(ia + 1) % na]!, c2[ib % nb]!);
+        ia++;
+      } else {
+        I.push(c1[ia % na]!, c2[(ib + 1) % nb]!, c2[ib % nb]!);
+        ib++;
+      }
+      faceOfTri.push(A.fid); solidOfTri.push(A.solid);
+    }
+    sewn++;
+    if (DBG) console.error(`[tess] sewSolids: ring(${A.v.length}, solid ${A.solid}) <-> ring(${B.v.length}, solid ${B.solid}) worst=${bScore.toExponential(2)}`);
+  }
+  return sewn;
+}
+
 function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number, big?: { edge: number; dev: number }): { indices: number[]; faceOf: number[] } {
   const KEY = 2 ** 26;
   const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);

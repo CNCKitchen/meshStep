@@ -459,11 +459,12 @@ export function buildBrep(src: string): BrepModel {
   // of ADVANCED_FACEs without a solid wrapper. Same face machinery, one body per model, imported
   // ALONGSIDE solids (a file routinely mixes both: boomerang's zero-thickness blades, the NIST
   // parts' supplemental surfaces — OCC meshes them, so skipping them reads as missing area/volume).
-  // A body with any OPEN_SHELL is marked open so watertightness accounting skips its boundary.
+  // EVERY surface-model body is marked open: an SBSM is a sheet body with no volume by definition,
+  // and exporters routinely wrap a junk CLOSED_SHELL claim around a single bare face (ABC 00000087:
+  // a 1-face cylinder tube "CLOSED_SHELL" overlaying a genuinely closed solid) — watertightness
+  // accounting must skip a surface body's boundary regardless of the shell tag.
   for (const [sid, sbsm] of table.byType("SHELL_BASED_SURFACE_MODEL")) {
-    const shellIds = refList(sbsm.params[1]!);
-    const open = shellIds.some((sh) => table.typeOf(sh) === "OPEN_SHELL");
-    addSolid(sid, shellIds, open);
+    addSolid(sid, refList(sbsm.params[1]!), true);
   }
 
   // AP203-era bounded-surface models (GEOMETRIC_SET): CURVE_BOUNDED_SURFACE(name, basis#,
