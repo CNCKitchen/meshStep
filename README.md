@@ -4,8 +4,8 @@ Pure-TypeScript **STEP → mesh** importer. Reads ISO-10303-21 B-rep geometry (A
 AP242) and produces **watertight, low-sliver, process-grade triangle meshes** — meshes you can
 displace, voxelize, offset, slice, or simulate, not just look at.
 
-Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~6,500
-lines of TypeScript (~110 KB minified, ~42 KB gzipped) that run as-is in the browser, in a Web
+Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~9,300
+lines of TypeScript (~155 KB minified, ~58 KB gzipped) that run as-is in the browser, in a Web
 Worker, and in Node ≥ 22. Built to feed
 [bumpmesh](https://github.com/CNCKitchen/stlTexturizer) (displacement texturing) and
 [infeall](https://github.com/CNCKitchen/smartInfillGenerator) (smart infill), where mesh defects
@@ -54,7 +54,7 @@ meshStep starts from the opposite end: **the mesh is the product.**
 
 | Route | In browser | Footprint | Mesh output | Watertight welded | Face→tri topology | License |
 |---|---|---|---|---|---|---|
-| **meshStep** | ✅ pure TS | ~42 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
+| **meshStep** | ✅ pure TS | ~58 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
 | [occt-import-js](https://github.com/kovacsv/occt-import-js) | ✅ WASM | ~8 MB WASM | curvature-adaptive, per face | ❌ | ✅ face ranges | LGPL-2.1 (OCCT) |
 | [opencascade.js](https://github.com/donalffons/opencascade.js) | ✅ WASM | larger (custom builds) | same OCCT mesher | ❌ | manual | LGPL-2.1 (OCCT) |
 | [cascadio](https://github.com/trimesh/cascadio) / pythonOCC / FreeCAD | ❌ Python/desktop | native wheels/app | same OCCT mesher | ❌ | varies | LGPL (bundles OCCT) |
@@ -118,27 +118,27 @@ stands (July 2026):
 |---|---|
 | 13 curated repo models (analytic + NURBS + assemblies) | all watertight (0 open, 0 non-manifold), <2% slivers, within ~0.5% of reference |
 | 81-model characterization corpus (real Printables downloads + NIST AP242 test cases) | 70 fully clean · 9 with localized open-edge leaks (mostly NIST models) · 2 import errors |
-| Voron-family assemblies, 1,820 parts | 1,764 OK · 22 WARN · 33 FAIL · 1 timeout vs OCC cross-check at tight tolerance |
-| [ABC dataset](https://deep-geometry.github.io/abc-dataset/) chunk 0000, 1,454 wild CAD files | **142 fully clean (~10%)** — the honesty benchmark, see limitations below |
+| Voron-family assemblies, 1,820 parts | 1,793 OK · 26 WARN · 1 FAIL vs OCC cross-check at tight tolerance (the FAIL is an artifact of the OCC reference, not the mesh) |
+| [ABC dataset](https://deep-geometry.github.io/abc-dataset/) chunk 0000, 10,000 wild CAD files | **9,586 watertight (95.9%)** — closed, manifold, every face meshed. Remainder: 269 seam leaks · 83 timeouts · 37 untriangulated faces · 25 other |
 
 ### Current limitations
 
 meshStep is not (yet) an industrial-strength importer — it's tuned for the kind of parts people
 actually 3D-print, and the numbers above are deliberately honest about the rest:
 
-- **Wild CAD is hard.** On the ABC research corpus (uncurated files from many CAD systems, full
-  of degenerate, microscopic, and exotic geometry) most models currently come out with defects:
-  seam leaks on periodic surfaces, faces the CDT refuses to triangulate, or non-manifold spots.
-  The curated corpora show the same failure classes at far lower rates; both shrink with every
-  release, but if your files look like ABC, OpenCASCADE-based tools are more robust today.
+- **Wild CAD still has a tail.** On the ABC research corpus (uncurated files from many CAD
+  systems, full of degenerate, microscopic, and exotic geometry) ~4% of models come out with
+  defects: residual CDT failures on degenerate multi-loop trims, seam leaks, or non-manifold
+  spots. The tail shrinks with every release, but OpenCASCADE-based tools will still *read*
+  more of the truly pathological files — they just hand back per-face triangle soup, not a
+  watertight mesh.
 - **Pathological models can be slow.** Pure TypeScript is fast enough for interactive use on
-  print-scale parts, but ~19% of ABC models blew a 120 s budget at tight tolerances — native
-  OCCT is faster on huge or degenerate inputs.
+  print-scale parts, but 0.8% of ABC models (83 of 10,000) blew a 120 s budget at tight
+  tolerances — native OCCT is faster on huge or degenerate inputs.
 - **No geometry healing.** meshStep trusts the STEP file: gaps, self-intersections, or broken
   topology in the source B-rep are not repaired, only reported.
-- Remaining features: 3MF export, the controls/preset UI, and residual CDT edge cases on
-  pathological multi-loop trims (planar and spherical). Pipeline details in
-  [DESIGN.md](DESIGN.md).
+- Remaining features: 3MF export, the controls/preset UI, and residual CDT constraint
+  enforcement on degenerate many-window trims. Pipeline details in [DESIGN.md](DESIGN.md).
 
 ## Quick start (dev)
 
