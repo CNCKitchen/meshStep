@@ -492,6 +492,12 @@ export function loopParam(surface: Surface, loop: BLoop, sampled: Map<number, Ve
   // area tiebreak prefers the full-period lift, and a genuinely degenerate slit that gets lifted
   // into a phantom band is caught by the caller's fold audit (boundary over-coverage → rollback).
   const collapsedLoop = (p2: P2[]): boolean => {
+    // Only multi-edge loops qualify: a single-closed-edge rim circle (or a two-edge seam-split rim)
+    // legitimately projects to a zero-area line, and dragging those through the reassembly search
+    // regressed healthy B-spline bands (run5: 5 models) — the "bigger area" lift the score prefers
+    // is a phantom there. The thread-band class this trigger exists for has ≥ 3 edges by shape
+    // (two rails + at least one closer).
+    if (loop.edges.length < 3) return false;
     let per = 0;
     for (let i = 0; i < p2.length; i++) { const a = p2[i]!, b = p2[(i + 1) % p2.length]!; per += Math.hypot(b[0] - a[0], b[1] - a[1]); }
     return 2 * Math.abs(polyArea(p2)) / Math.max(per, 1e-12) < 1e-6 * per;
@@ -2325,9 +2331,10 @@ function tessellateConeCap(
   if (rim.length < 3) return false;
   const apex = surface.evaluate(0, -cone.r / cone.sin);
   const dd = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  const stride = Math.max(1, Math.ceil(rim.length / 512)); // winding gate needs samples, not every point
   let hu: number | undefined, hv: number | undefined, travel = 0, prevU: number | undefined;
-  for (const p of rim) {
-    const [u, v] = surface.project(p, hu, hv);
+  for (let i = 0; i < rim.length; i += stride) {
+    const [u, v] = surface.project(rim[i]!, hu, hv);
     if (prevU !== undefined) {
       let d = u - prevU;
       while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI;
@@ -2684,10 +2691,15 @@ function tessellateCapDome(
     for (let i = 0; i < poly.length - 1; i++) rim.push(poly[i]!);
   }
   if (rim.length < 4) return false;
-  // Hint-chained projection so the rim unwraps continuously across the periodic seam.
+  // Hint-chained projection so the rim unwraps continuously across the periodic seam. STRIDED to
+  // ≤512 samples: the winding/spread gates don't need every point, and projecting a 30k-point
+  // B-spline rim point-by-point (multi-start Newton each) turned an 11s model into a >150s hang
+  // (ABC 00008375). 512 samples of a once-winding rim step ~period/512 — far below the half-period
+  // wrap ambiguity.
+  const stride = Math.max(1, Math.ceil(rim.length / 512));
   const uv: P2[] = [];
   let hu: number | undefined, hv: number | undefined;
-  for (const p of rim) { const q = surface.project(p, hu, hv); uv.push(q); hu = q[0]; hv = q[1]; }
+  for (let i = 0; i < rim.length; i += stride) { const q = surface.project(rim[i]!, hu, hv); uv.push(q); hu = q[0]; hv = q[1]; }
   // Full single winding in the periodic direction, near-constant in the stack direction.
   let travel = 0;
   for (let i = 0; i < uv.length; i++) {
@@ -2735,7 +2747,9 @@ function tessellateCapDome(
     let prev = evalPS(p0, sRim);
     for (let i = 1; i <= 16; i++) { const q = evalPS(p0, sRim + ((sPole - sRim) * i) / 16); sArc += dd(prev, q); prev = q; }
   }
-  const nV = Math.max(1, Math.min(2000, Math.ceil(sArc / Math.max(target, 1e-9))));
+  // Ring-count cap keyed to the RIM size: total evaluations nV·|rim| stay ~1.5M so one dome face
+  // cannot eat the whole model budget (a dense B-spline rim × 2000 rings is 60M evaluate() calls).
+  const nV = Math.max(1, Math.min(2000, Math.ceil(1.5e6 / Math.max(rim.length, 8)), Math.ceil(sArc / Math.max(target, 1e-9))));
   const pStart = uv[0]![P]!, pDir = travel >= 0 ? 1 : -1;
   const start = verts.length;
   let prev = rim.slice();
@@ -3353,21 +3367,31 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
       const l2 = ex * ex + ey * ey + ez * ez;
       if (l2 < 1e-24) continue;
       const len = Math.sqrt(l2);
-      const gx0 = Math.min(P[oe.a * 3]!, P[oe.b * 3]!) - tol, gx1 = Math.max(P[oe.a * 3]!, P[oe.b * 3]!) + tol;
-      const gy0 = Math.min(P[oe.a * 3 + 1]!, P[oe.b * 3 + 1]!) - tol, gy1 = Math.max(P[oe.a * 3 + 1]!, P[oe.b * 3 + 1]!) + tol;
-      const gz0 = Math.min(P[oe.a * 3 + 2]!, P[oe.b * 3 + 2]!) - tol, gz1 = Math.max(P[oe.a * 3 + 2]!, P[oe.b * 3 + 2]!) + tol;
+      // Candidate cells are walked ALONG the segment (1-cell dilation), not over its bounding box:
+      // a bbox scan on a long diagonal open edge visits (len/cell)³ cells — a single 95mm sliver
+      // rail at the 0.02mm tolerance is 10^11 cells, which turned an 11s ABC model into a hang the
+      // moment a long open edge appeared. Any vertex within tol of the segment lies inside the
+      // dilated tube the walk covers, so the candidate set is identical.
       const list: { v: number; t: number }[] = [];
-      for (let cx = Math.round(gx0 / cell); cx <= Math.round(gx1 / cell); cx++)
-        for (let cy = Math.round(gy0 / cell); cy <= Math.round(gy1 / cell); cy++)
-          for (let cz = Math.round(gz0 / cell); cz <= Math.round(gz1 / cell); cz++)
-            for (const v of hash.get(`${cx},${cy},${cz}`) ?? []) {
-              if (v === oe.a || v === oe.b) continue;
-              const qx = P[v * 3]! - ax, qy = P[v * 3 + 1]! - ay, qz = P[v * 3 + 2]! - az;
-              const t = (qx * ex + qy * ey + qz * ez) / l2;
-              if (t * len < tol || (1 - t) * len < tol) continue; // too near an endpoint — weld territory
-              const d = Math.hypot(qx - t * ex, qy - t * ey, qz - t * ez);
-              if (d <= tol && !list.some((x) => x.v === v)) list.push({ v, t });
-            }
+      const visited = new Set<string>();
+      const steps = Math.min(100000, 2 * Math.ceil(len / cell) + 1);
+      for (let si = 0; si <= steps; si++) {
+        const tt = si / steps;
+        const cx = Math.round((ax + ex * tt) / cell), cy = Math.round((ay + ey * tt) / cell), cz = Math.round((az + ez * tt) / cell);
+        for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) for (let gz = -1; gz <= 1; gz++) {
+          const key = `${cx + gx},${cy + gy},${cz + gz}`;
+          if (visited.has(key)) continue;
+          visited.add(key);
+          for (const v of hash.get(key) ?? []) {
+            if (v === oe.a || v === oe.b) continue;
+            const qx = P[v * 3]! - ax, qy = P[v * 3 + 1]! - ay, qz = P[v * 3 + 2]! - az;
+            const t = (qx * ex + qy * ey + qz * ez) / l2;
+            if (t * len < tol || (1 - t) * len < tol) continue; // too near an endpoint — weld territory
+            const d = Math.hypot(qx - t * ex, qy - t * ey, qz - t * ez);
+            if (d <= tol && !list.some((x) => x.v === v)) list.push({ v, t });
+          }
+        }
+      }
       if (list.length) { ins.set(oe.tri * 3 + oe.edge, list.sort((x, y) => x.t - y.t)); found += list.length; }
     }
     if (!found) break;
