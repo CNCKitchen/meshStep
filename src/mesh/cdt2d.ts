@@ -507,7 +507,27 @@ function enforceByRetriangulation(m: Cdt, pts: P2[], a: number, b: number, const
     if (c === 2 && constraints.has(k)) {
       const u = Math.floor(k / 0x8000000), w = k % 0x8000000;
       if (segCross(PA, PB, pts[u]!, pts[w]!)) {
-        if (DBG) console.error(`[cdt]     enforce ${a}-${b}: bail crosses realised constraint ${u}-${w}`);
+        // T-CONFIGURATION REPAIR: when the "crossing" is one of OUR OWN endpoints sitting on the
+        // realised constraint's line within fp noise (a rim vertex projected 1e-16 off the seam
+        // meridian it belongs to — ABC 00000452's weaving muzzle rim), the two constraints
+        // mutually block and one is always lost. The split is exact: replace u-w with u-x + x-w
+        // through our endpoint x — geometrically the same edge — and make both pieces mandatory
+        // diagonals of the fill. The pieces join the constraints set mid-iteration, so the outer
+        // enforcement loop visits and (if needed) enforces them after this call.
+        const U = pts[u]!, W = pts[w]!;
+        const ex = W[0] - U[0], ey = W[1] - U[1];
+        const L = Math.hypot(ex, ey) || 1;
+        const lineDist = (P: P2): number => Math.abs((P[0] - U[0]) * ey - (P[1] - U[1]) * ex) / L;
+        const eps = 1e-9 * L;
+        const x = lineDist(PA) <= eps ? a : lineDist(PB) <= eps ? b : -1;
+        if (x >= 0 && x !== u && x !== w) {
+          constraints.delete(k);
+          constraints.add(ckey(u, x)); constraints.add(ckey(x, w));
+          chords.push([u, x], [x, w]);
+          if (DBG) console.error(`[cdt]     enforce ${a}-${b}: split realised constraint ${u}-${w} at endpoint ${x} (T-configuration)`);
+          continue;
+        }
+        if (DBG) console.error(`[cdt]     enforce ${a}-${b}: bail crosses realised constraint ${u}-${w}${process.env.MESHSTEP_SLICEDBG ? ` A=(${PA[0]},${PA[1]}) B=(${PB[0]},${PB[1]}) U=(${pts[u]![0]},${pts[u]![1]}) W=(${pts[w]![0]},${pts[w]![1]})` : ""}`);
         return false;
       }
       chords.push([u, w]);

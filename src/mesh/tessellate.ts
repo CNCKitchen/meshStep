@@ -692,8 +692,16 @@ function tessellateParamGrid(
   // Anisotropic ruling-aligned meshing needs a trustworthy parameter domain; a face whose boundary
   // projection tangled (pinched tubes, fold-ambiguous patches) gets the conservative isotropic grid.
   const clean = !projected.some((p) => p.lp.tangled);
+  // An outer loop that WINDS a periodic axis is not a disk boundary — its lift's closing chord
+  // spans a whole period. When the CDT realises everything anyway, fine (some once-winding rims
+  // are genuine slivers); when it can't, the rescue fill leaks by construction, and the face
+  // belongs to the band/region meshers — so require a fully-realised boundary for winding outers
+  // (ABC 00000083: a closed-v B-spline whose single loop winds v once; grid emitted the leak and
+  // region never got the face).
+  const outerWinds = (!!surface.periodicU && Math.abs(projected[oi]!.lp.windU) >= 1)
+    || (!!surface.periodicV && Math.abs(projected[oi]!.lp.windV) >= 1);
   const v0 = verts.length, f0 = faceIds.length;
-  if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean)) return false;
+  if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, false, false, outerWinds)) return false;
   // FOLD AUDIT. A correct triangulation of a trimmed patch covers each boundary segment exactly as
   // often as the boundary itself traverses it (once normally, twice along an out-and-back slit). On
   // a fold-degenerate surface — a flattened tube whose opposite folds coincide in 3D — the chained
@@ -742,14 +750,14 @@ function tessellateParamGrid(
     // fold is structural (a genuinely folded projection) — roll back and let the rail-ribbon fallback
     // mesh between the shared rails (OpenVessel counterbore tubes).
     verts.length = v0; faceIds.length = f0;
-    if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true) || overCovered()) {
+    if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true, false, outerWinds) || overCovered()) {
       // KEYHOLE DE-SLIT retry: a hole reachable only through a zero-width corridor folds exactly
       // here (the corridor's doubled samples over-cover their own segments once the refinement's
       // inserts push the re-CDT across them — Meanwell's notched sphere caps at coarse
       // tolerance). Retry with the corridor removed and the enclosed outline as a real hole; the
       // retry is a no-op (fails fast) for faces without a de-slit candidate.
       verts.length = v0; faceIds.length = f0;
-      if (gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true, true) && !overCovered()) {
+      if (gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, true, true, outerWinds) && !overCovered()) {
         if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT: de-slit retry is fold-free`);
         return true;
       }
@@ -881,7 +889,7 @@ function planeEarcutFill(
 function gridCDT(
   surface: Surface, outer: { p3: Vec3[]; p2: P2[] }, holes: { p3: Vec3[]; p2: P2[] }[], fid: number,
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
-  allowAniso = true, noRefine = false, forceDeslit = false,
+  allowAniso = true, noRefine = false, forceDeslit = false, requireClosed = false,
 ): boolean {
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
   for (const q of outer.p2) {
@@ -1316,6 +1324,15 @@ function gridCDT(
     prevMissing = cdtOut.missing;
     prevRescue = cdtOut.rescue;
   }
+  // requireClosed: the caller knows this boundary MUST fully realise (a winding outer on a
+  // periodic surface — its period-spanning closing chord is unenforceable exactly when the lift
+  // is the wrong topology, and the rescue fill then emits a guaranteed-leaky region). Return
+  // false instead so the dispatch chain falls through to the band/region meshers that own
+  // winding rims. Nothing has been emitted into verts yet at this point.
+  if (requireClosed && prevMissing > 0) {
+    if (DBG) console.error(`[grid] fid=${fid} requireClosed: ${prevMissing} constraint(s) unrealised — face declined`);
+    return false;
+  }
   // Surface the CDT's own distress to the import diagnostics: unenforceable boundary constraints
   // mean the face region was reconstructed rather than derived (the class behind every remaining
   // watertight-but-wrong result), and a rescue label means the parity flood was out-voted even
@@ -1592,12 +1609,17 @@ function tessellatePeriodicUnroll(
       }
       return false;
     };
-    if (conflicted()) {
-      const cross = (p2: P2[], uk: number): number => {
+    // cross/buildRimCut take an optional SHEAR slope: with slope s they operate on the sheared
+    // around-coordinate a = around − s·stack (a slanted meridian in (u,v)); slope 0 is the plain
+    // vertical meridian, bit-identical to the original code. buildRimCut's OUTPUT stays in the
+    // original (u,v): the accumulator unwraps in a-space and each emitted point adds s·stack back.
+    {
+      const cross = (p2: P2[], uk: number, slope = 0): number => {
         let cnt = 0;
         for (let i = 0; i < p2.length; i++) {
-          const a = p2[i]![c];
-          let d = p2[(i + 1) % p2.length]![c] - a;
+          const a = p2[i]![c] - slope * p2[i]![stackC];
+          const j = (i + 1) % p2.length;
+          let d = p2[j]![c] - slope * p2[j]![stackC] - a;
           while (d > period / 2) d -= period; while (d < -period / 2) d += period;
           if (Math.abs(d) < 1e-12) continue;
           const r = norm(uk - a);
@@ -1605,15 +1627,16 @@ function tessellatePeriodicUnroll(
         }
         return cnt;
       };
-      const buildRimCut = (rim: { p3: Vec3[]; p2: P2[]; wind: number }, uStar: number): { p3: Vec3[]; p2: P2[] } | null => {
+      const buildRimCut = (rim: { p3: Vec3[]; p2: P2[]; wind: number }, uStar: number, slope = 0): { p3: Vec3[]; p2: P2[] } | null => {
         let p3 = rim.p3, p2 = rim.p2;
         if (rim.wind < 0) { p3 = p3.slice().reverse(); p2 = p2.slice().reverse(); }
         const n = p2.length;
         const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
+        const aOf = (q: P2): number => q[c] - slope * q[stackC];
         let ci = -1, ct = 0, cs = 0;
         for (let i = 0; i < n; i++) {
-          const a = p2[i]![c], j = (i + 1) % n;
-          const d = wrapD(p2[j]![c] - a);
+          const a = aOf(p2[i]!), j = (i + 1) % n;
+          const d = wrapD(aOf(p2[j]!) - a);
           if (Math.abs(d) < 1e-12) continue;
           const r = norm(uStar - a);
           let t = -1;
@@ -1633,38 +1656,159 @@ function tessellatePeriodicUnroll(
           p3[ci]![2] + (p3[j]![2] - p3[ci]![2]) * ct,
         ];
         const outP3: Vec3[] = [cut3];
-        const auv: [number, number][] = [[uStar, cs]];
-        let acc = uStar + (1 - ct) * wrapD(p2[j]![c] - p2[ci]![c]);
-        outP3.push(p3[j]!); auv.push([acc, p2[j]![stackC]]);
+        const auv: [number, number][] = [[uStar + slope * cs, cs]];
+        let acc = uStar + (1 - ct) * wrapD(aOf(p2[j]!) - aOf(p2[ci]!));
+        outP3.push(p3[j]!); auv.push([acc + slope * p2[j]![stackC], p2[j]![stackC]]);
         for (let k = 1; k < n; k++) {
           const idx = (j + k) % n, prv = (j + k - 1) % n;
-          acc += wrapD(p2[idx]![c] - p2[prv]![c]);
-          outP3.push(p3[idx]!); auv.push([acc, p2[idx]![stackC]]);
+          acc += wrapD(aOf(p2[idx]!) - aOf(p2[prv]!));
+          outP3.push(p3[idx]!); auv.push([acc + slope * p2[idx]![stackC], p2[idx]![stackC]]);
         }
-        outP3.push(cut3); auv.push([uStar + period, cs]);
+        outP3.push(cut3); auv.push([uStar + period + slope * cs, cs]);
         return { p3: outP3, p2: auv.map(([a, s]) => toP2(a, s)) };
       };
       const K = 512;
-      let uStar = NaN, bestMargin = -1;
-      for (let k = 0; k < K; k++) {
-        const uk = ((k + 0.5) * period) / K;
-        if (cross(rims[0]!.p2, uk) !== 1 || cross(rims[1]!.p2, uk) !== 1) continue;
-        let ok = true;
-        for (const h of holes) if (cross(h.p2, uk) > 0) { ok = false; break; }
-        if (!ok) continue;
-        let margin = Infinity;
-        for (const arr of [rims[0]!.p2, rims[1]!.p2, ...holes.map((h) => h.p2)]) {
-          for (const q of arr) { const dd = norm(q[c] - uk); const m = Math.min(dd, period - dd); if (m < margin) margin = m; }
+      if (conflicted()) {
+        let uStar = NaN, bestMargin = -1;
+        for (let k = 0; k < K; k++) {
+          const uk = ((k + 0.5) * period) / K;
+          if (cross(rims[0]!.p2, uk) !== 1 || cross(rims[1]!.p2, uk) !== 1) continue;
+          let ok = true;
+          for (const h of holes) if (cross(h.p2, uk) > 0) { ok = false; break; }
+          if (!ok) continue;
+          let margin = Infinity;
+          for (const arr of [rims[0]!.p2, rims[1]!.p2, ...holes.map((h) => h.p2)]) {
+            for (const q of arr) { const dd = norm(q[c] - uk); const m = Math.min(dd, period - dd); if (m < margin) margin = m; }
+          }
+          if (margin > bestMargin) { bestMargin = margin; uStar = uk; }
         }
-        if (margin > bestMargin) { bestMargin = margin; uStar = uk; }
+        if (Number.isFinite(uStar)) {
+          const b2 = buildRimCut(rims[0]!, uStar), t2 = buildRimCut(rims[1]!, uStar);
+          if (b2 && t2) {
+            const normTo2 = (x: number): number => { let d = (x - uStar) % period; if (d < 0) d += period; return uStar + d; };
+            outer = { p3: [...b2.p3, ...t2.p3.slice().reverse()], p2: [...b2.p2, ...t2.p2.slice().reverse()] };
+            holeLoops = holes.map((h) => ({ p3: h.p3, p2: h.p2.map((q) => toP2(normTo2(q[c]), q[stackC])) }));
+            if (DBG) console.error(`[unroll] fid=${fid} exact-seam rebuild at ${uStar.toFixed(4)} (margin ${bestMargin.toExponential(1)})`);
+          }
+        }
       }
-      if (Number.isFinite(uStar)) {
-        const b2 = buildRimCut(rims[0]!, uStar), t2 = buildRimCut(rims[1]!, uStar);
-        if (b2 && t2) {
-          const normTo2 = (x: number): number => { let d = (x - uStar) % period; if (d < 0) d += period; return uStar + d; };
-          outer = { p3: [...b2.p3, ...t2.p3.slice().reverse()], p2: [...b2.p2, ...t2.p2.slice().reverse()] };
-          holeLoops = holes.map((h) => ({ p3: h.p3, p2: h.p2.map((q) => toP2(normTo2(q[c]), q[stackC])) }));
-          if (DBG) console.error(`[unroll] fid=${fid} exact-seam rebuild at ${uStar.toFixed(4)} (margin ${bestMargin.toExponential(1)})`);
+      // SEAM-PATH RESCUE (slanted / re-placed seam with sampled sides). Two fold classes reach
+      // here broken and invisible to conflicted():
+      //  - a hole that WINDS the around-coordinate (a helical thread slit crosses EVERY vertical
+      //    meridian, ABC 00000122): normTo folds each rail continuation into a period-spanning
+      //    jump chord that crosses its own siblings — the folded hole SELF-intersects;
+      //  - a hole that STRADDLES the chosen seam (a full-height window on the barrel, ABC
+      //    00000002): normTo splits it across the domain with two jump chords that cross nothing
+      //    strictly, but the folded steps are near-period-long.
+      // Trigger on either signature (self-intersection / any folded step > period/2), then retry
+      // the cut with slope candidates: 0 (a plain re-placed vertical seam — enough for the
+      // straddler class) and the winding holes' own regressed climbs (the thread class: in the
+      // sheared coordinate a = around − slope·stack a helical slit becomes a COMPACT hole, rims
+      // still cross an a-meridian exactly once, and the vertical machinery applies verbatim).
+      // The seam sides are sampled at IDENTICAL stack stations one period apart — identical 3D
+      // points, so the weld seals the cut (the tessellatePeriodicRegion seam-pair trick). Output
+      // stays in original (u,v): a parallelogram domain, which the grid CDT handles unchanged.
+      const foldedHole = (): boolean => holeLoops.some((h) => {
+        for (let i = 0; i < h.p2.length; i++) {
+          if (Math.abs(h.p2[(i + 1) % h.p2.length]![c] - h.p2[i]![c]) > period / 2) return true;
+        }
+        return false;
+      });
+      if (holes.length && (conflicted() || foldedHole() || holeLoops.some((h) => countSelfIntersections(h.p2) > 0))) {
+        const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
+        const unw = holes.map((h) => {
+          const a: number[] = [norm(h.p2[0]![c])];
+          for (let i = 1; i < h.p2.length; i++) a.push(a[i - 1]! + wrapD(h.p2[i]![c] - h.p2[i - 1]![c]));
+          return a;
+        });
+        const slopes: number[] = [];
+        for (let hi = 0; hi < holes.length; hi++) {
+          const a = unw[hi]!;
+          let mn = Infinity, mx = -Infinity;
+          for (const x of a) { if (x < mn) mn = x; if (x > mx) mx = x; }
+          if (mx - mn < 0.95 * period) continue; // fits a vertical cut — not a slope driver
+          const hp = holes[hi]!.p2;
+          let sm = 0, am = 0;
+          for (let i = 0; i < a.length; i++) { sm += hp[i]![stackC]; am += a[i]!; }
+          sm /= a.length; am /= a.length;
+          let num = 0, den = 0;
+          for (let i = 0; i < a.length; i++) { const ds = hp[i]![stackC] - sm; num += ds * (a[i]! - am); den += ds * ds; }
+          if (den > 1e-18 && Math.abs(num / den) > 1e-12) slopes.push(num / den);
+        }
+        slopes.sort((x, y) => x - y);
+        const cands: number[] = [0];
+        if (slopes.length) cands.push(slopes[slopes.length >> 1]!);
+        for (const s of slopes) if (!cands.some((x) => Math.abs(x - s) <= 1e-9 * Math.max(1, Math.abs(s)))) cands.push(s);
+        if (DBG) console.error(`[unroll] fid=${fid} seam-path rescue: ${slopes.length} winding hole(s), slope candidates=[${cands.map((s) => s.toExponential(2)).join(",")}]`);
+        for (const slope of cands) {
+          const aOf = (q: P2): number => q[c] - slope * q[stackC];
+          let aStar = NaN, aMargin = -1;
+          for (let k = 0; k < K; k++) {
+            const ak = ((k + 0.5) * period) / K;
+            if (cross(rims[0]!.p2, ak, slope) !== 1 || cross(rims[1]!.p2, ak, slope) !== 1) continue;
+            let ok = true;
+            for (const h of holes) if (cross(h.p2, ak, slope) > 0) { ok = false; break; }
+            if (!ok) continue;
+            let margin = Infinity;
+            for (const arr of [rims[0]!.p2, rims[1]!.p2, ...holes.map((h) => h.p2)]) {
+              for (const q of arr) { const dd = norm(aOf(q) - ak); const m = Math.min(dd, period - dd); if (m < margin) margin = m; }
+            }
+            if (margin > aMargin) { aMargin = margin; aStar = ak; }
+          }
+          if (!Number.isFinite(aStar)) {
+            if (DBG) console.error(`[unroll] fid=${fid} seam-path: no clean meridian at slope=${slope.toExponential(2)}`);
+            continue;
+          }
+          const b2 = buildRimCut(rims[0]!, aStar, slope);
+          const t2 = b2 ? buildRimCut(rims[1]!, aStar, slope) : null;
+          if (!b2 || !t2) {
+            if (DBG) console.error(`[unroll] fid=${fid} seam-path: rim cut failed at a*=${aStar.toFixed(4)} slope=${slope.toExponential(2)}`);
+            continue;
+          }
+          // Seam sides: sampled along a = aStar between the two cut points at the face target
+          // (a slanted cut is a helix in 3D — a single chord would gouge the surface). Both
+          // sides reference the SAME evaluated 3D objects so the weld unifies them exactly.
+          const csB = b2.p2[0]![stackC], csT = t2.p2[0]![stackC];
+          const qMid = toP2(aStar + slope * ((csB + csT) / 2), (csB + csT) / 2);
+          const fT = faceTarget(surface, targetEdge, chordTol, normalDev, qMid[0], qMid[1]);
+          let len = 0, prev = b2.p3[0]!;
+          for (let i = 1; i <= 16; i++) {
+            const s = csB + ((csT - csB) * i) / 16;
+            const q = toP2(aStar + slope * s, s);
+            const p = surface.evaluate(q[0], q[1]);
+            len += Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]); prev = p;
+          }
+          const nSeam = Math.min(4096, Math.max(1, Math.ceil(len / Math.max(fT, 1e-9))));
+          const seam3: Vec3[] = [], seamS: number[] = [];
+          for (let i = 1; i < nSeam; i++) {
+            const s = csB + ((csT - csB) * i) / nSeam;
+            const q = toP2(aStar + slope * s, s);
+            seam3.push(surface.evaluate(q[0], q[1])); seamS.push(s);
+          }
+          const prevOuter = outer, prevHoles = holeLoops;
+          outer = {
+            p3: [...b2.p3, ...seam3, ...t2.p3.slice().reverse(), ...seam3.slice().reverse()],
+            p2: [
+              ...b2.p2,
+              ...seamS.map((s) => toP2(aStar + period + slope * s, s)),
+              ...t2.p2.slice().reverse(),
+              ...seamS.slice().reverse().map((s) => toP2(aStar + slope * s, s)),
+            ],
+          };
+          holeLoops = holes.map((h, hi) => {
+            const a = unw[hi]!;
+            let bMin = Infinity;
+            for (let i = 0; i < a.length; i++) { const b = a[i]! - slope * h.p2[i]![stackC]; if (b < bMin) bMin = b; }
+            const kk = Math.ceil((aStar - bMin) / period);
+            return { p3: h.p3, p2: h.p2.map((q, i) => toP2(a[i]! + kk * period, q[stackC])) };
+          });
+          if (conflicted() || foldedHole()) {
+            if (DBG) console.error(`[unroll] fid=${fid} seam-path: rebuild at slope=${slope.toExponential(2)} still conflicted — reverted`);
+            outer = prevOuter; holeLoops = prevHoles;
+            continue;
+          }
+          if (DBG) console.error(`[unroll] fid=${fid} seam-path rebuild slope=${slope.toExponential(2)} a*=${aStar.toFixed(4)} seamPts=${nSeam - 1} (margin ${aMargin.toExponential(1)})`);
+          break;
         }
       }
     }
@@ -3789,8 +3933,29 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // pair, so closed bodies in a genuine assembly are never bridged.
   if (brep.solids.length > 1) {
     const openIds = new Set(brep.solids.filter((s) => s.open).map((s) => s.id));
-    const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds);
+    const unsewn = new Set<number>();
+    const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds, unsewn);
     if (sewn > 0) warn("heuristic-fill", -1, `${sewn} coincident open rim pair(s) sewn across solids`);
+    // Sheet bodies masquerading as solids: a shell whose OWN B-rep has boundary edges (an edge
+    // referenced by exactly one face loop) cannot close alone — it either closes JOINTLY (the
+    // sewing above) or it is a surface body in the SBSM sense no matter what CLOSED_SHELL claims
+    // (a bare tube resting against another solid's FACE has no mate ring to sew — ABC 00000452's
+    // pin bores). Reclassify the still-open ones as open bodies so diagnostics treat them like
+    // every other sheet. B-rep structural test only — tessellation failures cannot trigger it.
+    for (const solid of brep.solids) {
+      if (solid.open || !unsewn.has(solid.id)) continue;
+      const useCount = new Map<number, number>();
+      for (const f of solid.faces) for (const lp of f.loops) for (const oe of lp.edges) {
+        useCount.set(oe.edgeId, (useCount.get(oe.edgeId) ?? 0) + 1);
+      }
+      let boundary = 0;
+      for (const n of useCount.values()) if (n === 1) boundary++;
+      if (boundary > 0) {
+        solid.open = true;
+        warn("open-shell", -1, `solid ${solid.id} claims CLOSED_SHELL but its B-rep has ${boundary} boundary edge(s) and no mate to sew — classified as a surface body`);
+        if (DBG) console.error(`[tess] sewSolids: solid ${solid.id} reclassified open (${boundary} B-rep boundary edges, unsewn rings)`);
+      }
+    }
   }
 
   // No precise B-rep? Fall back to AP242 tessellated geometry (a pre-faceted body in the file).
@@ -4041,7 +4206,7 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
  * once, to its best mutual match, and only when BOTH rings track each other everywhere (a rim
  * half-covered by two caps fails the mutual gate and stays open rather than sewn wrong).
  */
-function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>): number {
+function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>, unsewn?: Set<number>): number {
   const KEY = 2 ** 26;
   const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
   const use = new Map<number, number>();
@@ -4095,7 +4260,10 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
     rings.push({ v, solid: solidOfTri[t0]!, fid: faceOfTri[t0]!, per, frac: frac.slice(0, v.length).map((x) => x / tot), cx, cy, cz, r });
   }
   if (DBG) console.error(`[tess] sewSolids: ${rings.length} open rings: ${rings.slice(0, 12).map((r) => `s${r.solid}×${r.v.length}(per=${r.per.toFixed(2)})`).join(" ")}`);
-  if (rings.length < 2) return 0;
+  if (rings.length < 2) {
+    for (const r of rings) unsewn?.add(r.solid);
+    return 0;
+  }
   // Mutual pointwise proximity, strided; a ring pair must coincide BOTH ways.
   const distToRing = (x: number, y: number, z: number, R: Ring): number => {
     let best = Infinity;
@@ -4194,6 +4362,7 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
     sewn++;
     if (DBG) console.error(`[tess] sewSolids: ring(${A.v.length}, solid ${A.solid}) <-> ring(${B.v.length}, solid ${B.solid}) worst=${bScore.toExponential(2)}`);
   }
+  for (let i = 0; i < rings.length; i++) if (!paired.has(i)) unsewn?.add(rings[i]!.solid);
   return sewn;
 }
 

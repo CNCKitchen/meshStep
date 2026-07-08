@@ -29,6 +29,9 @@ export type WarningCode =
   /** The face's trim loops genuinely overlap in (u,v) even at 64× sampling density (e.g. tangent
    * letter engravings) — meshed as-is. */
   | "boundary-self-intersects"
+  /** A body claiming CLOSED_SHELL is structurally a sheet (B-rep boundary edges) and found no
+   * mate ring to sew — reclassified as an open surface body. */
+  | "open-shell"
   /** More warnings occurred than the cap; the excess was dropped. */
   | "warnings-truncated";
 
@@ -48,6 +51,7 @@ const SEVERITY: Record<WarningCode, WarningSeverity> = {
   "heuristic-fill": "warning",
   "folded-triangles-dropped": "warning",
   "boundary-self-intersects": "warning",
+  "open-shell": "warning",
   "warnings-truncated": "warning",
 };
 
