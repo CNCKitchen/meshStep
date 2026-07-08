@@ -1,6 +1,6 @@
 // Aggregate out/abc-run4/untri-census.jsonl -> failure clusters for the robust-CDT design.
 import { readFileSync } from "node:fs";
-const recs = readFileSync("out/abc-run4/untri-census.jsonl", "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse);
+const recs = readFileSync(process.env.UNTRI_OUT ?? "out/abc-run4/untri-census.jsonl", "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse);
 console.log("models:", recs.length, " errors:", recs.filter((r) => r.err).length);
 for (const r of recs.filter((r) => r.err)) console.log("  ERR", r.file, String(r.err).slice(0, 80));
 
