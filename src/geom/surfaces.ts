@@ -22,6 +22,10 @@ export interface Surface {
    *  seam-aware boundary projector needs it to spot edges that lie ON the seam (ambiguous side). */
   uSeam?: number;
   vSeam?: number;
+  /** Bounded parameter domain per direction, when the surface has one (B-spline knot span, SoR
+   *  profile span). Absent on unbounded analytic directions (plane axes, cylinder/cone height). */
+  uDomain?: [number, number];
+  vDomain?: [number, number];
   evaluate(u: number, v: number): Vec3;
   /** Inverse-map p to (u,v). Optional (hu,hv) seeds an iterative solver so a boundary projects
    *  continuously across a seam (used by the B-spline surface; ignored by the analytic ones). */
@@ -228,11 +232,13 @@ class OffsetSurface implements Surface {
   kind = "OFFSET_SURFACE";
   base: Surface; dist: number;
   periodicU: boolean; periodicV?: boolean; uPeriod?: number; vPeriod?: number; uSeam?: number; vSeam?: number;
+  uDomain?: [number, number]; vDomain?: [number, number];
   constructor(base: Surface, dist: number) {
     this.base = base; this.dist = dist;
     this.periodicU = base.periodicU; this.periodicV = base.periodicV;
     this.uPeriod = base.uPeriod; this.vPeriod = base.vPeriod;
     this.uSeam = base.uSeam; this.vSeam = base.vSeam;
+    this.uDomain = base.uDomain; this.vDomain = base.vDomain;
   }
   evaluate(u: number, v: number): Vec3 {
     const p = this.base.evaluate(u, v), n = this.base.normal(u, v);
@@ -321,9 +327,11 @@ class RevolutionSurface implements Surface {
   private sv: number[] = [];
   private sa: number[] = [];
   private sr: number[] = [];
+  vDomain: [number, number];
   constructor(curve: Curve3, A: Vec3, D: Vec3) {
     this.curve = curve; this.A = A; this.D = normalize(D);
     this.t0 = curve.t0; this.t1 = curve.t1;
+    this.vDomain = [this.t0, this.t1];
     if (curve.closed) { this.periodicV = true; this.vPeriod = this.t1 - this.t0; this.vSeam = this.t0; }
     const N = 128;
     for (let i = 0; i <= N; i++) {
@@ -469,6 +477,7 @@ class BSplineSurface implements Surface {
   cpsF: Float64Array; nuCps: number; nvCps: number;
   uKnots: number[]; vKnots: number[];
   u0: number; u1: number; v0: number; v1: number;
+  uDomain: [number, number]; vDomain: [number, number];
   // projection lookup grid: gPF[(i * gV.length + j) * 3 + c] = evaluate(gU[i], gV[j])
   gU: number[] = []; gV: number[] = []; gPF = new Float64Array(0);
   rc = Infinity;
@@ -485,6 +494,7 @@ class BSplineSurface implements Surface {
     }
     this.u0 = uKnots[uDeg]!; this.u1 = uKnots[nu + 1]!;
     this.v0 = vKnots[vDeg]!; this.v1 = vKnots[nv + 1]!;
+    this.uDomain = [this.u0, this.u1]; this.vDomain = [this.v0, this.v1];
     const um = (this.u0 + this.u1) / 2, vm = (this.v0 + this.v1) / 2;
     const gap = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
     this.closedU = gap(this.evaluateRaw(this.u0, vm), this.evaluateRaw(this.u1, vm)) < 1e-4;

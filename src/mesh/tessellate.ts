@@ -99,6 +99,10 @@ interface EdgePC {
   p2: P2[];
   hugU: boolean;
   hugV: boolean;
+  /** Zero metric extent along the axis (an iso-parameter edge): period-ambiguous exactly like a
+   * seam-hugging edge whenever the rest of the loop cannot pin its lift (a fully collapsed loop). */
+  isoU: boolean;
+  isoV: boolean;
 }
 
 /** The projected loop boundary. windU/windV: closure drift in whole periods on the universal cover
@@ -188,7 +192,31 @@ function edgePcurve(surface: Surface, poly: Vec3[]): EdgePC {
   slitCollapse(poly, p2);
   if (surface.periodicU) unwrap(p2, 0, surface.uPeriod || TWO_PI);
   if (surface.periodicV) unwrap(p2, 1, surface.vPeriod || TWO_PI);
-  return { p3: poly, p2, hugU: hugsSeam(surface, p2, 0), hugV: hugsSeam(surface, p2, 1) };
+  return {
+    p3: poly, p2,
+    hugU: hugsSeam(surface, p2, 0), hugV: hugsSeam(surface, p2, 1),
+    isoU: isoParam(surface, p2, 0), isoV: isoParam(surface, p2, 1),
+  };
+}
+
+/** True when an edge pcurve has (metrically) zero extent along periodic axis c — an iso-parameter
+ * edge such as a straight cylinder ruling. Same metric tolerance as hugsSeam, measured against the
+ * edge's own mean instead of the seam iso-line: ambiguity is a property of the edge's shape, not of
+ * where the projector's branch cut happens to sit (ABC 00001709's full-wrap band has both rails at
+ * u=0 while the atan2 seam is at π — hugsSeam never fires, yet the rails are period-ambiguous). */
+function isoParam(surface: Surface, p2: P2[], c: 0 | 1): boolean {
+  const periodic = c === 0 ? surface.periodicU : surface.periodicV;
+  if (!periodic || p2.length === 0) return false;
+  const period = (c === 0 ? surface.uPeriod : surface.vPeriod) || TWO_PI;
+  const q = p2[p2.length >> 1]!;
+  const e = 1e-3 * period;
+  const a = surface.evaluate(q[0] + (c === 0 ? e : 0), q[1] + (c === 1 ? e : 0));
+  const b = surface.evaluate(q[0] - (c === 0 ? e : 0), q[1] - (c === 1 ? e : 0));
+  const scale = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / (2 * e);
+  const tol = Math.max(1e-3, 1e-3 * period * scale);
+  let mn = Infinity, mx = -Infinity;
+  for (const p of p2) { if (p[c] < mn) mn = p[c]; if (p[c] > mx) mx = p[c]; }
+  return (mx - mn) * scale <= tol;
 }
 
 /** True when every point of an edge pcurve lies metrically ON the periodic seam iso-line of axis c.
@@ -299,11 +327,16 @@ function countSelfIntersections(pts: P2[], cap = 1 << 30, pairs?: [number, numbe
  */
 function repairWire(
   surface: Surface, pcs: EdgePC[], base: ReturnType<typeof assembleWire>, baseInts: number, expectSign: number,
+  allowIso = false,
 ): { asm: ReturnType<typeof assembleWire>; selfInts: number } {
+  // `allowIso` widens the candidate set from seam-hugging edges to ALL iso-parameter edges — only
+  // safe when the caller's baseline is a COLLAPSED loop (zero width), where there is no legitimate
+  // baseline lift to lose; on a healthy loop an iso edge is pinned by continuity and forcing its
+  // lift could out-score the true region via the area tiebreak (a 90° wedge "unfolded" to 270°).
   const slots: number[] = []; // flat (edgeIndex, axis) pairs, axis 0=u 1=v
   for (let k = 1; k < pcs.length; k++) {
-    if (surface.periodicU && pcs[k]!.hugU) slots.push(2 * k);
-    if (surface.periodicV && pcs[k]!.hugV) slots.push(2 * k + 1);
+    if (surface.periodicU && (pcs[k]!.hugU || (allowIso && pcs[k]!.isoU))) slots.push(2 * k);
+    if (surface.periodicV && (pcs[k]!.hugV || (allowIso && pcs[k]!.isoV))) slots.push(2 * k + 1);
     if (slots.length >= 5) break; // 3^5 = 243 combinations — bounded
   }
   let best = { asm: base, selfInts: baseInts };
@@ -450,7 +483,20 @@ export function loopParam(surface: Surface, loop: BLoop, sampled: Map<number, Ve
   if ((!uP && !vP) || leg.p2.length < 4) return { ...leg, windU: 0, windV: 0, tangled: false };
   const legInts = countSelfIntersections(leg.p2);
   const legWind: [number, number] = [cycleWind(leg.p2, 0, uP), cycleWind(leg.p2, 1, vP)];
-  if (legInts === 0) return { ...leg, windU: legWind[0], windV: legWind[1], tangled: false };
+  // A COLLAPSED loop — near-zero enclosed area over a long perimeter — is as broken as a tangled
+  // one, but has zero STRICT self-intersections (its out-and-back legs are collinear, and collinear
+  // overlap never counts as a crossing), so it used to short-circuit here and the face died at the
+  // zero-width gate. The signature case is a full-wrap band whose BOTH rails lie exactly ON the
+  // periodic seam (ABC 00001709: a cylinder face bounded by two seam lines — one belongs at u=0,
+  // the other at u=2π): continuity alone cannot split them, but the phase-C seam search can — its
+  // area tiebreak prefers the full-period lift, and a genuinely degenerate slit that gets lifted
+  // into a phantom band is caught by the caller's fold audit (boundary over-coverage → rollback).
+  const collapsedLoop = (p2: P2[]): boolean => {
+    let per = 0;
+    for (let i = 0; i < p2.length; i++) { const a = p2[i]!, b = p2[(i + 1) % p2.length]!; per += Math.hypot(b[0] - a[0], b[1] - a[1]); }
+    return 2 * Math.abs(polyArea(p2)) / Math.max(per, 1e-12) < 1e-6 * per;
+  };
+  if (legInts === 0 && !collapsedLoop(leg.p2)) return { ...leg, windU: legWind[0], windV: legWind[1], tangled: false };
 
   const pcs: EdgePC[] = [];
   for (const oe of loop.edges) {
@@ -461,7 +507,8 @@ export function loopParam(surface: Surface, loop: BLoop, sampled: Map<number, Ve
   if (pcs.length === 0) return { ...leg, windU: legWind[0], windV: legWind[1], tangled: true };
   let asm = assembleWire(surface, pcs);
   let selfInts = countSelfIntersections(asm.p2);
-  if (selfInts > 0) ({ asm, selfInts } = repairWire(surface, pcs, asm, selfInts, expectSign));
+  const asmCollapsed = collapsedLoop(asm.p2);
+  if (selfInts > 0 || asmCollapsed) ({ asm, selfInts } = repairWire(surface, pcs, asm, selfInts, expectSign, asmCollapsed));
   // Choose between the legacy loop and the reassembled one by the same lexicographic score the
   // repair search uses; the legacy result wins ties (bit-for-bit stability for everything the old
   // projector already handled acceptably).
@@ -569,7 +616,10 @@ function tessellateParamGrid(
   }
   if (oi < 0) return false;
   const outer = projected[oi]!.lp;
-  if (outer.p3.length < 3) return false;
+  if (outer.p3.length < 3) {
+    if (DBG) console.error(`[grid] fid=${fid} bail: outer loop projects to ${outer.p3.length} pts`);
+    return false;
+  }
   // Malformed trimming: the enclosing loop collapsed to ~zero area in parameter space (a degenerate
   // boundary a CAD kernel left, or two edges that trace back over each other). There's no valid
   // region — emit nothing. A clean gap reads far better than a spurious cap sealing a hole shut.
@@ -588,19 +638,41 @@ function tessellateParamGrid(
     const dd = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
     // Arc-length (4-chord) metric per direction — an endpoint-to-endpoint chord is ZERO on a
     // full-period wrap (evaluate(umin) == evaluate(umax)) and would reject every closed band.
+    // The probed span is capped at ONE period on a periodic axis: a multi-turn helical band (a
+    // thread face unwound across several periods, ABC 00001709) has du = k·2π, and quarter-chords
+    // of that alias to the SAME angular position — the metric reads ~0 and a real thread band
+    // dies here as "zero width". The metric is per unit parameter and periodic, so one period
+    // measures it exactly.
     const arc = (dir: 0 | 1): number => {
+      const span = Math.min(dir === 0 ? du : dv,
+        (dir === 0 ? surface.periodicU : surface.periodicV) ? ((dir === 0 ? surface.uPeriod : surface.vPeriod) || TWO_PI) : Infinity);
       let s = 0;
       let prev = surface.evaluate(dir === 0 ? umn : um, dir === 0 ? vm : vmn);
       for (let i = 1; i <= 4; i++) {
-        const t = i / 4;
-        const q = surface.evaluate(dir === 0 ? umn + du * t : um, dir === 0 ? vm : vmn + dv * t);
+        const t = (i / 4) * span;
+        const q = surface.evaluate(dir === 0 ? umn + t : um, dir === 0 ? vm : vmn + t);
         s += dd(prev, q); prev = q;
       }
-      return s;
+      return s / span;
     };
-    const mU = arc(0) / du, mV = arc(1) / dv;
+    const mU = arc(0), mV = arc(1);
     const extS = Math.hypot(du * mU, dv * mV);
-    if (Math.abs(polyArea(outer.p2)) * mU * mV < 1e-4 * extS * extS) return false;
+    // Degeneracy = metric WIDTH (2·area/perimeter), not area/extent²: an aspect gate rejects any
+    // strip thinner than 1e-4 of its length, which throws away REAL 0.1mm × 1m chamfer faces on
+    // large parts (ABC 00000982 and friends — the mesh then opens along both 1m rails). Width
+    // separates the cases exactly: a collapsed/self-cancelling loop (out-and-back seam boundary,
+    // kernel junk) has near-zero net area over a long perimeter → micron width → rejected, while
+    // a genuinely thin face keeps its physical width and passes at any aspect.
+    const areaM = Math.abs(polyArea(outer.p2)) * mU * mV;
+    let perM = 0;
+    for (let i = 0; i < outer.p2.length; i++) {
+      const a = outer.p2[i]!, b = outer.p2[(i + 1) % outer.p2.length]!;
+      perM += Math.hypot((b[0] - a[0]) * mU, (b[1] - a[1]) * mV);
+    }
+    if (2 * areaM / Math.max(perM, 1e-12) < Math.max(1e-3, 1e-9 * extS)) {
+      if (DBG) console.error(`[grid] fid=${fid} bail: metric width ${(2 * areaM / Math.max(perM, 1e-12)).toExponential(2)} (area=${areaM.toExponential(2)} per=${perM.toFixed(3)} ext=${extS.toFixed(3)})`);
+      return false;
+    }
   }
 
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
@@ -2464,6 +2536,167 @@ function tessellateConeSlice(
 
 /** Full sphere: concentric latitude rings, each sized to its own circumference so the poles taper
  * to a point instead of gathering a fan of slivers. */
+/**
+ * Bare untrimmed doubly-periodic surface — a full TORUS (spring/chain-link models are solids of
+ * many such faces) or a closed-profile surface of revolution. The face has NO trimming loops, so
+ * every boundary-driven mesher bails and the face used to be skipped outright (~65 ABC chunk-0
+ * models). Mesh the full parametric domain as stacked closed rings, each sized to its own local
+ * target (an eccentric tube's inner rings are tighter), stitched ring-to-ring; the last ring
+ * re-evaluates at v0 + vPeriod == v0 so the weld closes the tube, and stitchRings' cyclic pairing
+ * closes each ring in u. Returns false for anything not closed in both directions.
+ */
+function tessellateFullPeriodic(
+  surface: Surface, fid: number, chordTol: number, targetEdge: number, normalDev: number,
+  sign: number, verts: number[], faceIds: number[],
+): boolean {
+  if (!surface.periodicU || !surface.periodicV) return false;
+  const uP = surface.uPeriod || TWO_PI, vP = surface.vPeriod || TWO_PI;
+  const u0 = surface.uSeam ?? 0, v0 = surface.vSeam ?? 0;
+  const dd = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  // v-step count from the longest v-iso arc (sampled at a few u) against the finest local target.
+  const K = 32;
+  let vArc = 0, tMin = targetEdge;
+  for (const fu of [0, 1 / 3, 2 / 3]) {
+    const u = u0 + uP * fu;
+    let arc = 0, prev = surface.evaluate(u, v0);
+    for (let i = 1; i <= K; i++) {
+      const q = surface.evaluate(u, v0 + (vP * i) / K);
+      arc += dd(prev, q); prev = q;
+      tMin = Math.min(tMin, faceTarget(surface, targetEdge, chordTol, normalDev, u, v0 + (vP * i) / K));
+    }
+    vArc = Math.max(vArc, arc);
+  }
+  if (vArc < 1e-9) return false;
+  const nV = Math.max(4, Math.min(2000, Math.ceil(vArc / Math.max(tMin, 1e-9))));
+  const ringAt = (v: number): Vec3[] => {
+    let circ = 0, prev = surface.evaluate(u0, v);
+    for (let i = 1; i <= K; i++) { const q = surface.evaluate(u0 + (uP * i) / K, v); circ += dd(prev, q); prev = q; }
+    const t = faceTarget(surface, targetEdge, chordTol, normalDev, u0 + uP / 2, v);
+    const nu = Math.max(4, Math.min(4000, Math.round(circ / Math.max(t, 1e-9))));
+    const r: Vec3[] = [];
+    for (let i = 0; i < nu; i++) r.push(surface.evaluate(u0 + (uP * i) / nu, v));
+    return r;
+  };
+  const start = verts.length;
+  let prev = ringAt(v0);
+  for (let j = 1; j <= nV; j++) {
+    const ring = ringAt(v0 + (vP * j) / nV);
+    stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
+    prev = ring;
+  }
+  return verts.length > start;
+}
+
+/**
+ * Generic single-rim CAP/DOME: a face whose sole loop is one closed rim winding the full period of
+ * the surface's periodic direction at near-constant stack parameter, on a surface that COLLAPSES
+ * to a point at a stack-domain end — a surface-of-revolution dome (profile touches the axis) or a
+ * closed-direction B-spline dome. The generalisation of tessellateSphereCap: the rim ring (the
+ * shared edge samples, watertight with the neighbour) is marched to the pole in graded rings and
+ * fanned at the pole. ~95 ABC chunk-0 untriangulated models are exactly this shape (`REVOLUTION
+ * 1loop` + `B_SPLINE PvCv/PuCu 1loop`): the rim projects to a constant-stack line enclosing zero
+ * parameter area, so the param grid rejects the face, and band/unroll need two rims. When BOTH
+ * stack ends are poles (a closed drop/lobe), the enclosed side follows the sphere-cap orientation
+ * convention: material lies left of the oriented rim, flipped with the face sense. Returns false
+ * without emitting unless every gate holds.
+ */
+function tessellateCapDome(
+  surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], chordTol: number, targetEdge: number, normalDev: number, sign: number,
+): boolean {
+  const uPer = !!surface.periodicU, vPer = !!surface.periodicV;
+  let P: 0 | 1;
+  if (uPer && !vPer) P = 0; else if (vPer && !uPer) P = 1; else return false;
+  const S = (1 - P) as 0 | 1;
+  const sDom = P === 0 ? surface.vDomain : surface.uDomain;
+  if (!sDom) return false;
+  const period = (P === 0 ? surface.uPeriod : surface.vPeriod) || TWO_PI;
+  const evalPS = (p: number, s: number): Vec3 => (P === 0 ? surface.evaluate(p, s) : surface.evaluate(s, p));
+
+  // Rim = the loop's once-used edges chained (a doubled edge is a degenerate pole seam, excluded).
+  const count = new Map<number, number>();
+  for (const oe of loop.edges) count.set(oe.edgeId, (count.get(oe.edgeId) ?? 0) + 1);
+  const rim: Vec3[] = [];
+  for (const oe of loop.edges) {
+    if ((count.get(oe.edgeId) ?? 0) !== 1) continue;
+    const base = sampled.get(oe.edgeId); if (!base) return false;
+    const poly = oe.orient ? base : base.slice().reverse();
+    for (let i = 0; i < poly.length - 1; i++) rim.push(poly[i]!);
+  }
+  if (rim.length < 4) return false;
+  // Hint-chained projection so the rim unwraps continuously across the periodic seam.
+  const uv: P2[] = [];
+  let hu: number | undefined, hv: number | undefined;
+  for (const p of rim) { const q = surface.project(p, hu, hv); uv.push(q); hu = q[0]; hv = q[1]; }
+  // Full single winding in the periodic direction, near-constant in the stack direction.
+  let travel = 0;
+  for (let i = 0; i < uv.length; i++) {
+    let d = uv[(i + 1) % uv.length]![P]! - uv[i]![P]!;
+    while (d > period / 2) d -= period; while (d < -period / 2) d += period;
+    travel += d;
+  }
+  if (Math.abs(Math.abs(travel) - period) > 0.1 * period) return false;
+  let smin = Infinity, smax = -Infinity;
+  for (const q of uv) { const s = q[S]!; if (s < smin) smin = s; if (s > smax) smax = s; }
+  const sSpan = Math.max(sDom[1] - sDom[0], 1e-12);
+  if (smax - smin > 0.2 * sSpan) return false;
+  const sRim = (smin + smax) / 2;
+
+  const dd = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  // A stack end is a POLE when its full-period ring collapses to a point. In a closed B-rep the
+  // enclosed end of a single-rim face can only be degenerate (a real rim there would need its own
+  // loop), so the tolerance need not be razor-thin — but it must stay below feature scale.
+  const ringSpread = (s: number): number => {
+    let mx = 0; const c = evalPS(0, s);
+    for (let i = 1; i <= 8; i++) mx = Math.max(mx, dd(c, evalPS((period * i) / 8, s)));
+    return mx;
+  };
+  const poleTol = Math.max(1e-3, 0.1 * chordTol);
+  const pole0 = ringSpread(sDom[0]) < poleTol, pole1 = ringSpread(sDom[1]) < poleTol;
+  let sPole: number;
+  if (pole0 !== pole1) {
+    // One degenerate end: the face can only close there — but only if the rim sits between it and
+    // the other end, i.e. the non-pole side of the rim carries the neighbour faces.
+    sPole = pole0 ? sDom[0] : sDom[1];
+  } else if (pole0 && pole1) {
+    // Both ends are poles (a closed drop): material lies LEFT of the oriented rim (sphere-cap
+    // convention), flipped with the face sense. In (u,v) axes, left of +u travel is +v; left of
+    // +v travel is -u.
+    const leftIsPlusS = P === 0 ? travel >= 0 : travel < 0;
+    const enclosedPlusS = leftIsPlusS === (sign > 0);
+    sPole = enclosedPlusS ? sDom[1] : sDom[0];
+  } else return false;
+
+  // March graded rings from the rim to the pole; ring sizes track their own circumference.
+  const target = faceTarget(surface, targetEdge, chordTol, normalDev, P === 0 ? uv[0]![0] : sRim, P === 0 ? sRim : uv[0]![1]);
+  let sArc = 0;
+  {
+    const p0 = uv[0]![P]!;
+    let prev = evalPS(p0, sRim);
+    for (let i = 1; i <= 16; i++) { const q = evalPS(p0, sRim + ((sPole - sRim) * i) / 16); sArc += dd(prev, q); prev = q; }
+  }
+  const nV = Math.max(1, Math.min(2000, Math.ceil(sArc / Math.max(target, 1e-9))));
+  const pStart = uv[0]![P]!, pDir = travel >= 0 ? 1 : -1;
+  const start = verts.length;
+  let prev = rim.slice();
+  for (let j = 1; j <= nV; j++) {
+    const s = sRim + ((sPole - sRim) * j) / nV;
+    if (j === nV) { stitchRings(verts, faceIds, prev, [evalPS(pStart, sPole)], fid, surface, sign); break; }
+    let circ = 0;
+    {
+      let pv = evalPS(pStart, s);
+      for (let i = 1; i <= 16; i++) { const q = evalPS(pStart + pDir * (period * i) / 16, s); circ += dd(pv, q); pv = q; }
+    }
+    const t = faceTarget(surface, targetEdge, chordTol, normalDev, P === 0 ? pStart : s, P === 0 ? s : pStart);
+    const nu = Math.max(3, Math.min(4000, Math.round(circ / Math.max(t, 1e-9))));
+    const ring: Vec3[] = [];
+    for (let i = 0; i < nu; i++) ring.push(evalPS(pStart + pDir * (period * i) / nu, s));
+    stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
+    prev = ring;
+  }
+  return verts.length > start;
+}
+
 function tessellateSphere(
   s: Sphere, fid: number, chordTol: number, targetEdge: number, normalDev: number, sign: number, verts: number[], faceIds: number[],
 ): void {
@@ -2825,6 +3058,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       } else if (face.loops.length === 2 && solid.faces.length > 1
         && mark(face.faceId, "thinRing", tessellateThinRing(surface, face.loops, sampled, face.faceId, verts, faceIds, sign, 0.015))) {
         ok = true; // sub-tolerance annular sliver (two near-coincident rims) ribbon-stitched
+      } else if (face.loops.length === 0 && !(isSphere(surface) && solid.faces.length === 1)) {
+        // Bare untrimmed face — no loops at all, so no boundary-driven mesher can run. A full
+        // sphere inside a multi-face solid (ball seat), a bare torus (chain links / springs), a
+        // closed-profile surface of revolution. Sole-face full spheres keep their branch below.
+        ok = (isSphere(surface) && mark(face.faceId, "sphereFull", (tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds), true)))
+          || (isBSpline(surface) && (surface.closedU || surface.closedV)
+            && mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)))
+          || mark(face.faceId, "fullPeriodic", tessellateFullPeriodic(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds));
       } else if (isSphere(surface)) {
         // A full sphere is its solid's only face (degenerate seam loop); trimmed spheres
         // (e.g. roundedCube corners) are one of many faces -> param grid.
@@ -2865,6 +3106,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           : (!!outer && (mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
             || (per && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
             || (per && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (per && face.loops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
             || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign))));
       } else if (outer) {
         // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
@@ -2877,6 +3119,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         ok = (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || (periodic && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || (periodic && face.loops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
           || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign));
       }
       if (ok) facesTessellated++;
