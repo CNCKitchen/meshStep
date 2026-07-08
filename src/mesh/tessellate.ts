@@ -2300,6 +2300,66 @@ function tessellateRibbon(
   return tryLoft(railsA()) || tryLoft(railsB());
 }
 
+/**
+ * Cone cap bounded by ONE once-winding rim of ARBITRARY shape — a hex-socket drive tip, a wavy
+ * slice — where tessellateCone's constant-v circle-rim gate correctly bails (a hexagon's chord
+ * edges dip below the rim latitude) and the param grid loses the wound polygon's constraints
+ * (14 ABC chunk-0 models). Cone rulings are straight lines through the apex, so shrunken copies
+ * of the rim polyline lerped toward the apex lie EXACTLY on the surface: loft rim → scaled rings
+ * → apex fan. The rim samples are the shared edge polylines, so the loft is watertight with every
+ * neighbour by construction. Returns false unless the loop winds the period exactly once and
+ * stays clear of the apex (apex-touching slit cones belong to tessellateCone).
+ */
+function tessellateConeCap(
+  surface: Surface, outerLoop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
+): boolean {
+  const cone = surface as unknown as { r: number; sin: number };
+  if (surface.kind !== "CONICAL_SURFACE" || !(cone.sin > 0)) return false;
+  const rim: Vec3[] = [];
+  for (const oe of outerLoop.edges) {
+    const base = sampled.get(oe.edgeId); if (!base) return false;
+    const poly = oe.orient ? base : base.slice().reverse();
+    for (let i = 0; i < poly.length - 1; i++) rim.push(poly[i]!);
+  }
+  if (rim.length < 3) return false;
+  const apex = surface.evaluate(0, -cone.r / cone.sin);
+  const dd = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  let hu: number | undefined, hv: number | undefined, travel = 0, prevU: number | undefined;
+  for (const p of rim) {
+    const [u, v] = surface.project(p, hu, hv);
+    if (prevU !== undefined) {
+      let d = u - prevU;
+      while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI;
+      travel += d;
+    }
+    prevU = u; hu = u; hv = v;
+  }
+  {
+    // close the winding measurement rim-end -> rim-start
+    const [u0] = surface.project(rim[0]!);
+    let d = u0 - prevU!;
+    while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI;
+    travel += d;
+  }
+  if (Math.abs(Math.abs(travel) - TWO_PI) > 0.1 * TWO_PI) return false;
+  let minD = Infinity, maxD = 0;
+  for (const p of rim) { const d = dd(p, apex); if (d < minD) minD = d; if (d > maxD) maxD = d; }
+  if (!(maxD > 0) || minD < 0.05 * maxD) return false;
+  const target = Math.max(faceTarget(surface, targetEdge, chordTol, normalDev, hu ?? 0, hv ?? 0), 1e-9);
+  const nRings = Math.max(1, Math.min(2000, Math.ceil(maxD / target)));
+  const start = verts.length;
+  let prev = rim.slice();
+  for (let j = 1; j <= nRings; j++) {
+    if (j === nRings) { stitchRings(verts, faceIds, prev, [apex], fid, surface, sign); break; }
+    const t = 1 - j / nRings;
+    const ring: Vec3[] = rim.map((p) => [apex[0] + t * (p[0] - apex[0]), apex[1] + t * (p[1] - apex[1]), apex[2] + t * (p[2] - apex[2])] as Vec3);
+    stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
+    prev = ring;
+  }
+  return verts.length > start;
+}
+
 /** Cone: stack concentric rings from the shared base circle to the apex (cone is ruled by lines). */
 function tessellateCone(
   surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, brep: BrepModel, fid: number,
@@ -3089,8 +3149,9 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
         && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))
-          || mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign)))) {
-        ok = true; // genuine apex cone or apex wedge slice; frustums/trimmed cones use the param grid
+          || mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign))
+          || (face.loops.length === 1 && mark(face.faceId, "coneCap", tessellateConeCap(surface, outer, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))))) {
+        ok = true; // genuine apex cone, apex wedge slice, or arbitrary once-winding rim cap; frustums/trimmed cones use the param grid
       } else if (isBSpline(surface)) {
         // A standalone closed B-spline body (its solid's only face) has no usable trimming loop ->
         // full-patch grid. A patch that is one of many faces must use the param grid so its boundary
