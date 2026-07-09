@@ -4,8 +4,8 @@ Pure-TypeScript **STEP → mesh** importer. Reads ISO-10303-21 B-rep geometry (A
 AP242) and produces **watertight, low-sliver, process-grade triangle meshes** — meshes you can
 displace, voxelize, offset, slice, or simulate, not just look at.
 
-Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~9,300
-lines of TypeScript (~155 KB minified, ~58 KB gzipped) that run as-is in the browser, in a Web
+Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~9,500
+lines of TypeScript (~159 KB minified, ~60 KB gzipped) that run as-is in the browser, in a Web
 Worker, and in Node ≥ 22. Built to feed
 [bumpmesh](https://github.com/CNCKitchen/stlTexturizer) (displacement texturing) and
 [infeall](https://github.com/CNCKitchen/smartInfillGenerator) (smart infill), where mesh defects
@@ -54,7 +54,7 @@ meshStep starts from the opposite end: **the mesh is the product.**
 
 | Route | In browser | Footprint | Mesh output | Watertight welded | Face→tri topology | License |
 |---|---|---|---|---|---|---|
-| **meshStep** | ✅ pure TS | ~58 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
+| **meshStep** | ✅ pure TS | ~60 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
 | [occt-import-js](https://github.com/kovacsv/occt-import-js) | ✅ WASM | ~8 MB WASM | curvature-adaptive, per face | ❌ | ✅ face ranges | LGPL-2.1 (OCCT) |
 | [opencascade.js](https://github.com/donalffons/opencascade.js) | ✅ WASM | larger (custom builds) | same OCCT mesher | ❌ | manual | LGPL-2.1 (OCCT) |
 | [cascadio](https://github.com/trimesh/cascadio) / pythonOCC / FreeCAD | ❌ Python/desktop | native wheels/app | same OCCT mesher | ❌ | varies | LGPL (bundles OCCT) |
@@ -137,8 +137,8 @@ actually 3D-print, and the numbers above are deliberately honest about the rest:
   tolerances — native OCCT is faster on huge or degenerate inputs.
 - **No geometry healing.** meshStep trusts the STEP file: gaps, self-intersections, or broken
   topology in the source B-rep are not repaired, only reported.
-- Remaining features: 3MF export, the controls/preset UI, and residual CDT constraint
-  enforcement on degenerate many-window trims. Pipeline details in [DESIGN.md](DESIGN.md).
+- Remaining features: 3MF export, the controls/preset UI, and seam routing for multi-turn
+  thread/spiral faces. Pipeline details in [DESIGN.md](DESIGN.md).
 
 ## Quick start (dev)
 
