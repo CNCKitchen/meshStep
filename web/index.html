@@ -3,7 +3,56 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>meshStep · verification studio</title>
+
+    <title>Free STEP Viewer &amp; STL Converter — Online, No Upload | meshStep</title>
+    <meta name="description" content="Free online STEP viewer and STEP-to-STL converter. Open .step / .stp CAD files right in your browser — 100% local, nothing uploaded — inspect the geometry, highlight surface boundaries, check for conversion problems, and export a watertight STL mesh." />
+    <meta name="keywords" content="step viewer, stp viewer, step file viewer, step to stl, step to stl converter, convert step to stl, online step viewer, free step viewer, view step file, open stp file, cad viewer, iso 10303" />
+    <meta name="theme-color" content="#0f1216" />
+    <!-- Canonical / social URL. If you host at the apex instead, change to https://stepview.cnckitchen.com/ -->
+    <link rel="canonical" href="https://cnckitchen.com/stepview/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="CNC Kitchen" />
+    <meta property="og:title" content="Free STEP Viewer &amp; STL Converter — Online, No Upload" />
+    <meta property="og:description" content="View .step / .stp CAD files and convert them to watertight STL — in your browser, 100% local, nothing uploaded. Surface boundaries, file stats, watertight check." />
+    <meta property="og:url" content="https://cnckitchen.com/stepview/" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Free STEP Viewer &amp; STL Converter — Online, No Upload" />
+    <meta name="twitter:description" content="View .step / .stp CAD files and convert them to watertight STL — in your browser, 100% local, nothing uploaded." />
+
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230f1216'/%3E%3Cpath d='M16 5l9 5v12l-9 5-9-5V10z' fill='none' stroke='%234a9eff' stroke-width='2' stroke-linejoin='round'/%3E%3Cpath d='M16 5v22M7 10l9 5 9-5' fill='none' stroke='%234a9eff' stroke-width='1.5' stroke-linejoin='round' opacity='.6'/%3E%3C/svg%3E" />
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "meshStep STEP Viewer & STL Converter",
+        "url": "https://cnckitchen.com/stepview/",
+        "applicationCategory": "DesignApplication",
+        "operatingSystem": "Any (modern web browser with WebGL)",
+        "browserRequirements": "Requires JavaScript and WebGL",
+        "description": "Free online viewer and STL converter for STEP (.step / .stp, ISO-10303) CAD files. Parses and renders B-rep geometry entirely in the browser — no upload — with file stats, surface-boundary highlighting, watertightness checking, and watertight STL export.",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": [
+          "View STEP and STP files online",
+          "Convert STEP to watertight STL",
+          "100% local — files never leave your browser",
+          "STEP file info: CAD program, schema, units, dimensions",
+          "Highlight CAD surface boundaries",
+          "Watertight / conversion-problem check"
+        ],
+        "publisher": { "@type": "Organization", "name": "CNC Kitchen", "url": "https://cnckitchen.com" }
+      }
+    </script>
+
+    <!-- Set the theme before first paint so there is no flash. main.ts re-syncs the 3D scene + toggle. -->
+    <script>
+      try {
+        var t = localStorage.getItem("meshstep.theme");
+        if (t !== "light" && t !== "dark") t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+        document.documentElement.dataset.theme = t;
+      } catch (e) { document.documentElement.dataset.theme = "dark"; }
+    </script>
   </head>
   <body>
     <div id="app">
@@ -11,9 +60,10 @@
         <header class="brand">
           <span class="logo">▣</span>
           <div>
-            <h1>meshStep</h1>
-            <p>verification studio</p>
+            <h1>STEP Viewer &amp; Converter</h1>
+            <p>free · online · 100% local</p>
           </div>
+          <button id="themeToggle" class="theme-toggle" aria-label="Toggle light / dark mode" title="Toggle light / dark mode">☀</button>
         </header>
 
         <section class="panel">
@@ -25,52 +75,92 @@
           <p class="filename" id="stepName">No file loaded</p>
         </section>
 
+        <section class="panel" id="infoPanel" hidden>
+          <h2>File info</h2>
+          <div id="watertight" class="badge" hidden></div>
+          <dl class="info">
+            <div><dt>CAD program</dt><dd id="iSystem">—</dd></div>
+            <div><dt>Schema</dt><dd id="iSchema">—</dd></div>
+            <div><dt>Units</dt><dd id="iUnits">—</dd></div>
+            <div><dt>Dimensions</dt><dd id="iDims">—</dd></div>
+            <div><dt>Bodies</dt><dd id="iBodies">—</dd></div>
+            <div><dt>Faces</dt><dd id="iFaces">—</dd></div>
+            <div><dt>Triangles</dt><dd id="iTris">—</dd></div>
+            <div><dt>Exported</dt><dd id="iDate">—</dd></div>
+          </dl>
+        </section>
+
         <section class="panel">
-          <h2>2 · Mesh settings</h2>
-          <div class="field">
-            <label for="surfaceDeviation">Surface deviation <span class="unit">mm</span></label>
-            <input type="number" id="surfaceDeviation" value="0.01" step="0.001" min="0.0001" />
-          </div>
-          <div class="field">
-            <label for="normalDeviation">Normal deviation <span class="unit">°</span></label>
-            <input type="number" id="normalDeviation" value="15" step="1" min="1" max="179" />
-          </div>
-          <div class="field">
-            <label for="maxEdge">Max edge length <span class="unit">mm</span></label>
-            <input type="number" id="maxEdge" value="1" step="0.1" min="0.01" />
-          </div>
+          <h2>2 · Convert to mesh</h2>
           <button id="convertBtn" class="primary" disabled>Convert</button>
           <button id="exportBtn" class="secondary" disabled>Export STL…</button>
           <p class="status" id="status"></p>
+          <details class="advanced">
+            <summary>Refinement settings</summary>
+            <div class="advanced-body">
+              <div class="field">
+                <label for="surfaceDeviation">Surface deviation <span class="unit">mm</span></label>
+                <input type="number" id="surfaceDeviation" value="0.01" step="0.001" min="0.0001" />
+              </div>
+              <div class="field">
+                <label for="normalDeviation">Normal deviation <span class="unit">°</span></label>
+                <input type="number" id="normalDeviation" value="15" step="1" min="1" max="179" />
+              </div>
+              <div class="field">
+                <label for="maxEdge">Max edge length <span class="unit">mm</span></label>
+                <input type="number" id="maxEdge" value="1" step="0.1" min="0.01" />
+              </div>
+            </div>
+          </details>
         </section>
 
         <section class="panel">
           <h2>3 · Display</h2>
+          <label class="toggle"><input type="checkbox" id="tFeature" checked /> Surface boundaries (CAD faces)</label>
+          <label class="toggle"><input type="checkbox" id="tTransparent" /> Transparent surfaces</label>
+          <label class="toggle"><input type="checkbox" id="tEdgesOnly" /> CAD edges only (hide surfaces)</label>
           <label class="toggle"><input type="checkbox" id="tWire" /> Wireframe (mesh)</label>
           <label class="toggle"><input type="checkbox" id="tEdges" /> Highlight open edges</label>
         </section>
 
         <section class="panel">
-          <h2>4 · Reference STL</h2>
-          <label class="file">
-            <input type="file" id="refFile" accept=".stl" />
-            <span class="file-btn">Choose reference STL…</span>
-          </label>
-          <p class="filename" id="refName">No reference</p>
-          <label class="toggle"><input type="checkbox" id="tRef" disabled /> Overlay reference</label>
-          <label class="toggle"><input type="checkbox" id="tDev" disabled /> Color by deviation</label>
-          <div class="field" id="rangeField" hidden>
-            <label for="devRange">Color range ± <span class="unit">mm</span> <button id="autoRange" class="mini">auto</button></label>
-            <input type="number" id="devRange" step="0.01" min="0.001" />
-          </div>
-          <div class="legend" id="legend" hidden>
-            <div class="legend-bar"></div>
-            <div class="legend-labels">
-              <span id="legNeg">-</span><span>0</span><span id="legPos">+</span>
+          <details class="advanced as-panel">
+            <summary>4 · Reference STL &amp; deviation</summary>
+            <div class="advanced-body">
+              <label class="file">
+                <input type="file" id="refFile" accept=".stl" />
+                <span class="file-btn">Choose reference STL…</span>
+              </label>
+              <p class="filename" id="refName">No reference</p>
+              <label class="toggle"><input type="checkbox" id="tRef" disabled /> Overlay reference</label>
+              <label class="toggle"><input type="checkbox" id="tDev" disabled /> Color by deviation</label>
+              <div class="field" id="rangeField" hidden>
+                <label for="devRange">Color range ± <span class="unit">mm</span> <button id="autoRange" class="mini">auto</button></label>
+                <input type="number" id="devRange" step="0.01" min="0.001" />
+              </div>
+              <div class="legend" id="legend" hidden>
+                <div class="legend-bar"></div>
+                <div class="legend-labels">
+                  <span id="legNeg">-</span><span>0</span><span id="legPos">+</span>
+                </div>
+                <div class="legend-meta" id="legMeta"></div>
+              </div>
             </div>
-            <div class="legend-meta" id="legMeta"></div>
-          </div>
+          </details>
         </section>
+
+        <footer class="sb-footer">
+          <p>A free online <strong>STEP viewer and STEP-to-STL converter</strong>. Open <code>.step</code> and
+          <code>.stp</code> CAD files (ISO-10303 / AP203 / AP214 / AP242) directly in your browser — nothing is
+          uploaded — inspect the geometry, highlight surface boundaries, check watertightness, and export a
+          watertight STL mesh.</p>
+          <p class="sb-links">
+            <a href="https://geni.us/CNCStoreSTEP" target="_blank" rel="noopener">Store</a> ·
+            <a href="https://ko-fi.com/cnckitchen" target="_blank" rel="noopener">Donate</a> ·
+            <a href="https://github.com/CNCKitchen/meshStep" target="_blank" rel="noopener">Source (meshStep)</a>
+          </p>
+          <p class="sb-credit">Built with <a href="https://github.com/CNCKitchen/meshStep" target="_blank" rel="noopener">meshStep</a> by <a href="https://cnckitchen.com" target="_blank" rel="noopener">CNC Kitchen</a>.</p>
+        </footer>
       </aside>
 
       <main id="stage">
@@ -78,10 +168,44 @@
         <div class="vp-label">Tessellated</div>
         <div class="vp-stats" id="stats"></div>
         <div class="hint">drag to orbit · scroll to zoom</div>
-        <button id="fitBtn" class="fit">Fit view</button>
+        <div class="vp-controls">
+          <button id="projBtn" class="vp-btn" title="Toggle perspective / orthographic">Persp</button>
+          <button id="fitBtn" class="vp-btn">Fit view</button>
+        </div>
+
+        <!-- Store funnel · mirrors bumpmesh (stlTexturizer). Dismissible, persisted per browser. -->
+        <div id="store-cta-wrapper">
+          <span id="store-cta">
+            Free &amp; 100% local — nothing leaves your browser. Support it?
+            <a href="https://geni.us/CNCStoreSTEP" target="_blank" rel="noopener noreferrer">Shop CNCKitchen.STORE</a>
+            or tip via
+            <a href="https://www.paypal.me/CNCKitchen" target="_blank" rel="noopener noreferrer">PayPal</a> /
+            <a href="https://ko-fi.com/cnckitchen" target="_blank" rel="noopener noreferrer">Ko-fi</a>
+            <button id="store-cta-dismiss" aria-label="Dismiss">&times;</button>
+          </span>
+        </div>
+
         <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p></div>
       </main>
     </div>
+
+    <!-- Shown once per session while the first file tessellates — the "look while you wait" moment. -->
+    <div id="sponsor-overlay" class="sponsor-overlay" role="dialog" aria-modal="true" aria-labelledby="sponsor-title" hidden>
+      <div class="sponsor-modal">
+        <h2 id="sponsor-title">Thanks for using the meshStep STEP Viewer by CNC Kitchen!</h2>
+        <p>
+          This viewer is completely free and runs entirely in your browser — your files
+          never get uploaded. While your file is being tessellated, why not check out the
+          store that helps us keep making cool stuff for you?
+        </p>
+        <a href="https://geni.us/CNCStoreSTEP" target="_blank" rel="noopener noreferrer" class="sponsor-link">🛒 Visit CNCKitchen.STORE</a>
+        <a href="https://www.paypal.me/CNCKitchen" target="_blank" rel="noopener noreferrer" class="sponsor-link sponsor-link--paypal">💙 Send a tip on PayPal</a>
+        <a href="https://ko-fi.com/cnckitchen" target="_blank" rel="noopener noreferrer" class="sponsor-link sponsor-link--kofi">☕ Send a tip on Ko-fi</a>
+        <label class="sponsor-dontshow"><input type="checkbox" id="sponsor-dontshow" /> Don't show this again</label>
+        <button id="sponsor-close" class="sponsor-close-btn">Close &amp; continue</button>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

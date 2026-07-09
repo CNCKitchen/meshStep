@@ -78,6 +78,7 @@ function buildDiagnostics(result: MeshResult, mesh: IndexedMesh, solidOfTri: Uin
 }
 
 export { writeBinarySTL, readSTL, type IndexedMesh, type TriSoup } from "./io/stl.ts";
+export { parseStepHeader, type StepHeader } from "./step/header.ts";
 export type { MeshResult, TessOptions } from "./mesh/tessellate.ts";
 export type { BrepModel } from "./brep/build.ts";
 export { meshDefects, type ImportDiagnostics, type MeshWarning, type WarningCode, type WarningSeverity, type EdgeDefects } from "./mesh/diag.ts";
@@ -104,6 +105,8 @@ export interface ImportResult extends MeshResult {
    * warnings/counters say whether geometry is missing or leaking (advise the user to export a
    * mesh directly from CAD) or merely heuristically repaired (advise checking the preview). */
   diagnostics: ImportDiagnostics;
+  /** Length-unit label detected in the STEP file (e.g. "mm", "inch"); all mesh coordinates are in mm. */
+  units: string;
 }
 
 /** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
@@ -131,7 +134,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   if (opts.remesh !== true || brep.solids.length === 0) {
     orientConsistent(result.mesh, result.solidOfTri);
     const placed = applyAssemblyPlacement(result.mesh, result.faceOfTri, result.solidOfTri, solidXf);
-    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri) };
+    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label };
   }
 
   const surf = new Map<number, Surface | null>();
@@ -148,5 +151,5 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   const solidOfTri = Uint32Array.from(r.faceOfTri, (f) => solidOfFace.get(f) ?? 0);
   orientConsistent(r.mesh, solidOfTri); // fix any triangles flipped by smoothing
   const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf);
-  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri) };
+  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label };
 }

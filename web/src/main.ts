@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./styles.css";
 import * as THREE from "three";
-import { readSTL, writeBinarySTL } from "../../src/index.ts";
+import { readSTL, writeBinarySTL, parseStepHeader } from "../../src/index.ts";
 import { Viewer } from "./viewer.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
   buildIndexedGeometry,
   buildSoupGeometry,
   boundaryEdges,
+  featureEdges,
   triCount,
   diverging,
   type RawMesh,
@@ -33,6 +34,10 @@ const overlayText = $("overlayText");
 
 const tWire = $<HTMLInputElement>("tWire");
 const tEdges = $<HTMLInputElement>("tEdges");
+const tFeature = $<HTMLInputElement>("tFeature");
+const tTransparent = $<HTMLInputElement>("tTransparent");
+const tEdgesOnly = $<HTMLInputElement>("tEdgesOnly");
+const projBtn = $<HTMLButtonElement>("projBtn");
 const tRef = $<HTMLInputElement>("tRef");
 const tDev = $<HTMLInputElement>("tDev");
 const devRange = $<HTMLInputElement>("devRange");
@@ -44,8 +49,56 @@ const legPos = $("legPos");
 const legMeta = $("legMeta");
 const statsEl = $("stats");
 
+// info panel
+const infoPanel = $("infoPanel");
+const watertight = $("watertight");
+const iSystem = $("iSystem");
+const iSchema = $("iSchema");
+const iUnits = $("iUnits");
+const iDims = $("iDims");
+const iBodies = $("iBodies");
+const iFaces = $("iFaces");
+const iTris = $("iTris");
+const iDate = $("iDate");
+
+// ---- store funnel (mirrors bumpmesh) ----
+const storeCta = $("store-cta-wrapper");
+if (localStorage.getItem("meshstep.cta.dismissed") === "1") storeCta.hidden = true;
+$<HTMLButtonElement>("store-cta-dismiss").addEventListener("click", () => {
+  storeCta.hidden = true;
+  localStorage.setItem("meshstep.cta.dismissed", "1");
+});
+
+const sponsorOverlay = $("sponsor-overlay");
+const sponsorDontShow = $<HTMLInputElement>("sponsor-dontshow");
+// Shows once per page session on the first conversion — unless the user opted out for good.
+let sponsorShown = localStorage.getItem("meshstep.sponsor.dismissed") === "1";
+$<HTMLButtonElement>("sponsor-close").addEventListener("click", () => {
+  sponsorOverlay.hidden = true;
+  if (sponsorDontShow.checked) localStorage.setItem("meshstep.sponsor.dismissed", "1");
+});
+function maybeShowSponsor(): void {
+  if (sponsorShown) return;
+  sponsorShown = true;
+  sponsorOverlay.hidden = false;
+}
+
+// ---- theme ----
+// The inline head script already set data-theme (no flash); here we sync the 3D scene + button.
+const themeToggle = $<HTMLButtonElement>("themeToggle");
+function applyTheme(mode: "light" | "dark"): void {
+  document.documentElement.dataset.theme = mode;
+  viewer.setTheme(mode);
+  themeToggle.textContent = mode === "light" ? "☾" : "☀";
+  localStorage.setItem("meshstep.theme", mode);
+}
+themeToggle.addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "light" ? "dark" : "light");
+});
+
 // ---- state ----
 const viewer = new Viewer($("viewport"));
+applyTheme(document.documentElement.dataset.theme === "light" ? "light" : "dark");
 let stepText: string | null = null;
 let stepBaseName = "mesh";
 let worker: Worker | null = null;
@@ -67,6 +120,7 @@ stepFile.addEventListener("change", async () => {
   stepName.textContent = f.name;
   convertBtn.disabled = false;
   setStatus("");
+  showHeaderInfo(stepText);
 });
 
 // ---- input: reference STL ----
@@ -101,6 +155,7 @@ convertBtn.addEventListener("click", () => {
     remesh: false,
   };
   showOverlay("Starting…");
+  maybeShowSponsor();
   convertBtn.disabled = true;
 
   worker?.terminate();
@@ -135,9 +190,12 @@ function applyResult(res: ConvertResult): void {
 
   const b = boundaryEdges(mesh);
   openEdges = b.count;
+  const feat = featureEdges(mesh, res.mesh.faceOfTri);
 
-  viewer.setMesh(geo, b.positions);
+  viewer.setMesh(geo, b.positions, feat.positions);
   viewer.fit();
+
+  showGeometryInfo(res, openEdges);
 
   dev = null;
   recomputeDeviation();
@@ -207,6 +265,23 @@ function updateLegend(clamp: number): void {
 // ---- toggles ----
 tWire.addEventListener("change", () => viewer.setWireframe(tWire.checked));
 tEdges.addEventListener("change", () => viewer.setOpenEdges(tEdges.checked));
+tFeature.addEventListener("change", () => viewer.setFeatureEdges(tFeature.checked));
+tTransparent.addEventListener("change", () => viewer.setTransparent(tTransparent.checked));
+tEdgesOnly.addEventListener("change", () => {
+  viewer.setSurfacesVisible(!tEdgesOnly.checked);
+  // A pure edge view is meaningless without the CAD boundaries — turn them on.
+  if (tEdgesOnly.checked && !tFeature.checked) {
+    tFeature.checked = true;
+    viewer.setFeatureEdges(true);
+  }
+});
+
+let orthoOn = false;
+projBtn.addEventListener("click", () => {
+  orthoOn = !orthoOn;
+  viewer.setProjection(orthoOn);
+  projBtn.textContent = orthoOn ? "Ortho" : "Persp";
+});
 tRef.addEventListener("change", () => viewer.setReferenceVisible(tRef.checked));
 tDev.addEventListener("change", () => {
   viewer.setDeviation(tDev.checked);
@@ -241,6 +316,54 @@ function refreshStats(): void {
     lines.push(`max dev ${dev.maxAbs.toFixed(4)} mm`, `rms ${dev.rms.toFixed(4)} mm`);
   }
   statsEl.textContent = lines.join("\n");
+}
+
+// ---- file info panel ----
+// Header fields render on file load (no tessellation needed); geometry fields fill in on Convert.
+function showHeaderInfo(text: string): void {
+  const h = parseStepHeader(text);
+  infoPanel.hidden = false;
+  iSystem.textContent = h.originatingSystem ?? h.preprocessor ?? "—";
+  iSchema.textContent = h.schemaLabel ?? h.schema ?? "—";
+  iDate.textContent = fmtDate(h.timeStamp);
+  // reset geometry fields until this file is converted
+  iUnits.textContent = "—";
+  iDims.textContent = "—";
+  iBodies.textContent = "—";
+  iFaces.textContent = "—";
+  iTris.textContent = "—";
+  watertight.hidden = true;
+}
+
+function showGeometryInfo(res: ConvertResult, edges: number): void {
+  infoPanel.hidden = false;
+  iUnits.textContent = res.units || "—";
+  iDims.textContent = res.bbox ? fmtDims(res.bbox) : "—";
+  iBodies.textContent = res.stats.solids.toLocaleString();
+  iFaces.textContent = res.stats.facesTotal.toLocaleString();
+  iTris.textContent = triCount(res.mesh).toLocaleString();
+  watertight.hidden = false;
+  if (edges === 0) {
+    watertight.textContent = "✓ Watertight · print-ready";
+    watertight.className = "badge ok";
+  } else {
+    watertight.textContent = `⚠ ${edges.toLocaleString()} open edge${edges === 1 ? "" : "s"}`;
+    watertight.className = "badge warn";
+  }
+}
+
+function fmtLen(v: number): string {
+  const a = Math.abs(v);
+  const s = a >= 100 ? v.toFixed(1) : a >= 1 ? v.toFixed(2) : v.toFixed(3);
+  return s.replace(/\.?0+$/, "");
+}
+function fmtDims(b: [number, number, number, number, number, number]): string {
+  return `${fmtLen(b[3] - b[0])} × ${fmtLen(b[4] - b[1])} × ${fmtLen(b[5] - b[2])} mm`;
+}
+function fmtDate(ts: string | undefined): string {
+  if (!ts) return "—";
+  const d = new Date(ts);
+  return isNaN(d.getTime()) ? ts : d.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
 
 // ---- small utils ----

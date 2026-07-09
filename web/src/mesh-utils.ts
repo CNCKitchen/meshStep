@@ -62,6 +62,53 @@ export function boundaryEdges(mesh: RawMesh): { positions: Float32Array; count: 
   return { positions: new Float32Array(out), count: out.length / 6 };
 }
 
+/**
+ * Extract CAD surface boundaries: mesh edges that separate two different B-rep faces
+ * (`faceOfTri` differs across the edge) plus any open boundary edge (used by one triangle).
+ * Because meshStep welds shared B-rep edges once and maps every triangle back to its STEP
+ * face, these are exactly the analytic face borders — rims, holes, fillet edges — sampled to
+ * the tessellation tolerance. Returns a LineSegments-ready position array.
+ */
+export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array): { positions: Float32Array; count: number } {
+  const idx = mesh.indices;
+  const pos = mesh.positions;
+  const KEY = 0x4000000; // matches boundaryEdges: exact for vertex ids below ~67M
+  const key = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
+
+  const cnt = new Map<number, number>();
+  const firstFace = new Map<number, number>();
+  const feature = new Set<number>();
+  const consider = (a: number, b: number, f: number): void => {
+    const k = key(a, b);
+    const n = (cnt.get(k) ?? 0) + 1;
+    cnt.set(k, n);
+    if (n === 1) firstFace.set(k, f);
+    else if (firstFace.get(k) !== f) feature.add(k); // edge straddles two distinct faces
+  };
+  const tris = idx.length / 3;
+  for (let t = 0; t < tris; t++) {
+    const f = faceOfTri[t] ?? 0;
+    const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
+    consider(a, b, f); consider(b, c, f); consider(c, a, f);
+  }
+
+  const out: number[] = [];
+  const seen = new Set<number>();
+  const emit = (u: number, v: number): void => {
+    const k = key(u, v);
+    if (seen.has(k)) return;
+    if (cnt.get(k) !== 1 && !feature.has(k)) return; // interior-to-a-face edge: skip
+    seen.add(k);
+    out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
+    out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
+  };
+  for (let t = 0; t < tris; t++) {
+    const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
+    emit(a, b); emit(b, c); emit(c, a);
+  }
+  return { positions: new Float32Array(out), count: out.length / 6 };
+}
+
 /** Triangle count of an indexed mesh. */
 export function triCount(mesh: RawMesh): number {
   return mesh.indices.length / 3;
