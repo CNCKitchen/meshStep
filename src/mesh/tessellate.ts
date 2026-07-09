@@ -1053,6 +1053,10 @@ function gridCDT(
   for (let i = 0; i < sseg.length; i++) { const k = hkey(Math.floor((sseg[i]![0] + sseg[i]![2]) / 2 / csz), Math.floor((sseg[i]![1] + sseg[i]![3]) / 2 / csz)); (segHash.get(k) ?? segHash.set(k, []).get(k)!).push(i); }
   const floor = target / 40;
   const sizeDist = (sx: number, sy: number): [number, number] => {
+    // Out-of-range query = a degenerate triangle's circumcenter blew up. Without this guard the
+    // cell scan below never terminates: beyond 2^53, gx++ no longer changes gx, so even a FINITE
+    // 1e300 circumcenter loops forever (ABC 00004166 fid=786) — Infinity likewise.
+    if (!(Math.abs(sx) < 1e12 && Math.abs(sy) < 1e12)) return [floor, Infinity];
     // Size field = min of (a) the LOCAL curvature target — so a face whose curvature varies is
     // refined where it actually bends, not just at the patch midpoint — and (b) the boundary-graded
     // size, growing from each edge's own length outward. Capped at the face target, floored to bound.
@@ -1281,6 +1285,10 @@ function gridCDT(
       const a2 = A[0] * A[0] + A[1] * A[1], b2 = B[0] * B[0] + B[1] * B[1], c2 = C[0] * C[0] + C[1] * C[1];
       let px = (a2 * (B[1] - C[1]) + b2 * (C[1] - A[1]) + c2 * (A[1] - B[1])) / d;
       let py = (a2 * (C[0] - B[0]) + b2 * (A[0] - C[0]) + c2 * (B[0] - A[0])) / d;
+      // Degenerate (near-zero-area) triangle: the circumcenter blows up. Beyond ~2^53 the integer
+      // cell loops in sizeDist/dupHas cannot terminate (x+1 === x), so bound the magnitude — 1e12
+      // in metric-scaled units is far beyond any real face.
+      if (!(Math.abs(px) < 1e12 && Math.abs(py) < 1e12)) continue;
       const r = Math.hypot(px - A[0], py - A[1]);
       let [sz, dist] = sizeDist(px, py);
       // Refine where the circumradius exceeds 0.65× the local size: fills the graded band near a
@@ -3934,7 +3942,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   if (brep.solids.length > 1) {
     const openIds = new Set(brep.solids.filter((s) => s.open).map((s) => s.id));
     const unsewn = new Set<number>();
-    const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds, unsewn);
+    const sewnSolids = new Set<number>();
+    const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds, unsewn, sewnSolids);
     if (sewn > 0) warn("heuristic-fill", -1, `${sewn} coincident open rim pair(s) sewn across solids`);
     // Sheet bodies masquerading as solids: a shell whose OWN B-rep has boundary edges (an edge
     // referenced by exactly one face loop) cannot close alone — it either closes JOINTLY (the
@@ -3944,6 +3953,10 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     // every other sheet. B-rep structural test only — tessellation failures cannot trigger it.
     for (const solid of brep.solids) {
       if (solid.open || !unsewn.has(solid.id)) continue;
+      // A solid that DID sew somewhere is load-bearing: its ribbon triangles carry ITS solid id,
+      // so excluding it would orphan the mate's rim in the watertight count (run9 00009564).
+      // Only solids with NO successful sew anywhere may be reclassified.
+      if (sewnSolids.has(solid.id)) continue;
       const useCount = new Map<number, number>();
       for (const f of solid.faces) for (const lp of f.loops) for (const oe of lp.edges) {
         useCount.set(oe.edgeId, (useCount.get(oe.edgeId) ?? 0) + 1);
@@ -4206,7 +4219,7 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
  * once, to its best mutual match, and only when BOTH rings track each other everywhere (a rim
  * half-covered by two caps fails the mutual gate and stays open rather than sewn wrong).
  */
-function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>, unsewn?: Set<number>): number {
+function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>, unsewn?: Set<number>, sewnSolids?: Set<number>): number {
   const KEY = 2 ** 26;
   const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
   const use = new Map<number, number>();
@@ -4311,6 +4324,7 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
     if (bj < 0 || bScore > tol) continue;
     const B = rings[bj]!;
     paired.add(i); paired.add(bj);
+    sewnSolids?.add(A.solid); sewnSolids?.add(B.solid);
     // Ribbon: rails = A REVERSED and B in the direction that tracks it — the loft's triangles then
     // traverse each previously-open segment OPPOSITE to its owning triangle (manifold pairing).
     const c1 = A.v.slice().reverse();
