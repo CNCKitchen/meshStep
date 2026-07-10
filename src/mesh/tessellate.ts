@@ -40,6 +40,10 @@ export interface TessOptions {
    * "untriangulated", …). Characterization hook: the fallback dispatch order is semantic, and this
    * makes "which mesher handled which face class" testable instead of tribal knowledge. */
   trace?: (faceId: number, mesher: string) => void;
+  /** Progress hook: called after every work unit (edge sampled, face meshed, solid stitched) with
+   * monotone counts. `total` is fixed up front, so done/total is a usable fraction — including for
+   * assemblies, where every solid's faces are in the count. Callers throttle; this stays sync. */
+  onProgress?: (done: number, total: number) => void;
 }
 
 export interface MeshResult {
@@ -3730,6 +3734,17 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   for (const solid of brep.solids) for (const face of solid.faces) {
     faceSurf.set(face.faceId, makeSurface(brep.table, face.surfaceId, solid.scale ?? brep.scale, brep.units.radPerAngle));
   }
+
+  // Progress accounting, weighted by measured cost: face meshing dominates wall time, edge
+  // sampling is cheap (edges outnumber faces ~3:1, so an unweighted count leaps to ~80% during
+  // sampling and then crawls), and each solid's stitch passes (weld/zip/T-junctions/hole fill)
+  // cost roughly a quarter of its faces' meshing. The total is known before any work starts, so
+  // the consumer can draw a determinate bar for single parts and assemblies alike.
+  const W_FACE = 16, W_STITCH = 4;
+  let pDone = 0;
+  let pTotal = brep.edges.size;
+  for (const solid of brep.solids) pTotal += (W_FACE + W_STITCH) * solid.faces.length;
+  const tick = (units: number): void => { pDone += units; opts.onProgress?.(pDone, pTotal); };
   // Sample each edge to the FINEST interior target of its adjacent faces — not just its own curve
   // curvature. A curved face's straight seam / side edges (lines carry no curvature, so they'd be
   // sampled at targetEdge) otherwise stay far coarser than the fine interior and sliver the seam.
@@ -3752,6 +3767,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   for (const [id, e] of brep.edges) {
     const te = edgeMaxLen.get(id) ?? targetEdge;
     sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, chordTol, te, brep.units.radPerAngle, normalDev));
+    tick(1);
   }
   // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
   // run-out at 0.7mm chord tolerance) samples its edges with so few points that the boundary
@@ -3849,6 +3865,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     const faceIds: number[] = [];
     for (const face of solid.faces) {
       facesTotal++;
+      tick(W_FACE);
       const surface = faceSurf.get(face.faceId) ?? null;
       if (!surface) {
         bump(skipped, face.surfaceKind);
@@ -3949,8 +3966,13 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       }
     }
 
+    // One stitch-progress quarter (of the solid's W_STITCH share) per pass, so a big single
+    // solid's bar keeps moving through the multi-second weld/zip/fill tail instead of stalling.
+    const stitchQ = solid.faces.length;
     const { mesh } = weld(verts);
+    tick(stitchQ);
     const z = zipSlivers(mesh, 0.05);
+    tick(stitchQ);
     const keptFaceIds: number[] = [];
     for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) keptFaceIds.push(faceIds[t]!);
     // T-junction crack repair — skipped for open-shell surface bodies, whose boundary is open by
@@ -3958,6 +3980,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     const tj = solid.open || (DBG && process.env.MESHSTEP_NOZIP)
       ? { indices: z.indices, faceOf: keptFaceIds }
       : zipTJunctions(z.positions, z.indices, keptFaceIds, 0.02);
+    tick(stitchQ);
     const fill = fillMicroHoles(z.positions, tj.indices, tj.faceOf, 0.05,
       solid.open ? undefined : { edge: targetEdge, dev: 0.75 * chordTol });
     for (const x of z.positions) positions.push(x);
@@ -3966,6 +3989,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     voff += z.positions.length / 3;
     for (const f of tj.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
     for (const f of fill.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
+    tick(stitchQ);
   }
 
   // Sew jointly-closing open shells across solids (see sewSolids). Only OPEN boundary rings can

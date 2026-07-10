@@ -204,6 +204,16 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+.progress {
+  width: 240px; height: 6px; border-radius: 3px;
+  background: var(--line); overflow: hidden;
+}
+.progress[hidden] { display: none; }
+#progressFill {
+  height: 100%; width: 0;
+  background: var(--accent); border-radius: 3px;
+  transition: width 0.12s linear;
+}
 
 /* ---- store funnel (mirrors bumpmesh) ---- */
 #store-cta-wrapper {
@@ -280,3 +290,30 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .part-row.off .part-name { opacity: 0.45; }
 .part-meta { flex: none; color: var(--muted); font-size: 11px; }
 .auto-note { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+
+/* ---- section view ---- */
+.section-row { display: flex; gap: 6px; margin: 2px 0 4px 23px; }
+.section-row[hidden] { display: none; }
+
+/* ---- viewport context menu + part-info popup ---- */
+.ctx-menu {
+  position: fixed; z-index: 30; min-width: 170px; max-width: 280px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 5px; font-size: 12.5px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+}
+.ctx-menu[hidden] { display: none; }
+.ctx-title {
+  padding: 5px 9px 7px; font-weight: 600; border-bottom: 1px solid var(--line);
+  margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ctx-item {
+  display: block; width: 100%; text-align: left; background: none; border: none;
+  color: var(--text); padding: 6px 9px; border-radius: 5px; cursor: pointer;
+  font-size: 12.5px; font-family: inherit;
+}
+.ctx-item:hover:not(:disabled) { background: var(--panel-2); }
+.ctx-item:disabled { color: var(--muted); cursor: default; }
+.ctx-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+.part-pop { min-width: 220px; }
+.part-pop .info { padding: 4px 6px 3px; }

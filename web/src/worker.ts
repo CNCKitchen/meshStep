@@ -52,6 +52,9 @@ export interface ConvertResult {
 export interface ProgressMessage {
   type: "progress";
   stage: string;
+  /** Fraction complete in [0,1]; absent when the current stage's duration is unknown
+   * (the UI shows the spinner alone / an indeterminate bar). */
+  fraction?: number;
 }
 
 export interface ErrorMessage {
@@ -89,8 +92,24 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
   }
   if (req.type !== "convert") return;
   try {
-    post({ type: "progress", stage: "Tessellating…" });
-    const tess = importStep(req.stepText, { ...req.opts, remesh: false });
+    post({ type: "progress", stage: "Parsing…" });
+    // Tessellation is synchronous in this worker, but postMessage delivers immediately, so the
+    // main thread repaints the bar while we compute. Throttled: full-rate ticks (one per edge/
+    // face) would flood the main thread's event loop on big assemblies.
+    let lastPost = 0;
+    const tess = importStep(req.stepText, {
+      ...req.opts,
+      remesh: false,
+      onProgress: (p) => {
+        if (p.phase === "finalize") { post({ type: "progress", stage: "Finalizing…", fraction: 1 }); return; }
+        if (p.phase !== "tessellate" || p.total <= 0) return;
+        const now = Date.now();
+        if (now - lastPost < 100 && p.done < p.total) return;
+        lastPost = now;
+        const fraction = p.done / p.total;
+        post({ type: "progress", stage: `Tessellating… ${Math.round(fraction * 100)}%`, fraction });
+      },
+    });
 
     const pos = tess.mesh.positions;
     const idx = tess.mesh.indices;

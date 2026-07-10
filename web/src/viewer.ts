@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { ViewHelper } from "three/addons/helpers/ViewHelper.js";
 import { filterTriangles, filterSegments, type EdgeSet } from "./mesh-utils.ts";
+import { SectionController } from "./section.ts";
 
 interface Content {
   group: THREE.Group;
@@ -68,9 +70,7 @@ export class Viewer {
   private _oTmp = new THREE.Vector3();
   private _oTmp2 = new THREE.Vector3();
   private _oDir = new THREE.Vector3();
-  /** Clearance (rad, ~2.3°) kept between the view axis and the ±Z pole, where
-   *  OrbitControls' up = +Z `lookAt` is degenerate and the azimuth snaps 180°. */
-  private readonly poleEps = 0.04;
+  private _oUp = new THREE.Vector3();
 
   // toggle state
   private orthoOn = false;
@@ -96,11 +96,27 @@ export class Viewer {
   private featureSet: EdgeSet | null = null;
   private hiddenSolids = new Set<number>();
   private wireDirty = false; // wireframe geometry lags hidden-part changes until it is shown
+  // Per-triangle solid ids matching the CURRENT (possibly part-filtered) index, so a raycast
+  // faceIndex maps straight to the body under the cursor.
+  private drawnSolidOfTri: Uint32Array | null = null;
+  private rmbStart: { x: number; y: number } | null = null; // right-button down position
+
+  /** Right-click (no drag) hook: body id under the cursor (null over empty space) + client x/y. */
+  onContextMenu: ((solidId: number | null, x: number, y: number) => void) | null = null;
+
+  // Section view: one clipping plane + stencil caps + plane gizmo (section.ts).
+  private section: SectionController;
+  // Axes triad in the lower-right corner showing the world orientation.
+  private viewHelper: ViewHelper;
 
   constructor(container: HTMLElement) {
     this.container = container;
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // stencil: required for the filled section caps (default off since r163).
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
+    this.renderer.localClippingEnabled = true;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    // The axes triad renders as a second pass into the same frame.
+    this.renderer.autoClear = false;
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = new THREE.Color(0x14181d);
@@ -115,6 +131,7 @@ export class Viewer {
     this.camera = this.persp;
 
     this.controls = this.makeControls(new THREE.Vector3());
+    this.viewHelper = this.makeViewHelper();
 
     // Lights (Z-up: key from above-front, fill from behind-below).
     const hemi = new THREE.HemisphereLight(0xffffff, 0x404048, 1.0);
@@ -139,6 +156,16 @@ export class Viewer {
     const group = new THREE.Group();
     this.scene.add(group);
     this.content = { group, solid: null, wire: null, edges: null, feature: null, reference: null, highlight: null };
+
+    this.section = new SectionController({
+      scene: this.scene,
+      camera: () => this.camera,
+      domElement: () => this.renderer.domElement,
+      // this.controls is reassigned on projection swaps — resolve it late.
+      onDraggingChanged: (dragging) => { this.controls.enabled = !dragging; },
+      bboxDiag: () => this.contentDiag(),
+      partCenter: () => this.contentCenter(),
+    });
 
     this.installNavigation(this.renderer.domElement);
 
@@ -200,16 +227,43 @@ export class Viewer {
       // Match the perspective view's apparent size at the target distance.
       this.setOrthoFrustum(2 * dist * Math.tan((this.persp.fov * Math.PI) / 360));
       this.ortho.position.copy(pos);
+      this.ortho.up.copy(this.persp.up); // free orbit may have rolled the view
       this.ortho.zoom = 1;
       this.ortho.updateProjectionMatrix();
       this.camera = this.ortho;
     } else {
       this.persp.position.copy(pos);
+      this.persp.up.copy(this.ortho.up);
       this.persp.updateProjectionMatrix();
       this.camera = this.persp;
     }
     this.controls.dispose();
     this.controls = this.makeControls(target);
+    this.section.setCamera(this.camera); // the gizmo raycasts the active camera
+    // ViewHelper captures its camera in a closure — rebuild for the new one.
+    this.viewHelper.dispose();
+    this.viewHelper = this.makeViewHelper();
+  }
+
+  /** Corner axes triad bound to the active camera. */
+  private makeViewHelper(): ViewHelper {
+    const h = new ViewHelper(this.camera, this.renderer.domElement);
+    h.setLabels("X", "Y", "Z");
+    return h;
+  }
+
+  /** Model bbox center in world units (orbit target before a model loads). */
+  private contentCenter(): THREE.Vector3 {
+    const s = this.content.solid;
+    if (!s) return this.controls.target.clone();
+    return new THREE.Box3().expandByObject(s).getCenter(new THREE.Vector3());
+  }
+
+  /** Model bbox diagonal (sizes the section quad/cap; safe pre-model fallback). */
+  private contentDiag(): number {
+    const s = this.content.solid;
+    if (!s) return 100;
+    return new THREE.Box3().expandByObject(s).getSize(new THREE.Vector3()).length() || 100;
   }
 
   // ---------- navigation (orbit / move / zoom) ----------
@@ -220,6 +274,15 @@ export class Viewer {
   private installNavigation(canvas: HTMLCanvasElement): void {
     canvas.addEventListener("pointerdown", (ev) => {
       if (ev.button === 0) this.beginOrbit(ev);
+      else if (ev.button === 2) this.rmbStart = { x: ev.clientX, y: ev.clientY };
+    });
+    // Right-drag pans (OrbitControls) — the context menu only opens on a clean right CLICK.
+    canvas.addEventListener("contextmenu", (ev) => {
+      ev.preventDefault();
+      const s = this.rmbStart;
+      this.rmbStart = null;
+      if (s && Math.hypot(ev.clientX - s.x, ev.clientY - s.y) > 4) return;
+      this.onContextMenu?.(this.pickSolid(ev.clientX, ev.clientY), ev.clientX, ev.clientY);
     });
     // Move + release on document so a drag that leaves the canvas still tracks.
     document.addEventListener("pointermove", this.onOrbitMove);
@@ -247,10 +310,36 @@ export class Viewer {
     this.pointerNdc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
     this.raycaster.setFromCamera(this.pointerNdc, this.camera);
     const hits = this.raycaster.intersectObjects(targets, false);
+    // Section view: the raycaster still hits clipped-away (invisible) surface —
+    // pivot on the first hit on the KEPT side (n·p + c ≥ 0) instead.
+    if (this.section.enabled) {
+      const kept = hits.find((h) => this.section.plane.distanceToPoint(h.point) > -1e-6);
+      return kept ? kept.point.clone() : null;
+    }
     return hits.length ? hits[0].point.clone() : null;
   }
 
+  /** Body (solid) id under the given client position, or null over empty space / no model.
+   *  Hidden parts can't be hit (their triangles are filtered out of the drawn index); in the
+   *  section view, hits on the clipped-away side are skipped (same rule as the orbit pivot). */
+  private pickSolid(clientX: number, clientY: number): number | null {
+    const c = this.content;
+    if (!c.solid || !this.drawnSolidOfTri) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hits = this.raycaster.intersectObject(c.solid, false);
+    const hit = this.section.enabled
+      ? hits.find((h) => this.section.plane.distanceToPoint(h.point) > -1e-6)
+      : hits[0];
+    if (!hit || hit.faceIndex == null) return null;
+    return this.drawnSolidOfTri[hit.faceIndex] ?? null;
+  }
+
   private beginOrbit(ev: PointerEvent): void {
+    // Grabbing a section-gizmo handle must not also spin the camera.
+    if (this.section.busy()) return;
     // Orbit about the surface under the cursor; fall back to the last pivot,
     // then to the controls target, so a drag off the part still rotates.
     const pivot = this.pickPoint(ev) ?? this.lastOrbitPivot ?? this.controls.target.clone();
@@ -289,34 +378,17 @@ export class Viewer {
 
     const pivot = this.orbitPivot;
     const rotSpeed = 0.005;
-    // Pure quaternion rotation: yaw about world Z, pitch about the camera's
-    // right axis.
+    // Free trackball orbit: yaw about the camera's own up axis, pitch about
+    // its right axis — both screen-relative, so there is no polar clamp and
+    // no special pole. camera.up follows the same rotation; OrbitControls'
+    // per-frame `lookAt(target)` then reproduces this orientation exactly at
+    // ANY tilt (up is never parallel to the view direction).
     this.camera.updateMatrixWorld();
     this._oRight.setFromMatrixColumn(this.camera.matrixWorld, 0).normalize(); // camera right
+    this._oUp.setFromMatrixColumn(this.camera.matrixWorld, 1).normalize(); // camera up
 
-    // Pitch clamp: keep the view direction clear of the ±Z pole. Yaw about Z
-    // doesn't change the tilt; only pitch can drive the look direction onto
-    // the Z axis. There, OrbitControls' per-frame `lookAt(target)` with
-    // up = +Z is degenerate and the azimuth snaps 180° — and a fast drag can
-    // shove the camera *past* the pole in one frame, so the snap flip-flops.
-    // Limiting the pitch to land just shy of vertical turns that jump into a
-    // clean stop.
-    const eps = this.poleEps;
-    this._oDir.copy(this.controls.target).sub(this.camera.position).normalize();
-    let pitch = -dy * rotSpeed;
-    const ang0 = Math.acos(Math.max(-1, Math.min(1, this._oDir.z))); // tilt from +Z, [0,π]
-    this._oq2.setFromAxisAngle(this._oRight, pitch);
-    const angP = Math.acos(
-      Math.max(-1, Math.min(1, this._oTmp.copy(this._oDir).applyQuaternion(this._oq2).z))
-    );
-    if (angP < eps || angP > Math.PI - eps) {
-      const clamped = Math.max(eps, Math.min(Math.PI - eps, angP));
-      const denom = angP - ang0;
-      pitch = Math.abs(denom) > 1e-9 ? pitch * ((clamped - ang0) / denom) : 0;
-    }
-
-    this._oq1.setFromAxisAngle(this._oTmp.set(0, 0, 1), -dx * rotSpeed);
-    this._oq2.setFromAxisAngle(this._oRight, pitch);
+    this._oq1.setFromAxisAngle(this._oUp, -dx * rotSpeed);
+    this._oq2.setFromAxisAngle(this._oRight, -dy * rotSpeed);
     this._oq1.premultiply(this._oq2);
 
     // Swing both the camera and the orbit target around the pivot so
@@ -325,6 +397,7 @@ export class Viewer {
     this.camera.position.copy(pivot).add(this._oTmp);
     this._oTmp2.copy(this.controls.target).sub(pivot).applyQuaternion(this._oq1);
     this.controls.target.copy(pivot).add(this._oTmp2);
+    this.camera.up.applyQuaternion(this._oq1);
     this.camera.quaternion.premultiply(this._oq1);
     this.camera.updateMatrixWorld();
   };
@@ -334,14 +407,7 @@ export class Viewer {
     this.orbitPivot = null;
     this.orbitStart = null;
     this.orbitLast = null;
-    if (this.orbiting) {
-      this.orbiting = false;
-      // Re-level: hand the up vector back to OrbitControls upright (the
-      // top/bottom presets set up = +Y; an orbit drag leaves them).
-      this.persp.up.set(0, 0, 1);
-      this.ortho.up.set(0, 0, 1);
-      this.camera.lookAt(this.controls.target);
-    }
+    this.orbiting = false; // the free orbit keeps its orientation — no re-leveling
     this.pivotMarker.visible = false;
   };
 
@@ -400,11 +466,32 @@ export class Viewer {
     this.setCameraView(view);
   };
 
-  /** Snap to an axis (or isometric) view, framing the whole model. */
-  setCameraView(view: CameraView): void {
+  /** Bounding box of the VISIBLE parts (hidden solids excluded), so view framing ignores
+   *  what isn't shown. Falls back to the whole model when everything is hidden. */
+  private visibleBox(): THREE.Box3 | null {
     const s = this.content.solid;
-    if (!s) return;
-    const box = new THREE.Box3().expandByObject(s);
+    if (!s) return null;
+    if (!this.hiddenSolids.size || !this.solidOfTri || !this.fullIndex) {
+      return new THREE.Box3().expandByObject(s);
+    }
+    const pos = s.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const box = new THREE.Box3();
+    const sot = this.solidOfTri, idx = this.fullIndex;
+    for (let t = 0; t < sot.length; t++) {
+      if (this.hiddenSolids.has(sot[t]!)) continue;
+      for (let e = 0; e < 3; e++) {
+        const v = idx[t * 3 + e]!;
+        this._oTmp.set(pos.getX(v), pos.getY(v), pos.getZ(v));
+        box.expandByPoint(this._oTmp);
+      }
+    }
+    return box.isEmpty() ? new THREE.Box3().expandByObject(s) : box;
+  }
+
+  /** Snap to an axis (or isometric) view, framing the visible parts. */
+  setCameraView(view: CameraView): void {
+    const box = this.visibleBox();
+    if (!box) return;
     const center = box.getCenter(new THREE.Vector3());
     const size = box.getSize(new THREE.Vector3());
     const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
@@ -449,10 +536,32 @@ export class Viewer {
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.controls.update();
+    this.renderer.clear(); // autoClear is off for the axes-triad second pass
     this.renderer.render(this.scene, this.camera);
+    this.viewHelper.render(this.renderer);
   };
 
+  /** Push/remove the section clipping plane on every content material. */
+  private refreshClipping(): void {
+    const planes = this.section.enabled ? [this.section.plane] : null;
+    const c = this.content;
+    const mats = [c.solid, c.wire, c.edges, c.feature, c.highlight, c.reference]
+      .map((o) => o?.material as THREE.Material | undefined);
+    for (const m of mats) {
+      if (!m) continue;
+      const had = (m.clippingPlanes?.length ?? 0) > 0;
+      if (had !== !!planes) {
+        m.clippingPlanes = planes;
+        m.needsUpdate = true;
+      }
+    }
+  }
+
   private applyVisibility(): void {
+    this.refreshClipping();
+    // Solid caps only where an OPAQUE solid is being cut (transparent /
+    // edges-only views look inside anyway — a filled cut face would lie).
+    this.section.setCapsAllowed(this.solidVisible && !this.transparentOn);
     const c = this.content;
     if (c.wire) c.wire.visible = this.showWire;
     if (c.edges) c.edges.visible = this.showEdges;
@@ -489,6 +598,7 @@ export class Viewer {
     this.devColors = null; // stale deviation colors would mismatch the new vertex count
     this.lastOrbitPivot = null; // a pivot on the old model would be off-surface
     this.solidOfTri = solidOfTri;
+    this.drawnSolidOfTri = solidOfTri;
     this.fullIndex = (geometry.getIndex()?.array as Uint32Array) ?? null;
     this.boundarySet = boundary;
     this.featureSet = feature;
@@ -552,6 +662,11 @@ export class Viewer {
     c.highlight.visible = false;
     c.group.add(c.highlight);
 
+    // Section caps track the display geometry; body ids give each part's cut
+    // face its own color. Re-center the plane through the new model.
+    this.section.setGeometry(geometry, this.fullIndex, solidOfTri);
+    this.section.refit();
+
     this.applyVisibility();
   }
 
@@ -577,6 +692,7 @@ export class Viewer {
       c.reference.visible = this.showReference;
       c.group.add(c.reference);
     }
+    this.refreshClipping(); // the fresh reference material needs the section plane too
   }
 
   /** Apply (or clear) per-vertex deviation colors on the solid mesh. */
@@ -598,6 +714,16 @@ export class Viewer {
       ? filterTriangles(this.fullIndex, this.solidOfTri, this.hiddenSolids)
       : this.fullIndex;
     geo.setIndex(new THREE.BufferAttribute(index, 1));
+    // Keep the drawn-triangle -> solid map aligned with the filtered index (picking).
+    if (this.hiddenSolids.size) {
+      const sot = this.solidOfTri;
+      const kept = new Uint32Array(sot.length);
+      let n = 0;
+      for (let t = 0; t < sot.length; t++) if (!this.hiddenSolids.has(sot[t]!)) kept[n++] = sot[t]!;
+      this.drawnSolidOfTri = kept.subarray(0, n);
+    } else {
+      this.drawnSolidOfTri = this.solidOfTri;
+    }
     if (c.feature && this.featureSet) {
       const p = this.hiddenSolids.size ? filterSegments(this.featureSet, this.hiddenSolids) : this.featureSet.positions;
       c.feature.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
@@ -610,6 +736,7 @@ export class Viewer {
     // is the expensive part, so defer until it is actually shown.
     this.wireDirty = true;
     if (this.showWire) this.rebuildWire();
+    this.section.setHiddenSolids(this.hiddenSolids); // caps drop the hidden bodies too
   }
 
   /** Highlight the given solid ids (hover feedback), or clear with null. Hidden parts highlight
@@ -655,6 +782,15 @@ export class Viewer {
   /** false => hide the shaded surfaces (CAD-edges-only line view). */
   setSurfacesVisible(v: boolean): void { this.solidVisible = v; this.applyVisibility(); }
 
+  // ---------- section view ----------
+
+  /** Toggle the solid section view (clipping plane + filled cut face + gizmo). */
+  setSection(v: boolean): void { this.section.setEnabled(v); this.applyVisibility(); }
+  /** Snap the section plane perpendicular to a world axis, cut opening toward the camera. */
+  setSectionAxis(axis: "x" | "y" | "z"): void { this.section.setAxis(axis); }
+  /** Swap which half of the model is kept. */
+  flipSection(): void { this.section.flip(); }
+
   /** Match the 3D background to the UI theme. */
   setTheme(mode: "light" | "dark"): void {
     this.scene.background = new THREE.Color(mode === "light" ? 0xe9edf2 : 0x14181d);
@@ -662,11 +798,10 @@ export class Viewer {
   setReferenceVisible(v: boolean): void { this.showReference = v; this.applyVisibility(); }
   setDeviation(v: boolean): void { this.deviationOn = v; this.applyVisibility(); }
 
-  /** Frame both cameras to the content. */
+  /** Frame both cameras to the visible content (hidden parts don't count). */
   fit(): void {
-    const s = this.content.solid;
-    if (!s) return;
-    const box = new THREE.Box3().expandByObject(s);
+    const box = this.visibleBox();
+    if (!box) return;
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
@@ -674,6 +809,9 @@ export class Viewer {
     const dir = ISO_DIR.clone().normalize();
     const pos = center.clone().addScaledVector(dir, dist);
 
+    // Fit re-frames from the iso direction — also re-level a free-orbit roll.
+    this.persp.up.set(0, 0, 1);
+    this.ortho.up.set(0, 0, 1);
     this.persp.position.copy(pos);
     this.persp.near = dist / 100;
     this.persp.far = dist * 100;
@@ -689,6 +827,49 @@ export class Viewer {
     this.controls.target.copy(center);
     this.controls.update();
     // Re-pivot the next orbit drag on the part centre, not a stale surface hit.
+    this.lastOrbitPivot = center.clone();
+  }
+
+  /** Frame the given solid (body) ids, keeping the current view direction. A part that occurs
+   *  several times in the assembly shares one solid id — the frame encloses all instances. */
+  fitSolids(ids: ReadonlySet<number>): void {
+    const c = this.content;
+    if (!c.solid || !this.solidOfTri || !this.fullIndex || ids.size === 0) return;
+    const pos = c.solid.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const box = new THREE.Box3();
+    const sot = this.solidOfTri, idx = this.fullIndex;
+    for (let t = 0; t < sot.length; t++) {
+      if (!ids.has(sot[t]!)) continue;
+      for (let e = 0; e < 3; e++) {
+        const v = idx[t * 3 + e]!;
+        this._oTmp.set(pos.getX(v), pos.getY(v), pos.getZ(v));
+        box.expandByPoint(this._oTmp);
+      }
+    }
+    if (box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
+    const dir = this.camera.position.clone().sub(this.controls.target);
+    if (dir.lengthSq() < 1e-12) dir.copy(ISO_DIR);
+    dir.normalize();
+    const dist = (radius / Math.sin((this.persp.fov * Math.PI) / 360)) * 1.4;
+    const p = center.clone().addScaledVector(dir, dist);
+
+    this.persp.position.copy(p);
+    this.persp.near = dist / 100;
+    this.persp.far = dist * 100;
+    this.persp.updateProjectionMatrix();
+
+    this.ortho.position.copy(p);
+    this.ortho.near = 0.01;
+    this.ortho.far = dist * 100;
+    this.ortho.zoom = 1;
+    this.setOrthoFrustum(radius * 2.4);
+    this.ortho.updateProjectionMatrix();
+
+    this.controls.target.copy(center);
+    this.controls.update();
     this.lastOrbitPivot = center.clone();
   }
 

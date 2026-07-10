@@ -13,6 +13,7 @@ import {
   splitByTriColor,
   triCount,
   diverging,
+  type EdgeSet,
   type RawMesh,
 } from "./mesh-utils.ts";
 import type { ConvertResult, WorkerOut } from "./worker.ts";
@@ -33,6 +34,8 @@ const exportBtn = $<HTMLButtonElement>("exportBtn");
 const statusEl = $("status");
 const overlay = $("overlay");
 const overlayText = $("overlayText");
+const progressBar = $("progressBar");
+const progressFill = $("progressFill");
 
 const tColors = $<HTMLInputElement>("tColors");
 const tWire = $<HTMLInputElement>("tWire");
@@ -40,6 +43,8 @@ const tEdges = $<HTMLInputElement>("tEdges");
 const tFeature = $<HTMLInputElement>("tFeature");
 const tTransparent = $<HTMLInputElement>("tTransparent");
 const tEdgesOnly = $<HTMLInputElement>("tEdgesOnly");
+const tSection = $<HTMLInputElement>("tSection");
+const sectionRow = $("sectionRow");
 const projBtn = $<HTMLButtonElement>("projBtn");
 const tRef = $<HTMLInputElement>("tRef");
 const tDev = $<HTMLInputElement>("tDev");
@@ -118,6 +123,8 @@ let geo: THREE.BufferGeometry | null = null;
 let openEdges = 0; // unexpected (defect) open edges — sheet-body boundaries excluded
 let sheetBodies = 0;
 let openSolidsSet = new Set<number>();
+let solidOfTri: Uint32Array | null = null; // per-triangle body id (context-menu part info)
+let defectEdges: EdgeSet | null = null; // open-edge segments, sheet bodies excluded
 
 let reference: ReferenceSurface | null = null;
 let dev: DeviationResult | null = null;
@@ -214,6 +221,12 @@ function onWorkerMessage(msg: WorkerOut): void {
   }
   if (msg.type === "progress") {
     overlayText.textContent = msg.stage;
+    // No fraction => the stage's duration is unknown; keep the last bar state rather than
+    // flashing it away (parse has no bar yet, finalize arrives pinned at 100%).
+    if (msg.fraction !== undefined) {
+      progressBar.hidden = false;
+      progressFill.style.width = `${(msg.fraction * 100).toFixed(1)}%`;
+    }
     return;
   }
   if (msg.type === "error") {
@@ -250,6 +263,7 @@ function applyResult(res: ConvertResult): void {
     faceColors = split.colors;
   }
   tColors.disabled = !faceColors;
+  tSection.disabled = false; // there is a solid to cut now
   geo = buildIndexedGeometry(displayMesh);
 
   // Open-edge (defect) overlay: a sheet body's boundary is open BY DESIGN — drop those solids'
@@ -260,6 +274,9 @@ function applyResult(res: ConvertResult): void {
   openEdges = res.diagnostics.openEdges;
   const b = dropSolidSegments(boundaryEdges(mesh, res.mesh.solidOfTri), openSolidsSet);
   const feat = featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
+  solidOfTri = res.mesh.solidOfTri;
+  defectEdges = b;
+  closeMenus(); // a stale context menu would act on the previous model's ids
 
   viewer.setMesh(geo, b, feat, faceColors, res.mesh.solidOfTri);
   viewer.fit();
@@ -283,6 +300,27 @@ function applyResult(res: ConvertResult): void {
 let hiddenParts = new Set<number>();
 let allPartSolids: number[] = [];
 const partRows: { cb: HTMLInputElement; row: HTMLElement; solids: number[] }[] = [];
+
+// Right-click lookup: body id -> display label + owning part. The context menu acts on ONE
+// body — the same granularity as the tree's finest rows (a multi-body part lists each body
+// as its own row, so right-clicking one must not drag its siblings along). `label` mirrors
+// the tree's row naming.
+interface SolidInfo { label: string; partName: string; occurrences: number }
+let solidInfo = new Map<number, SolidInfo>();
+
+function indexSolidInfo(n: PartNode, occ: number): void {
+  const o = occ * n.occurrences;
+  // A leaf part with a single body is named after the part; a body sharing its node with
+  // siblings (or subassemblies) goes by its own name, like its tree row.
+  const soleLeafBody = n.children.length === 0 && n.bodies.length === 1;
+  for (const [i, b] of n.bodies.entries()) {
+    const label = soleLeafBody
+      ? n.name || b.name || "(unnamed part)"
+      : b.name || (n.bodies.length > 1 ? `Body ${i + 1}` : "Body");
+    solidInfo.set(b.id, { label, partName: n.name, occurrences: o });
+  }
+  for (const c of n.children) indexSolidInfo(c, o);
+}
 
 /** Collapse wrapper levels (a product whose rep only points at one sub-product carries no
  * geometry of its own): keep the outermost name, multiply occurrence counts. */
@@ -400,6 +438,8 @@ function buildPartsPanel(root: PartNode): void {
   partsTree.textContent = "";
   const merged = mergeChains(root);
   allPartSolids = subtreeSolids(merged);
+  solidInfo = new Map();
+  indexSolidInfo(merged, 1); // the context menu needs the lookup even for single-part files
   const show = merged.children.length > 0 || merged.bodies.length > 1;
   partsPanel.hidden = !show;
   if (!show) return;
@@ -414,6 +454,172 @@ partsHideAll.addEventListener("click", () => {
   hiddenParts = new Set(allPartSolids);
   applyHiddenParts();
 });
+
+// ---- viewport context menu ----
+// Right-click (no drag) on the model: menu for the part under the cursor; on empty space:
+// viewport-level actions. Both popups are rebuilt per open, fixed-positioned at the cursor.
+const ctxMenu = $("ctxMenu");
+const partPop = $("partPop");
+
+function closeMenus(): void {
+  ctxMenu.hidden = true;
+  partPop.hidden = true;
+  viewer.setHighlightSolids(null);
+}
+
+function menuItem(label: string, action: () => void, enabled = true): HTMLButtonElement {
+  const b = document.createElement("button");
+  b.type = "button";
+  b.className = "ctx-item";
+  b.textContent = label;
+  b.disabled = !enabled;
+  b.addEventListener("click", () => {
+    closeMenus();
+    action();
+  });
+  return b;
+}
+
+/** Show a fixed-position popup at (x, y), nudged to stay inside the window. */
+function placeAt(el: HTMLElement, x: number, y: number): void {
+  el.hidden = false;
+  el.style.left = "0px"; // reset so offsetWidth/Height measure the natural size
+  el.style.top = "0px";
+  el.style.left = `${Math.max(4, Math.min(x, window.innerWidth - el.offsetWidth - 8))}px`;
+  el.style.top = `${Math.max(4, Math.min(y, window.innerHeight - el.offsetHeight - 8))}px`;
+}
+
+viewer.onContextMenu = (solidId, x, y) => {
+  closeMenus();
+  if (!mesh) return;
+  ctxMenu.textContent = "";
+  const info = solidId == null ? undefined : solidInfo.get(solidId);
+  if (info && solidId != null) {
+    const id = solidId;
+    const title = document.createElement("div");
+    title.className = "ctx-title";
+    title.textContent = info.label;
+    ctxMenu.appendChild(title);
+    viewer.setHighlightSolids(new Set([id])); // flash what the menu will act on
+    const others = allPartSolids.filter((s) => s !== id);
+    ctxMenu.append(
+      menuItem("Isolate part", () => {
+        hiddenParts = new Set(others);
+        applyHiddenParts();
+      }, others.length > 0),
+      menuItem("Hide part", () => {
+        hiddenParts.add(id);
+        applyHiddenParts();
+      }),
+      menuItem("Zoom to part", () => viewer.fitSolids(new Set([id]))),
+      menuItem("Part info…", () => showPartInfo(info, id, x, y)),
+    );
+    const sep = document.createElement("div");
+    sep.className = "ctx-sep";
+    ctxMenu.appendChild(sep);
+  }
+  ctxMenu.append(
+    menuItem("Show all parts", () => {
+      hiddenParts.clear();
+      applyHiddenParts();
+    }, hiddenParts.size > 0),
+    menuItem("Fit view", () => viewer.fit()),
+  );
+  placeAt(ctxMenu, x, y);
+};
+
+function showPartInfo(info: SolidInfo, solidId: number, x: number, y: number): void {
+  if (!mesh || !solidOfTri) return;
+  const ids = new Set([solidId]);
+  viewer.setHighlightSolids(ids); // keep the part marked while the popup is up
+  // Triangles, bbox, surface area and signed volume (divergence theorem — only meaningful
+  // for a closed mesh) of the body. Instances share solid ids, so everything covers ALL
+  // occurrences of a multiply-placed part (labelled accordingly below).
+  let tris = 0;
+  let area = 0;
+  let vol6 = 0; // 6 × signed volume
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  const idx = mesh.indices, pos = mesh.positions;
+  const p = [0, 0, 0, 0, 0, 0, 0, 0, 0];
+  for (let t = 0; t < solidOfTri.length; t++) {
+    if (!ids.has(solidOfTri[t]!)) continue;
+    tris++;
+    for (let e = 0; e < 3; e++) {
+      const v = idx[t * 3 + e]! * 3;
+      const px = pos[v]!, py = pos[v + 1]!, pz = pos[v + 2]!;
+      p[e * 3] = px; p[e * 3 + 1] = py; p[e * 3 + 2] = pz;
+      if (px < minX) minX = px;
+      if (px > maxX) maxX = px;
+      if (py < minY) minY = py;
+      if (py > maxY) maxY = py;
+      if (pz < minZ) minZ = pz;
+      if (pz > maxZ) maxZ = pz;
+    }
+    // cross(b - a, c - a): 2 × area vector; a · (b × c): 6 × signed tet volume from the origin
+    const abx = p[3]! - p[0]!, aby = p[4]! - p[1]!, abz = p[5]! - p[2]!;
+    const acx = p[6]! - p[0]!, acy = p[7]! - p[1]!, acz = p[8]! - p[2]!;
+    const cx = aby * acz - abz * acy;
+    const cy = abz * acx - abx * acz;
+    const cz = abx * acy - aby * acx;
+    area += Math.sqrt(cx * cx + cy * cy + cz * cz) / 2;
+    vol6 += p[0]! * (p[4]! * p[8]! - p[5]! * p[7]!)
+          - p[1]! * (p[3]! * p[8]! - p[5]! * p[6]!)
+          + p[2]! * (p[3]! * p[7]! - p[4]! * p[6]!);
+  }
+  let open = 0;
+  if (defectEdges) {
+    for (let s = 0; s < defectEdges.count; s++) if (ids.has(defectEdges.solidOfSeg[s]!)) open++;
+  }
+  const isSheet = openSolidsSet.has(solidId);
+
+  partPop.textContent = "";
+  const title = document.createElement("div");
+  title.className = "ctx-title";
+  title.textContent = info.label;
+  title.title = title.textContent;
+  partPop.appendChild(title);
+  const dl = document.createElement("dl");
+  dl.className = "info";
+  const row = (dt: string, dd: string): void => {
+    const div = document.createElement("div");
+    const dtEl = document.createElement("dt");
+    dtEl.textContent = dt;
+    const ddEl = document.createElement("dd");
+    ddEl.textContent = dd;
+    div.append(dtEl, ddEl);
+    dl.appendChild(div);
+  };
+  if (info.partName && info.partName !== info.label) row("Part", info.partName);
+  if (info.occurrences > 1) row("Instances", `×${info.occurrences}`);
+  row("Triangles", tris.toLocaleString());
+  if (tris > 0) {
+    row(info.occurrences > 1 ? "Extent (all)" : "Size",
+      `${fmtLen(maxX - minX)} × ${fmtLen(maxY - minY)} × ${fmtLen(maxZ - minZ)} mm`);
+    // Volume needs a closed surface — an open or sheet body would give a bogus number.
+    if (!isSheet && open === 0) row(info.occurrences > 1 ? "Volume (all)" : "Volume", fmtVol(Math.abs(vol6) / 6));
+    row(info.occurrences > 1 ? "Area (all)" : "Surface area", fmtArea(area));
+  }
+  row("Type", isSheet ? "sheet body (open by design)"
+    : open === 0 ? "solid · watertight"
+    : `solid · ${open.toLocaleString()} open edge${open === 1 ? "" : "s"}`);
+  partPop.appendChild(dl);
+  placeAt(partPop, x, y);
+}
+
+document.addEventListener("pointerdown", (ev) => {
+  if (ctxMenu.hidden && partPop.hidden) return;
+  const t = ev.target as Node;
+  if (ctxMenu.contains(t) || partPop.contains(t)) return;
+  closeMenus();
+});
+document.addEventListener("keydown", (ev) => {
+  if (ev.key === "Escape") closeMenus();
+});
+// Zooming under an open menu would leave it hovering over the wrong spot.
+document.addEventListener("wheel", () => {
+  if (!ctxMenu.hidden || !partPop.hidden) closeMenus();
+}, { capture: true, passive: true });
 
 // ---- export ----
 exportBtn.addEventListener("click", () => {
@@ -484,6 +690,14 @@ tEdgesOnly.addEventListener("change", () => {
     viewer.setFeatureEdges(true);
   }
 });
+tSection.addEventListener("change", () => {
+  viewer.setSection(tSection.checked);
+  sectionRow.hidden = !tSection.checked;
+});
+$<HTMLButtonElement>("secX").addEventListener("click", () => viewer.setSectionAxis("x"));
+$<HTMLButtonElement>("secY").addEventListener("click", () => viewer.setSectionAxis("y"));
+$<HTMLButtonElement>("secZ").addEventListener("click", () => viewer.setSectionAxis("z"));
+$<HTMLButtonElement>("secFlip").addEventListener("click", () => viewer.flipSection());
 
 let orthoOn = false;
 projBtn.addEventListener("click", () => {
@@ -581,6 +795,18 @@ function fmtLen(v: number): string {
 function fmtDims(b: [number, number, number, number, number, number]): string {
   return `${fmtLen(b[3] - b[0])} × ${fmtLen(b[4] - b[1])} × ${fmtLen(b[5] - b[2])} mm`;
 }
+/** mm³, switching to cm³ from 1000 mm³ up (the natural unit for printable parts). */
+function fmtVol(v: number): string {
+  return v >= 1000
+    ? `${(v / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} cm³`
+    : `${v.toLocaleString(undefined, { maximumFractionDigits: 2 })} mm³`;
+}
+/** mm², switching to cm² from 1000 mm² up. */
+function fmtArea(a: number): string {
+  return a >= 1000
+    ? `${(a / 100).toLocaleString(undefined, { maximumFractionDigits: 2 })} cm²`
+    : `${a.toLocaleString(undefined, { maximumFractionDigits: 2 })} mm²`;
+}
 function fmtDate(ts: string | undefined): string {
   if (!ts) return "—";
   const d = new Date(ts);
@@ -598,6 +824,8 @@ function setStatus(text: string, error = false): void {
 }
 function showOverlay(text: string): void {
   overlayText.textContent = text;
+  progressBar.hidden = true;
+  progressFill.style.width = "0%";
   overlay.hidden = false;
 }
 function hideOverlay(): void {

@@ -123,6 +123,13 @@
           <label class="toggle"><input type="checkbox" id="tEdgesOnly" /> CAD edges only (hide surfaces)</label>
           <label class="toggle"><input type="checkbox" id="tWire" /> Wireframe (mesh)</label>
           <label class="toggle"><input type="checkbox" id="tEdges" /> Highlight open edges</label>
+          <label class="toggle"><input type="checkbox" id="tSection" disabled /> Section view (cut plane)</label>
+          <div class="section-row" id="sectionRow" hidden>
+            <button type="button" class="parts-btn" id="secX" title="Section perpendicular to X">X</button>
+            <button type="button" class="parts-btn" id="secY" title="Section perpendicular to Y">Y</button>
+            <button type="button" class="parts-btn" id="secZ" title="Section perpendicular to Z">Z</button>
+            <button type="button" class="parts-btn" id="secFlip" title="Keep the other half">Flip</button>
+          </div>
         </section>
 
         <section class="panel" id="partsPanel" hidden>
@@ -179,7 +186,7 @@
         <div id="viewport"></div>
         <div class="vp-label">Tessellated</div>
         <div class="vp-stats" id="stats"></div>
-        <div class="hint">drag to orbit around cursor · scroll to zoom at cursor · right-drag to pan · 1–6 views · F fit</div>
+        <div class="hint">drag to orbit around cursor · scroll to zoom at cursor · right-drag to pan · right-click part for menu · 1–6 views · F fit</div>
         <div class="vp-controls">
           <button id="projBtn" class="vp-btn" title="Toggle perspective / orthographic">Persp</button>
           <button id="fitBtn" class="vp-btn">Fit view</button>
@@ -197,7 +204,11 @@
           </span>
         </div>
 
-        <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p></div>
+        <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p><div id="progressBar" class="progress" hidden><div id="progressFill"></div></div></div>
+
+        <!-- right-click context menu + part-info popup (filled by main.ts) -->
+        <div id="ctxMenu" class="ctx-menu" hidden></div>
+        <div id="partPop" class="ctx-menu part-pop" hidden></div>
       </main>
     </div>
 

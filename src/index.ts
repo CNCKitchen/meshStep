@@ -88,7 +88,20 @@ export { extractColors, type ModelColors, type RGB } from "./step/styles.ts";
 export { extractStructure, type PartNode, type PartBody } from "./step/structure.ts";
 export { estimateStepSize, autoTessellation, type SizeEstimate } from "./step/measure.ts";
 
+export interface ImportProgress {
+  /** "parse" fires once before the B-rep build (duration unknown → indeterminate UI);
+   * "tessellate" advances per work unit (edges + faces + solids, so assemblies progress per part);
+   * "finalize" fires once before orientation / assembly placement / the diagnostics audit. */
+  phase: "parse" | "tessellate" | "finalize";
+  /** Work units completed / total. Both are 0 for phases without a known total. */
+  done: number;
+  total: number;
+}
+
 export interface ImportOptions {
+  /** Progress hook for long imports. Called synchronously and often (once per tessellation work
+   * unit) — keep it cheap and throttle any UI updates on the consumer side. */
+  onProgress?: (p: ImportProgress) => void;
   /** Run the curvature-adaptive isotropic remesh (default false). The raw tessellation is already
    * watertight, curvature-adaptive and ruling-aligned on fillets; the isotropic pass predates that
    * pipeline and now measurably degrades it (destroys the aligned diagonals, adds normal noise,
@@ -128,7 +141,9 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   const surfaceDev = opts.surfaceDeviation ?? 0.01;
   const maxEdge = opts.maxEdge ?? 1.0;
   const normalDevRad = (opts.normalDeviation ?? 15) * Math.PI / 180;
+  const onProgress = opts.onProgress;
 
+  onProgress?.({ phase: "parse", done: 0, total: 0 });
   const brep = buildBrep(src);
   const colors = extractColors(brep.table, brep.solids);
   const structure = extractStructure(brep.table, brep.solids);
@@ -136,8 +151,12 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   // even without remeshing. The robust CDT handles the resulting dense/collinear boundaries.
   // maxEdge is a pure upper CAP on segment length — it must never loosen the chord tolerance
   // (a CAD-style export sets a huge max edge to mean "follow curvature", not "coarsen 20×").
-  const tess: TessOptions = { chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad, trace: opts.trace };
+  const tess: TessOptions = {
+    chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad, trace: opts.trace,
+    onProgress: onProgress && ((done, total) => onProgress({ phase: "tessellate", done, total })),
+  };
   const result = tessellate(brep, tess);
+  onProgress?.({ phase: "finalize", done: 0, total: 0 });
   // Assembly placements per solid (empty for a single part); applied to the final mesh below.
   // A part with N occurrences carries N frames and is replicated after meshing.
   const solidXf = new Map<number, Frame[]>();
