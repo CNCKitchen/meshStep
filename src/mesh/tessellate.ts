@@ -1559,14 +1559,14 @@ function tessellatePeriodicUnroll(
     // ends at one axial station, exposed half at another, joined by two constant-a waterline
     // segments). Sorting collapses each vertical segment into one a-slot in arbitrary order and
     // zigzags the boundary, which tangles the CDT constraints into surface-crossing triangles.
-    const buildRim = (rim: { p3: Vec3[]; p2: P2[]; wind: number }): { p3: Vec3[]; p2: P2[] } => {
+    const buildRim = (rim: { p3: Vec3[]; p2: P2[]; wind: number }, atSeam = seam): { p3: Vec3[]; p2: P2[] } => {
       let p3 = rim.p3, p2 = rim.p2;
       if (rim.wind < 0) { p3 = p3.slice().reverse(); p2 = p2.slice().reverse(); }
       const n = p2.length;
       let k = 0, best = Infinity;
-      for (let i = 0; i < n; i++) { const d = norm(p2[i]![c] - seam); if (d < best) { best = d; k = i; } }
+      for (let i = 0; i < n; i++) { const d = norm(p2[i]![c] - atSeam); if (d < best) { best = d; k = i; } }
       const outP3: Vec3[] = [p3[k]!];
-      const auv: [number, number][] = [[seam + best, p2[k]![stackC]]];
+      const auv: [number, number][] = [[atSeam + best, p2[k]![stackC]]];
       for (let i = 1; i < n; i++) {
         const j = (k + i) % n, pj = (k + i - 1) % n;
         let d = p2[j]![c] - p2[pj]![c];
@@ -1690,6 +1690,7 @@ function tessellatePeriodicUnroll(
           }
           if (margin > bestMargin) { bestMargin = margin; uStar = uk; }
         }
+        if (DBG && !Number.isFinite(uStar)) console.error(`[unroll] fid=${fid} exact-seam: no meridian crosses each rim exactly once (weaving rims)`);
         if (Number.isFinite(uStar)) {
           const b2 = buildRimCut(rims[0]!, uStar), t2 = buildRimCut(rims[1]!, uStar);
           if (b2 && t2) {
@@ -1698,6 +1699,42 @@ function tessellatePeriodicUnroll(
             holeLoops = holes.map((h) => ({ p3: h.p3, p2: h.p2.map((q) => toP2(normTo2(q[c]), q[stackC])) }));
             if (DBG) console.error(`[unroll] fid=${fid} exact-seam rebuild at ${uStar.toFixed(4)} (margin ${bestMargin.toExponential(1)})`);
           }
+        }
+      }
+      // A hole whose consecutive (u,v) points jump more than half the period got FOLDED by the
+      // seam normalisation — its signature and consumers are described at the seam-path rescue
+      // below (declared here because the vertex-cut retry must not adopt a seam that folds one).
+      const foldedHole = (): boolean => holeLoops.some((h) => {
+        for (let i = 0; i < h.p2.length; i++) {
+          if (Math.abs(h.p2[(i + 1) % h.p2.length]![c] - h.p2[i]![c]) > period / 2) return true;
+        }
+        return false;
+      });
+      // VERTEX-CUT SEAM RETRY. The exact-seam rebuild above needs a meridian crossing each rim
+      // exactly ONCE — a rim that weaves across the whole circumference has no such meridian (a
+      // slitted collet cone: every slit notches the band, so the top rim backtracks at every
+      // angle), and the conflicted polygon used to fall through to the CDT, which drops the
+      // crossed constraint and rescue-fills garbage chords across the face. But that conflict is
+      // a sampling lottery, not topology: only the two SLANTED seam sides (each rim cut at its
+      // own vertex nearest the seam) can cross a rim chord passing near the cut, so a different
+      // seam angle — different cut vertices, different slants — is usually simple. Scan the
+      // period for one and adopt the first conflict-free vertex-cut; every cut lands on an
+      // existing rim vertex, so the weld/watertight story is identical to the original
+      // construction. Faces whose first polygon was already simple never reach this.
+      if (conflicted()) {
+        const wasFolded = foldedHole();
+        const prevOuter = outer, prevHoles = holeLoops;
+        for (let k = 0; k < K; k++) {
+          const seamK = ((k + 0.5) * period) / K;
+          const b = buildRim(rims[0]!, seamK), t = buildRim(rims[1]!, seamK);
+          outer = { p3: [...b.p3, ...t.p3.slice().reverse()], p2: [...b.p2, ...t.p2.slice().reverse()] };
+          const normToK = (x: number): number => { let d = (x - seamK) % period; if (d < 0) d += period; return seamK + d; };
+          holeLoops = holes.map((h) => ({ p3: h.p3, p2: h.p2.map((q) => toP2(normToK(q[c]), q[stackC])) }));
+          if (!conflicted() && (wasFolded || !foldedHole())) {
+            if (DBG) console.error(`[unroll] fid=${fid} vertex-cut seam retry: adopted seam=${seamK.toFixed(4)} (k=${k})`);
+            break;
+          }
+          outer = prevOuter; holeLoops = prevHoles;
         }
       }
       // SEAM-PATH RESCUE (slanted / re-placed seam with sampled sides). Two fold classes reach
@@ -1716,12 +1753,6 @@ function tessellatePeriodicUnroll(
       // The seam sides are sampled at IDENTICAL stack stations one period apart — identical 3D
       // points, so the weld seals the cut (the tessellatePeriodicRegion seam-pair trick). Output
       // stays in original (u,v): a parallelogram domain, which the grid CDT handles unchanged.
-      const foldedHole = (): boolean => holeLoops.some((h) => {
-        for (let i = 0; i < h.p2.length; i++) {
-          if (Math.abs(h.p2[(i + 1) % h.p2.length]![c] - h.p2[i]![c]) > period / 2) return true;
-        }
-        return false;
-      });
       if (holes.length && (conflicted() || foldedHole() || holeLoops.some((h) => countSelfIntersections(h.p2) > 0))) {
         const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
         const unw = holes.map((h) => {

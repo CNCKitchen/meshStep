@@ -1063,6 +1063,19 @@
     },
     "skipped": {}
   },
+  "Tapered Collet Insert": {
+    "hash": "4278c821ece59d9fc608cd43818d0679999b26b36ab8ae2d942ff8e2b5d8e521",
+    "verts": 12406,
+    "tris": 24812,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 5629.777,
+    "dispatch": {
+      "grid": 12,
+      "unroll": 1
+    },
+    "skipped": {}
+  },
   "tool": {
     "hash": "df9beb0f4ee09090e1fd9dd46834e2c3c4e1897430bd4ab1b902a7a2da0e54c8",
     "verts": 29677,
