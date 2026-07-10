@@ -8,6 +8,8 @@ import { makeSurface, type Surface } from "./geom/surfaces.ts";
 import type { Frame } from "./geom/placement.ts";
 import type { IndexedMesh } from "./io/stl.ts";
 import { meshDefects, type ImportDiagnostics } from "./mesh/diag.ts";
+import { extractColors, type ModelColors } from "./step/styles.ts";
+import { extractStructure, type PartNode } from "./step/structure.ts";
 
 /** Move each part's vertices into its assembly world placement(s). Each vertex belongs to one solid
  * (bodies are welded independently), so the first instance transforms in place; a part used N times
@@ -82,6 +84,8 @@ export { parseStepHeader, type StepHeader } from "./step/header.ts";
 export type { MeshResult, TessOptions } from "./mesh/tessellate.ts";
 export type { BrepModel } from "./brep/build.ts";
 export { meshDefects, type ImportDiagnostics, type MeshWarning, type WarningCode, type WarningSeverity, type EdgeDefects } from "./mesh/diag.ts";
+export { extractColors, type ModelColors, type RGB } from "./step/styles.ts";
+export { extractStructure, type PartNode, type PartBody } from "./step/structure.ts";
 
 export interface ImportOptions {
   /** Run the curvature-adaptive isotropic remesh (default false). The raw tessellation is already
@@ -107,6 +111,15 @@ export interface ImportResult extends MeshResult {
   diagnostics: ImportDiagnostics;
   /** Length-unit label detected in the STEP file (e.g. "mm", "inch"); all mesh coordinates are in mm. */
   units: string;
+  /** STEP presentation colors (STYLED_ITEM chains), or null when the file has none. Palette-indexed
+   * per face/solid with the same ids as faceOfTri/solidOfTri — `palette[faceColor.get(faceOfTri[t])]`
+   * is triangle t's sRGB color, and faces sharing a palette index form one color group. */
+  colors: ModelColors | null;
+  /** Part/component tree from the STEP product structure. The root is the top product (or the
+   * single part); each node's `bodies[].id` keys into solidOfTri, so a viewer can hide or
+   * highlight a part by filtering triangles on those ids. A part occurring N times in the
+   * assembly is one node with `occurrences: N` (instances share solid ids). */
+  structure: PartNode;
 }
 
 /** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
@@ -116,6 +129,8 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   const normalDevRad = (opts.normalDeviation ?? 15) * Math.PI / 180;
 
   const brep = buildBrep(src);
+  const colors = extractColors(brep.table, brep.solids);
+  const structure = extractStructure(brep.table, brep.solids);
   // Sample boundaries to the surface-deviation tolerance so feature edges (rims, holes) are fine
   // even without remeshing. The robust CDT handles the resulting dense/collinear boundaries.
   // maxEdge is a pure upper CAP on segment length — it must never loosen the chord tolerance
@@ -134,7 +149,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   if (opts.remesh !== true || brep.solids.length === 0) {
     orientConsistent(result.mesh, result.solidOfTri);
     const placed = applyAssemblyPlacement(result.mesh, result.faceOfTri, result.solidOfTri, solidXf);
-    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label };
+    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure };
   }
 
   const surf = new Map<number, Surface | null>();
@@ -151,5 +166,5 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   const solidOfTri = Uint32Array.from(r.faceOfTri, (f) => solidOfFace.get(f) ?? 0);
   orientConsistent(r.mesh, solidOfTri); // fix any triangles flipped by smoothing
   const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf);
-  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label };
+  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure };
 }

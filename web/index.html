@@ -116,11 +116,18 @@
 
         <section class="panel">
           <h2>3 · Display</h2>
+          <label class="toggle"><input type="checkbox" id="tColors" checked disabled /> Model colors (from STEP)</label>
           <label class="toggle"><input type="checkbox" id="tFeature" checked /> Surface boundaries (CAD faces)</label>
           <label class="toggle"><input type="checkbox" id="tTransparent" /> Transparent surfaces</label>
           <label class="toggle"><input type="checkbox" id="tEdgesOnly" /> CAD edges only (hide surfaces)</label>
           <label class="toggle"><input type="checkbox" id="tWire" /> Wireframe (mesh)</label>
           <label class="toggle"><input type="checkbox" id="tEdges" /> Highlight open edges</label>
+        </section>
+
+        <section class="panel" id="partsPanel" hidden>
+          <h2>Parts</h2>
+          <p class="parts-hint">Hover to highlight · uncheck to hide</p>
+          <div id="partsTree" class="parts-tree"></div>
         </section>
 
         <section class="panel">
@@ -167,7 +174,7 @@
         <div id="viewport"></div>
         <div class="vp-label">Tessellated</div>
         <div class="vp-stats" id="stats"></div>
-        <div class="hint">drag to orbit · scroll to zoom</div>
+        <div class="hint">drag to orbit around cursor · scroll to zoom at cursor · right-drag to pan · 1–6 views · F fit</div>
         <div class="vp-controls">
           <button id="projBtn" class="vp-btn" title="Toggle perspective / orthographic">Persp</button>
           <button id="fitBtn" class="vp-btn">Fit view</button>

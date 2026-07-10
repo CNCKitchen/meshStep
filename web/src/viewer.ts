@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { filterTriangles, filterSegments, type EdgeSet } from "./mesh-utils.ts";
 
 interface Content {
   group: THREE.Group;
@@ -9,12 +10,30 @@ interface Content {
   edges: THREE.LineSegments | null;
   feature: THREE.LineSegments | null;
   reference: THREE.Mesh | null;
+  highlight: THREE.Mesh | null;
 }
 
-const BASE_COLOR = 0x6f8fb0;
+export const BASE_COLOR = 0x6f8fb0;
 const REF_COLOR = 0x33dd88;
 const EDGE_COLOR = 0xff3b30;
 const FEATURE_COLOR = 0x0b0e12;
+const HIGHLIGHT_COLOR = 0xffa62b;
+
+type CameraView = "top" | "bottom" | "front" | "behind" | "left" | "right" | "iso";
+
+/** Keyboard camera presets (Ctrl+0 = isometric, like a browser zoom reset). */
+const VIEW_KEYS: Record<string, CameraView> = {
+  "0": "iso",
+  "1": "top",
+  "2": "bottom",
+  "3": "front",
+  "4": "behind",
+  "5": "left",
+  "6": "right",
+};
+
+/** Isometric view direction (offset from the part toward the camera), Z-up. */
+const ISO_DIR = new THREE.Vector3(0.7, -0.8, 0.55);
 
 /**
  * A single orbit-controlled viewport showing the tessellated mesh, with optional
@@ -30,6 +49,29 @@ export class Viewer {
   private content: Content;
   private container: HTMLElement;
 
+  // bumpMesh-style navigation (same scheme as smartInfillGenerator): left-drag
+  // orbits around the surface point under the cursor (free over the poles),
+  // the wheel zooms toward the cursor, and right-drag pans in screen space.
+  // OrbitControls keeps only damping + right-drag pan; rotation and zoom are
+  // handled manually below.
+  private pivotMarker: THREE.Mesh;
+  private orbitPivot: THREE.Vector3 | null = null; // active drag pivot
+  private lastOrbitPivot: THREE.Vector3 | null = null; // fallback between drags
+  private orbitStart: { x: number; y: number } | null = null;
+  private orbitLast: { x: number; y: number } | null = null;
+  private orbiting = false;
+  private raycaster = new THREE.Raycaster();
+  private pointerNdc = new THREE.Vector2();
+  private _oq1 = new THREE.Quaternion();
+  private _oq2 = new THREE.Quaternion();
+  private _oRight = new THREE.Vector3();
+  private _oTmp = new THREE.Vector3();
+  private _oTmp2 = new THREE.Vector3();
+  private _oDir = new THREE.Vector3();
+  /** Clearance (rad, ~2.3°) kept between the view axis and the ±Z pole, where
+   *  OrbitControls' up = +Z `lookAt` is degenerate and the azimuth snaps 180°. */
+  private readonly poleEps = 0.04;
+
   // toggle state
   private orthoOn = false;
   private showWire = false;
@@ -37,8 +79,23 @@ export class Viewer {
   private showFeature = true; // signature CAD face-border look, on by default
   private showReference = false;
   private deviationOn = false;
+  private showColors = true; // STEP face colors, on by default when the file has them
   private transparentOn = false;
   private solidVisible = true; // false => CAD-edges-only view
+
+  // Per-vertex color sources for the solid mesh; applyVisibility picks which one is active
+  // (deviation analysis wins over the model's own face colors while its toggle is on).
+  private faceColors: Float32Array | null = null;
+  private devColors: Float32Array | null = null;
+
+  // Per-part visibility: the full (unfiltered) triangle index plus per-triangle / per-segment
+  // solid ids, so hiding a part rebuilds the drawn subsets without touching the source data.
+  private solidOfTri: Uint32Array | null = null;
+  private fullIndex: Uint32Array | null = null;
+  private boundarySet: EdgeSet | null = null;
+  private featureSet: EdgeSet | null = null;
+  private hiddenSolids = new Set<number>();
+  private wireDirty = false; // wireframe geometry lags hidden-part changes until it is shown
 
   constructor(container: HTMLElement) {
     this.container = container;
@@ -48,27 +105,42 @@ export class Viewer {
 
     this.scene.background = new THREE.Color(0x14181d);
 
+    // Engineering convention: Z up (STEP models are typically Z-up).
     this.persp = new THREE.PerspectiveCamera(45, 1, 0.01, 1e6);
-    this.persp.position.set(60, 45, 80);
+    this.persp.up.set(0, 0, 1);
+    this.persp.position.set(70, -80, 55);
     this.ortho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1e6);
-    this.ortho.position.set(60, 45, 80);
+    this.ortho.up.set(0, 0, 1);
+    this.ortho.position.set(70, -80, 55);
     this.camera = this.persp;
 
     this.controls = this.makeControls(new THREE.Vector3());
 
-    // Lights.
+    // Lights (Z-up: key from above-front, fill from behind-below).
     const hemi = new THREE.HemisphereLight(0xffffff, 0x404048, 1.0);
+    hemi.position.set(0, 0, 1);
     this.scene.add(hemi);
     const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(1, 1.5, 1);
+    key.position.set(1, -1.2, 1.8);
     this.scene.add(key);
     const fill = new THREE.DirectionalLight(0xffffff, 0.7);
-    fill.position.set(-1, -0.5, -1);
+    fill.position.set(-1.5, 1, -0.5);
     this.scene.add(fill);
+
+    // Small red sphere marking the live orbit centre (drawn over the part).
+    this.pivotMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(1, 16, 10),
+      new THREE.MeshBasicMaterial({ color: 0xff2222, depthTest: false })
+    );
+    this.pivotMarker.renderOrder = 10;
+    this.pivotMarker.visible = false;
+    this.scene.add(this.pivotMarker);
 
     const group = new THREE.Group();
     this.scene.add(group);
-    this.content = { group, solid: null, wire: null, edges: null, feature: null, reference: null };
+    this.content = { group, solid: null, wire: null, edges: null, feature: null, reference: null, highlight: null };
+
+    this.installNavigation(this.renderer.domElement);
 
     window.addEventListener("resize", () => this.resize());
     this.resize();
@@ -90,7 +162,16 @@ export class Viewer {
     const c = new OrbitControls(this.camera, this.renderer.domElement);
     c.enableDamping = true;
     c.dampingFactor = 0.08;
-    // Free orbit: full vertical range (view from directly above or below), no azimuth limit.
+    // Right-drag pans in the screen plane (not along the ground).
+    c.screenSpacePanning = true;
+    // Rotation + zoom are manual (pivot-on-cursor orbit, cursor-centric
+    // zoom — see installNavigation). OrbitControls keeps damping + R-drag pan.
+    c.enableRotate = false;
+    c.enableZoom = false;
+    // Full polar range: the manual orbit (onOrbitMove) already clamps its own
+    // pitch to poleEps, so the reconstruction never lands on the ±Z pole
+    // during a drag. The only on-pole placements are the top/bottom presets
+    // (setCameraView), which set up = +Y so lookAt stays well-defined.
     c.minPolarAngle = 0;
     c.maxPolarAngle = Math.PI;
     c.target.copy(target);
@@ -131,6 +212,240 @@ export class Viewer {
     this.controls = this.makeControls(target);
   }
 
+  // ---------- navigation (orbit / move / zoom) ----------
+  // Same camera routine as smartInfillGenerator (bumpMesh-style): left-drag
+  // orbits around the surface point under the cursor with no polar clamping,
+  // the wheel zooms toward the cursor, and right-drag pans in screen space.
+
+  private installNavigation(canvas: HTMLCanvasElement): void {
+    canvas.addEventListener("pointerdown", (ev) => {
+      if (ev.button === 0) this.beginOrbit(ev);
+    });
+    // Move + release on document so a drag that leaves the canvas still tracks.
+    document.addEventListener("pointermove", this.onOrbitMove);
+    document.addEventListener("pointerup", this.onOrbitUp);
+    document.addEventListener("keydown", this.onViewKey);
+    canvas.addEventListener("wheel", this.onWheel, { passive: false });
+  }
+
+  /** Meshes the orbit ray can land on: the model itself (even in the
+   *  edges-only view, where the solid is hidden but still the part) and the
+   *  reference overlay while it is shown. */
+  private orbitTargets(): THREE.Object3D[] {
+    const list: THREE.Object3D[] = [];
+    if (this.content.solid) list.push(this.content.solid);
+    if (this.content.reference?.visible) list.push(this.content.reference);
+    return list;
+  }
+
+  /** Nearest surface point under the cursor, or null if the ray misses. */
+  private pickPoint(ev: PointerEvent): THREE.Vector3 | null {
+    const targets = this.orbitTargets();
+    if (!targets.length) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNdc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hits = this.raycaster.intersectObjects(targets, false);
+    return hits.length ? hits[0].point.clone() : null;
+  }
+
+  private beginOrbit(ev: PointerEvent): void {
+    // Orbit about the surface under the cursor; fall back to the last pivot,
+    // then to the controls target, so a drag off the part still rotates.
+    const pivot = this.pickPoint(ev) ?? this.lastOrbitPivot ?? this.controls.target.clone();
+    this.orbitPivot = pivot.clone();
+    this.lastOrbitPivot = pivot.clone();
+    this.orbitStart = { x: ev.clientX, y: ev.clientY };
+    this.orbitLast = { x: ev.clientX, y: ev.clientY };
+    this.orbiting = false; // promoted once the drag passes the threshold
+  }
+
+  private showPivotMarker(): void {
+    const m = this.pivotMarker;
+    if (!this.orbitPivot) return;
+    m.position.copy(this.orbitPivot);
+    // ~1.5% of the visible (half-)frustum height at the pivot: same apparent
+    // size at any zoom, in either projection.
+    const halfH = this.orthoOn
+      ? this.ortho.top / this.ortho.zoom
+      : this.persp.position.distanceTo(this.orbitPivot) * Math.tan((this.persp.fov * Math.PI) / 360);
+    m.scale.setScalar(halfH * 0.015);
+    m.visible = true;
+  }
+
+  private onOrbitMove = (ev: PointerEvent): void => {
+    if (!this.orbitPivot || !this.orbitLast) return;
+    if (!this.orbiting) {
+      const moved = Math.hypot(ev.clientX - this.orbitStart!.x, ev.clientY - this.orbitStart!.y);
+      if (moved < 3) return; // tolerate a click without flashing the marker
+      this.orbiting = true;
+      this.showPivotMarker();
+    }
+    const dx = ev.clientX - this.orbitLast.x;
+    const dy = ev.clientY - this.orbitLast.y;
+    this.orbitLast = { x: ev.clientX, y: ev.clientY };
+    if (dx === 0 && dy === 0) return;
+
+    const pivot = this.orbitPivot;
+    const rotSpeed = 0.005;
+    // Pure quaternion rotation: yaw about world Z, pitch about the camera's
+    // right axis.
+    this.camera.updateMatrixWorld();
+    this._oRight.setFromMatrixColumn(this.camera.matrixWorld, 0).normalize(); // camera right
+
+    // Pitch clamp: keep the view direction clear of the ±Z pole. Yaw about Z
+    // doesn't change the tilt; only pitch can drive the look direction onto
+    // the Z axis. There, OrbitControls' per-frame `lookAt(target)` with
+    // up = +Z is degenerate and the azimuth snaps 180° — and a fast drag can
+    // shove the camera *past* the pole in one frame, so the snap flip-flops.
+    // Limiting the pitch to land just shy of vertical turns that jump into a
+    // clean stop.
+    const eps = this.poleEps;
+    this._oDir.copy(this.controls.target).sub(this.camera.position).normalize();
+    let pitch = -dy * rotSpeed;
+    const ang0 = Math.acos(Math.max(-1, Math.min(1, this._oDir.z))); // tilt from +Z, [0,π]
+    this._oq2.setFromAxisAngle(this._oRight, pitch);
+    const angP = Math.acos(
+      Math.max(-1, Math.min(1, this._oTmp.copy(this._oDir).applyQuaternion(this._oq2).z))
+    );
+    if (angP < eps || angP > Math.PI - eps) {
+      const clamped = Math.max(eps, Math.min(Math.PI - eps, angP));
+      const denom = angP - ang0;
+      pitch = Math.abs(denom) > 1e-9 ? pitch * ((clamped - ang0) / denom) : 0;
+    }
+
+    this._oq1.setFromAxisAngle(this._oTmp.set(0, 0, 1), -dx * rotSpeed);
+    this._oq2.setFromAxisAngle(this._oRight, pitch);
+    this._oq1.premultiply(this._oq2);
+
+    // Swing both the camera and the orbit target around the pivot so
+    // OrbitControls (which owns damping + pan) stays consistent.
+    this._oTmp.copy(this.camera.position).sub(pivot).applyQuaternion(this._oq1);
+    this.camera.position.copy(pivot).add(this._oTmp);
+    this._oTmp2.copy(this.controls.target).sub(pivot).applyQuaternion(this._oq1);
+    this.controls.target.copy(pivot).add(this._oTmp2);
+    this.camera.quaternion.premultiply(this._oq1);
+    this.camera.updateMatrixWorld();
+  };
+
+  private onOrbitUp = (): void => {
+    if (!this.orbitPivot) return;
+    this.orbitPivot = null;
+    this.orbitStart = null;
+    this.orbitLast = null;
+    if (this.orbiting) {
+      this.orbiting = false;
+      // Re-level: hand the up vector back to OrbitControls upright (the
+      // top/bottom presets set up = +Y; an orbit drag leaves them).
+      this.persp.up.set(0, 0, 1);
+      this.ortho.up.set(0, 0, 1);
+      this.camera.lookAt(this.controls.target);
+    }
+    this.pivotMarker.visible = false;
+  };
+
+  /** Cursor-centric zoom: keep the world point under the cursor pinned. */
+  private onWheel = (ev: WheelEvent): void => {
+    ev.preventDefault();
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const ndcX = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+    const factor = ev.deltaY > 0 ? 1 / 1.1 : 1.1;
+    if (this.orthoOn) {
+      // Scale the frustum, then shift so the cursor's world point re-projects
+      // to the same screen position.
+      this._oTmp.set(ndcX, ndcY, 0).unproject(this.ortho);
+      this.ortho.zoom = Math.max(0.05, Math.min(200, this.ortho.zoom * factor));
+      this.ortho.updateProjectionMatrix();
+      this._oTmp2.set(ndcX, ndcY, 0).unproject(this.ortho);
+      this._oTmp.sub(this._oTmp2);
+      this.ortho.position.add(this._oTmp);
+      this.controls.target.add(this._oTmp);
+    } else {
+      // Perspective: scale camera + target about the world point under the
+      // cursor at the target-plane depth — its projection stays pinned while
+      // everything grows/shrinks by `factor`.
+      const cam = this.persp;
+      cam.updateMatrixWorld();
+      const fwd = cam.getWorldDirection(this._oDir);
+      this._oTmp.set(ndcX, ndcY, 0.5).unproject(cam).sub(cam.position).normalize();
+      const denom = this._oTmp.dot(fwd);
+      const planeDist = this._oTmp2.copy(this.controls.target).sub(cam.position).dot(fwd);
+      if (denom < 1e-6 || planeDist < 1e-9) return;
+      const p = this._oTmp.multiplyScalar(planeDist / denom).add(cam.position);
+      const s = 1 / factor;
+      // Don't dolly into the near plane.
+      if (factor > 1 && cam.position.distanceTo(p) * s < cam.near * 2) return;
+      cam.position.sub(p).multiplyScalar(s).add(p);
+      this.controls.target.sub(p).multiplyScalar(s).add(p);
+    }
+    this.controls.update();
+  };
+
+  private onViewKey = (ev: KeyboardEvent): void => {
+    if (ev.altKey || ev.shiftKey) return;
+    // Don't hijack keys while typing in a field.
+    const t = ev.target as HTMLElement | null;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    const mod = ev.ctrlKey || ev.metaKey;
+    if (!mod && (ev.key === "f" || ev.key === "F")) {
+      ev.preventDefault();
+      this.fit();
+      return;
+    }
+    const view = VIEW_KEYS[ev.key];
+    if (!view || (!mod && ev.key === "0")) return;
+    ev.preventDefault();
+    this.setCameraView(view);
+  };
+
+  /** Snap to an axis (or isometric) view, framing the whole model. */
+  setCameraView(view: CameraView): void {
+    const s = this.content.solid;
+    if (!s) return;
+    const box = new THREE.Box3().expandByObject(s);
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
+
+    // dir: offset from the part toward the camera. up: which way is up on
+    // screen (top/bottom look along ±Z, where up = +Z would be degenerate).
+    let dir: THREE.Vector3;
+    const up = new THREE.Vector3(0, 0, 1);
+    switch (view) {
+      case "top": dir = new THREE.Vector3(0, 0, 1); up.set(0, 1, 0); break;
+      case "bottom": dir = new THREE.Vector3(0, 0, -1); up.set(0, 1, 0); break;
+      case "front": dir = new THREE.Vector3(0, -1, 0); break;
+      case "behind": dir = new THREE.Vector3(0, 1, 0); break;
+      case "left": dir = new THREE.Vector3(-1, 0, 0); break;
+      case "right": dir = new THREE.Vector3(1, 0, 0); break;
+      default: dir = ISO_DIR.clone().normalize(); break;
+    }
+
+    const dist = (radius / Math.sin((this.persp.fov * Math.PI) / 360)) * 1.4;
+    const pos = center.clone().addScaledVector(dir, dist);
+
+    this.persp.up.copy(up);
+    this.persp.position.copy(pos);
+    this.persp.near = dist / 100;
+    this.persp.far = dist * 100;
+    this.persp.updateProjectionMatrix();
+
+    this.ortho.up.copy(up);
+    this.ortho.position.copy(pos);
+    this.ortho.near = 0.01;
+    this.ortho.far = dist * 100;
+    this.ortho.zoom = 1;
+    this.setOrthoFrustum(radius * 2.4);
+    this.ortho.updateProjectionMatrix();
+
+    this.controls.target.copy(center);
+    this.controls.update();
+    // Re-pivot the next orbit drag on the part centre, not a stale surface hit.
+    this.lastOrbitPivot = center.clone();
+  }
+
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.controls.update();
@@ -146,7 +461,16 @@ export class Viewer {
     if (c.solid) {
       c.solid.visible = this.solidVisible;
       const m = c.solid.material as THREE.MeshStandardMaterial;
-      m.vertexColors = this.deviationOn && !!c.solid.geometry.getAttribute("color");
+      const active = this.deviationOn && this.devColors ? this.devColors
+        : this.showColors ? this.faceColors : null;
+      const geo = c.solid.geometry;
+      const cur = geo.getAttribute("color") as THREE.BufferAttribute | undefined;
+      if (!active) {
+        if (cur) geo.deleteAttribute("color");
+      } else if (!cur || cur.array !== active) {
+        geo.setAttribute("color", new THREE.Float32BufferAttribute(active, 3));
+      }
+      m.vertexColors = !!active;
       m.color.set(m.vertexColors ? 0xffffff : BASE_COLOR);
       m.transparent = this.transparentOn;
       m.opacity = this.transparentOn ? 0.4 : 1;
@@ -155,10 +479,21 @@ export class Viewer {
     }
   }
 
-  /** Replace the solid + wireframe + open-edge + surface-boundary geometry. */
-  setMesh(geometry: THREE.BufferGeometry, boundaryPositions: Float32Array, featurePositions: Float32Array): void {
+  /** Replace the solid + wireframe + open-edge + surface-boundary geometry. `faceColors` is the
+   * per-vertex STEP face-color attribute for this geometry (null = uncolored model); `solidOfTri`
+   * gives each triangle's body id (same order as the geometry's index) for per-part hiding. */
+  setMesh(geometry: THREE.BufferGeometry, boundary: EdgeSet, feature: EdgeSet, faceColors: Float32Array | null = null, solidOfTri: Uint32Array | null = null): void {
     const c = this.content;
     this.disposeMeshes(c);
+    this.faceColors = faceColors;
+    this.devColors = null; // stale deviation colors would mismatch the new vertex count
+    this.lastOrbitPivot = null; // a pivot on the old model would be off-surface
+    this.solidOfTri = solidOfTri;
+    this.fullIndex = (geometry.getIndex()?.array as Uint32Array) ?? null;
+    this.boundarySet = boundary;
+    this.featureSet = feature;
+    this.hiddenSolids.clear();
+    this.wireDirty = false;
 
     const mat = new THREE.MeshStandardMaterial({
       color: BASE_COLOR,
@@ -181,7 +516,7 @@ export class Viewer {
 
     // Surface boundaries (CAD face borders): depth-tested so hidden edges stay hidden.
     const featGeo = new THREE.BufferGeometry();
-    featGeo.setAttribute("position", new THREE.Float32BufferAttribute(featurePositions, 3));
+    featGeo.setAttribute("position", new THREE.Float32BufferAttribute(feature.positions, 3));
     const featMat = new THREE.LineBasicMaterial({ color: FEATURE_COLOR });
     c.feature = new THREE.LineSegments(featGeo, featMat);
     c.feature.visible = this.showFeature;
@@ -189,12 +524,33 @@ export class Viewer {
 
     // Open (defect) edges: drawn over everything in red so leaks are never hidden.
     const edgeGeo = new THREE.BufferGeometry();
-    edgeGeo.setAttribute("position", new THREE.Float32BufferAttribute(boundaryPositions, 3));
+    edgeGeo.setAttribute("position", new THREE.Float32BufferAttribute(boundary.positions, 3));
     const edgeMat = new THREE.LineBasicMaterial({ color: EDGE_COLOR, depthTest: false });
     c.edges = new THREE.LineSegments(edgeGeo, edgeMat);
     c.edges.renderOrder = 10;
     c.edges.visible = this.showEdges;
     c.group.add(c.edges);
+
+    // Part-highlight overlay: shares the solid's position buffer, starts with an empty index;
+    // setHighlightSolids swaps the index in and out (cheap — no vertex re-upload per hover).
+    const hlGeo = new THREE.BufferGeometry();
+    hlGeo.setAttribute("position", geometry.getAttribute("position"));
+    hlGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(0), 1));
+    hlGeo.boundingSphere = geometry.boundingSphere;
+    const hlMat = new THREE.MeshBasicMaterial({
+      color: HIGHLIGHT_COLOR,
+      transparent: true,
+      opacity: 0.45,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -2,
+      polygonOffsetUnits: -2,
+    });
+    c.highlight = new THREE.Mesh(hlGeo, hlMat);
+    c.highlight.renderOrder = 5; // over the solid + feature lines, under the red defect edges
+    c.highlight.visible = false;
+    c.group.add(c.highlight);
 
     this.applyVisibility();
   }
@@ -225,18 +581,74 @@ export class Viewer {
 
   /** Apply (or clear) per-vertex deviation colors on the solid mesh. */
   setDeviationColors(colors: Float32Array | null): void {
-    const c = this.content;
-    if (!c.solid) return;
-    const geo = c.solid.geometry;
-    if (colors) {
-      geo.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-    } else {
-      geo.deleteAttribute("color");
-    }
+    this.devColors = colors;
     this.applyVisibility();
   }
 
-  setWireframe(v: boolean): void { this.showWire = v; this.applyVisibility(); }
+  // ---------- per-part visibility / highlight ----------
+
+  /** Hide the given solid (body) ids: triangles, face borders and open-edge lines of those
+   * parts are dropped from the drawn subsets; the source buffers stay intact. */
+  setHiddenSolids(hidden: Iterable<number>): void {
+    const c = this.content;
+    if (!c.solid || !this.solidOfTri || !this.fullIndex) return;
+    this.hiddenSolids = new Set(hidden);
+    const geo = c.solid.geometry;
+    const index = this.hiddenSolids.size
+      ? filterTriangles(this.fullIndex, this.solidOfTri, this.hiddenSolids)
+      : this.fullIndex;
+    geo.setIndex(new THREE.BufferAttribute(index, 1));
+    if (c.feature && this.featureSet) {
+      const p = this.hiddenSolids.size ? filterSegments(this.featureSet, this.hiddenSolids) : this.featureSet.positions;
+      c.feature.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+    }
+    if (c.edges && this.boundarySet) {
+      const p = this.hiddenSolids.size ? filterSegments(this.boundarySet, this.hiddenSolids) : this.boundarySet.positions;
+      c.edges.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+    }
+    // The wireframe is derived from the (now changed) index — rebuilding it on a 2M-tri model
+    // is the expensive part, so defer until it is actually shown.
+    this.wireDirty = true;
+    if (this.showWire) this.rebuildWire();
+  }
+
+  /** Highlight the given solid ids (hover feedback), or clear with null. Hidden parts highlight
+   * too — a translucent ghost that shows where a hidden part sits. The overlay mesh persists
+   * per model (it shares the solid's position buffer); only its small index is swapped here. */
+  setHighlightSolids(ids: ReadonlySet<number> | null): void {
+    const c = this.content;
+    if (!c.highlight || !this.solidOfTri || !this.fullIndex) return;
+    if (!ids || ids.size === 0) {
+      c.highlight.visible = false;
+      return;
+    }
+    const sot = this.solidOfTri, full = this.fullIndex;
+    const out = new Uint32Array(full.length);
+    let n = 0;
+    for (let t = 0; t < sot.length; t++) {
+      if (!ids.has(sot[t]!)) continue;
+      out[n] = full[t * 3]!; out[n + 1] = full[t * 3 + 1]!; out[n + 2] = full[t * 3 + 2]!;
+      n += 3;
+    }
+    c.highlight.geometry.setIndex(new THREE.BufferAttribute(out.slice(0, n), 1));
+    c.highlight.visible = n > 0;
+  }
+
+  private rebuildWire(): void {
+    const c = this.content;
+    if (!c.wire || !c.solid) return;
+    c.wire.geometry.dispose();
+    c.wire.geometry = new THREE.WireframeGeometry(c.solid.geometry);
+    this.wireDirty = false;
+  }
+
+  setWireframe(v: boolean): void {
+    this.showWire = v;
+    if (v && this.wireDirty) this.rebuildWire();
+    this.applyVisibility();
+  }
+  /** Show/hide the model's own STEP face colors. */
+  setShowColors(v: boolean): void { this.showColors = v; this.applyVisibility(); }
   setOpenEdges(v: boolean): void { this.showEdges = v; this.applyVisibility(); }
   setFeatureEdges(v: boolean): void { this.showFeature = v; this.applyVisibility(); }
   setTransparent(v: boolean): void { this.transparentOn = v; this.applyVisibility(); }
@@ -259,7 +671,7 @@ export class Viewer {
     const center = box.getCenter(new THREE.Vector3());
     const radius = Math.max(size.x, size.y, size.z) * 0.5 || 1;
     const dist = (radius / Math.sin((this.persp.fov * Math.PI) / 360)) * 1.4;
-    const dir = new THREE.Vector3(0.7, 0.5, 1).normalize();
+    const dir = ISO_DIR.clone().normalize();
     const pos = center.clone().addScaledVector(dir, dist);
 
     this.persp.position.copy(pos);
@@ -276,6 +688,8 @@ export class Viewer {
 
     this.controls.target.copy(center);
     this.controls.update();
+    // Re-pivot the next orbit drag on the part centre, not a stale surface hit.
+    this.lastOrbitPivot = center.clone();
   }
 
   private disposeMeshes(c: Content): void {
@@ -302,6 +716,12 @@ export class Viewer {
       c.feature.geometry.dispose();
       (c.feature.material as THREE.Material).dispose();
       c.feature = null;
+    }
+    if (c.highlight) {
+      c.group.remove(c.highlight);
+      c.highlight.geometry.dispose();
+      (c.highlight.material as THREE.Material).dispose();
+      c.highlight = null;
     }
   }
 }

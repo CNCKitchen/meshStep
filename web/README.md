@@ -41,6 +41,15 @@ freezes.
 - **Upload a STEP** file and convert it with the same options as the library:
   surface deviation, normal deviation, max edge length.
 - **Tessellated view** — orbit/zoom the generated mesh.
+- **Model colors** — the STEP file's face/body colors (`STYLED_ITEM`), rendered
+  by default when present, with a show/hide toggle. Colors stay crisp across
+  face borders (shared border vertices are split per color). While **Color by
+  deviation** is on, the analysis coloring takes precedence.
+- **Parts tree** — for multi-body/assembly files, a collapsible component tree
+  from the STEP product structure (product names, ×N occurrence counts, body
+  counts). Hover a row to highlight the part in orange; uncheck to hide it
+  (triangles and edge lines both). A part used N times in the assembly is one
+  row — hiding it hides all instances.
 - **Reference STL** upload (e.g. the matching `*.stl` next to each `*.step` in
   the repo root) with a toggleable translucent **overlay**.
 - **Deviation analysis** — colors the generated mesh by signed distance to the

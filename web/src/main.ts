@@ -1,14 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./styles.css";
 import * as THREE from "three";
-import { readSTL, writeBinarySTL, parseStepHeader } from "../../src/index.ts";
-import { Viewer } from "./viewer.ts";
+import { readSTL, writeBinarySTL, parseStepHeader, type PartNode } from "../../src/index.ts";
+import { Viewer, BASE_COLOR } from "./viewer.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
   buildIndexedGeometry,
   buildSoupGeometry,
   boundaryEdges,
   featureEdges,
+  splitByTriColor,
   triCount,
   diverging,
   type RawMesh,
@@ -32,6 +33,7 @@ const statusEl = $("status");
 const overlay = $("overlay");
 const overlayText = $("overlayText");
 
+const tColors = $<HTMLInputElement>("tColors");
 const tWire = $<HTMLInputElement>("tWire");
 const tEdges = $<HTMLInputElement>("tEdges");
 const tFeature = $<HTMLInputElement>("tFeature");
@@ -48,6 +50,8 @@ const legNeg = $("legNeg");
 const legPos = $("legPos");
 const legMeta = $("legMeta");
 const statsEl = $("stats");
+const partsPanel = $("partsPanel");
+const partsTree = $("partsTree");
 
 // info panel
 const infoPanel = $("infoPanel");
@@ -186,14 +190,37 @@ function onWorkerMessage(msg: WorkerOut): void {
 
 function applyResult(res: ConvertResult): void {
   mesh = res.mesh;
-  geo = buildIndexedGeometry(mesh);
 
-  const b = boundaryEdges(mesh);
+  // STEP face colors: per-triangle palette index -> per-vertex color attribute, splitting welded
+  // vertices on color borders so colors don't bleed across faces. The raw mesh stays untouched
+  // for export and edge extraction; only the display geometry gets the extra border vertices.
+  let faceColors: Float32Array | null = null;
+  let displayMesh: RawMesh = mesh;
+  if (res.colors) {
+    const { palette, faceColor } = res.colors;
+    const colorOfTri = new Int32Array(res.mesh.faceOfTri.length);
+    for (let t = 0; t < colorOfTri.length; t++) colorOfTri[t] = faceColor.get(res.mesh.faceOfTri[t]!) ?? -1;
+    // COLOUR_RGB values are sRGB; vertex colors feed the shader in the linear working space.
+    const c = new THREE.Color();
+    const linear = palette.map(([r, g, b]): [number, number, number] => {
+      c.setRGB(r, g, b, THREE.SRGBColorSpace);
+      return [c.r, c.g, c.b];
+    });
+    c.set(BASE_COLOR); // hex is converted like the material's base color, so unstyled faces match
+    const split = splitByTriColor(mesh, colorOfTri, linear, [c.r, c.g, c.b]);
+    displayMesh = split.mesh;
+    faceColors = split.colors;
+  }
+  tColors.disabled = !faceColors;
+  geo = buildIndexedGeometry(displayMesh);
+
+  const b = boundaryEdges(mesh, res.mesh.solidOfTri);
   openEdges = b.count;
-  const feat = featureEdges(mesh, res.mesh.faceOfTri);
+  const feat = featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
 
-  viewer.setMesh(geo, b.positions, feat.positions);
+  viewer.setMesh(geo, b, feat, faceColors, res.mesh.solidOfTri);
   viewer.fit();
+  buildPartsPanel(res.structure);
 
   showGeometryInfo(res, openEdges);
 
@@ -205,6 +232,127 @@ function applyResult(res: ConvertResult): void {
   convertBtn.disabled = false;
   exportBtn.disabled = false;
   setStatus(`Done · ${triCount(mesh).toLocaleString()} tris`);
+}
+
+// ---- parts tree ----
+// Hidden state lives in one Set of solid ids; checkbox checked/indeterminate states are derived
+// from it after every change, so parent and child boxes can never disagree with the viewer.
+let hiddenParts = new Set<number>();
+const partRows: { cb: HTMLInputElement; row: HTMLElement; solids: number[] }[] = [];
+
+/** Collapse wrapper levels (a product whose rep only points at one sub-product carries no
+ * geometry of its own): keep the outermost name, multiply occurrence counts. */
+function mergeChains(n: PartNode): PartNode {
+  let name = n.name;
+  let occurrences = n.occurrences;
+  let cur = n;
+  while (cur.bodies.length === 0 && cur.children.length === 1) {
+    cur = cur.children[0]!;
+    occurrences *= cur.occurrences;
+    if (!name) name = cur.name;
+  }
+  return { name, occurrences, bodies: cur.bodies, children: cur.children.map(mergeChains) };
+}
+
+function subtreeSolids(n: PartNode, out: number[] = []): number[] {
+  for (const b of n.bodies) out.push(b.id);
+  for (const c of n.children) subtreeSolids(c, out);
+  return out;
+}
+
+function applyHiddenParts(): void {
+  viewer.setHiddenSolids(hiddenParts);
+  for (const r of partRows) {
+    const hidden = r.solids.reduce((s, id) => s + (hiddenParts.has(id) ? 1 : 0), 0);
+    r.cb.checked = hidden === 0;
+    r.cb.indeterminate = hidden > 0 && hidden < r.solids.length;
+    r.row.classList.toggle("off", hidden === r.solids.length && r.solids.length > 0);
+  }
+}
+
+function partRow(label: string, meta: string, solids: number[], depth: number, children: (() => HTMLElement[]) | null): HTMLElement {
+  const row = document.createElement("div");
+  row.className = "part-row";
+  row.style.paddingLeft = `${depth * 14}px`;
+
+  const caret = document.createElement("span");
+  caret.className = "part-caret" + (children ? "" : " empty");
+  caret.textContent = "▶";
+
+  const cb = document.createElement("input");
+  cb.type = "checkbox";
+  cb.checked = true;
+
+  const name = document.createElement("span");
+  name.className = "part-name";
+  name.textContent = label;
+  name.title = label;
+
+  const metaEl = document.createElement("span");
+  metaEl.className = "part-meta";
+  metaEl.textContent = meta;
+
+  row.append(caret, cb, name, metaEl);
+  partRows.push({ cb, row, solids });
+
+  cb.addEventListener("change", () => {
+    for (const id of solids) cb.checked ? hiddenParts.delete(id) : hiddenParts.add(id);
+    applyHiddenParts();
+  });
+  row.addEventListener("mouseenter", () => viewer.setHighlightSolids(new Set(solids)));
+  row.addEventListener("mouseleave", () => viewer.setHighlightSolids(null));
+
+  const wrap = document.createElement("div");
+  wrap.appendChild(row);
+  if (children) {
+    // Children are built lazily on first expand (a PCB's copper layer alone is ~700 bodies).
+    let box: HTMLElement | null = null;
+    caret.addEventListener("click", () => {
+      if (!box) {
+        box = document.createElement("div");
+        for (const el of children()) box.appendChild(el);
+        wrap.appendChild(box);
+        applyHiddenParts(); // sync the freshly created checkboxes
+      } else {
+        box.hidden = !box.hidden;
+      }
+      caret.textContent = box.hidden ? "▶" : "▼";
+    });
+  }
+  return wrap;
+}
+
+function nodeRows(n: PartNode, depth: number): HTMLElement[] {
+  const rows: HTMLElement[] = [];
+  for (const child of n.children) {
+    const solids = subtreeSolids(child);
+    const meta = (child.occurrences > 1 ? `×${child.occurrences}` : "")
+      + (child.bodies.length > 1 ? ` ${child.bodies.length} bodies` : "");
+    const expandable = child.children.length > 0 || child.bodies.length > 1;
+    rows.push(partRow(child.name || "(unnamed)", meta.trim(), solids, depth,
+      expandable ? () => nodeRows(child, depth + 1) : null));
+  }
+  if (n.children.length > 0 && n.bodies.length === 1) {
+    // A single own body next to subassemblies still deserves a row of its own.
+    const b = n.bodies[0]!;
+    rows.push(partRow(b.name || "Body", "", [b.id], depth, null));
+  } else if (n.bodies.length > 1 || (n.children.length === 0 && n.bodies.length > 0)) {
+    for (const [i, b] of n.bodies.entries()) {
+      rows.push(partRow(b.name || `Body ${i + 1}`, "", [b.id], depth, null));
+    }
+  }
+  return rows;
+}
+
+function buildPartsPanel(root: PartNode): void {
+  hiddenParts = new Set();
+  partRows.length = 0;
+  partsTree.textContent = "";
+  const merged = mergeChains(root);
+  const show = merged.children.length > 0 || merged.bodies.length > 1;
+  partsPanel.hidden = !show;
+  if (!show) return;
+  for (const el of nodeRows(merged, 0)) partsTree.appendChild(el);
 }
 
 // ---- export ----
@@ -263,6 +411,7 @@ function updateLegend(clamp: number): void {
 }
 
 // ---- toggles ----
+tColors.addEventListener("change", () => viewer.setShowColors(tColors.checked));
 tWire.addEventListener("change", () => viewer.setWireframe(tWire.checked));
 tEdges.addEventListener("change", () => viewer.setOpenEdges(tEdges.checked));
 tFeature.addEventListener("change", () => viewer.setFeatureEdges(tFeature.checked));

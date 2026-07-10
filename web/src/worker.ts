@@ -2,7 +2,7 @@
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
-import { importStep, type ImportOptions, type MeshResult } from "../../src/index.ts";
+import { importStep, type ImportOptions, type MeshResult, type ModelColors, type PartNode } from "../../src/index.ts";
 
 export interface ConvertRequest {
   type: "convert";
@@ -14,6 +14,7 @@ export interface MeshPayload {
   positions: Float64Array; // 3 per vertex
   indices: Uint32Array; // 3 per triangle
   faceOfTri: Uint32Array; // STEP B-rep face id per triangle
+  solidOfTri: Uint32Array; // STEP solid (body) id per triangle — keys of the part tree
 }
 
 export interface ConvertResult {
@@ -24,6 +25,11 @@ export interface ConvertResult {
   units: string;
   /** Axis-aligned bounding box of the mesh, in mm: [minX,minY,minZ, maxX,maxY,maxZ]. */
   bbox: [number, number, number, number, number, number] | null;
+  /** STEP face/solid colors (palette + per-face indices), or null when the file has none.
+   * Maps survive postMessage via structured clone. */
+  colors: ModelColors | null;
+  /** Part/component tree; bodies[].id keys into mesh.solidOfTri. */
+  structure: PartNode;
 }
 
 export interface ProgressMessage {
@@ -67,18 +73,21 @@ ctx.onmessage = (ev: MessageEvent<ConvertRequest>) => {
     const pos = tess.mesh.positions;
     const idx = tess.mesh.indices;
     const fot = tess.faceOfTri;
+    const sot = tess.solidOfTri;
     const bbox = boundingBox(pos);
 
     post(
       {
         type: "result",
-        mesh: { positions: pos, indices: idx, faceOfTri: fot },
+        mesh: { positions: pos, indices: idx, faceOfTri: fot, solidOfTri: sot },
         stats: tess.stats,
         units: tess.units,
         bbox,
+        colors: tess.colors,
+        structure: tess.structure,
       },
       // Transfer the underlying buffers to avoid a copy.
-      [pos.buffer, idx.buffer, fot.buffer],
+      [pos.buffer, idx.buffer, fot.buffer, sot.buffer],
     );
   } catch (err) {
     post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });

@@ -41,7 +41,11 @@ meshStep starts from the opposite end: **the mesh is the product.**
 - **CAD topology survives into the mesh.** `faceOfTri` / `solidOfTri` map every triangle back to
   its STEP face and body, and feature edges are exact from the B-rep `EDGE_CURVE` set — a cube
   stays a cube. Downstream tools can segment and mask by real CAD faces instead of re-detecting
-  features from a triangle soup.
+  features from a triangle soup. STEP presentation colors come along too: `colors` resolves the
+  `STYLED_ITEM` chains into a palette plus per-face / per-body indices, so a viewer can render
+  the CAD colors and tools can group surfaces by shared color. And `structure` exposes the
+  product tree (part names, assembly hierarchy, occurrence counts) keyed to the same body ids,
+  so per-part selection and hiding work straight off the mesh.
 - **The true surface stays available.** The optional isotropic remesh (`remesh: true`)
   splits/collapses/flips/smooths toward uniform, near-equilateral triangles and reprojects every
   vertex onto the exact analytic/NURBS surface (feature edges frozen) — quality passes converge
@@ -93,8 +97,8 @@ Honest notes on the alternatives:
   [HOOPS Exchange](https://www.techsoft3d.com/products/hoops/exchange/)) are robust, fast, and
   read every format — as native/server-side libraries with per-seat/per-app licensing.
 
-**When meshStep is the wrong tool:** you need formats beyond STEP (IGES, JT, Parasolid), colors /
-PMI / metadata, a modeling kernel (booleans, sewing, healing of dirty geometry), or maximum
+**When meshStep is the wrong tool:** you need formats beyond STEP (IGES, JT, Parasolid), PMI /
+metadata, a modeling kernel (booleans, sewing, healing of dirty geometry), or maximum
 robustness against pathological enterprise CAD exports. Use an OCCT-based stack or a commercial
 SDK for those.
 
@@ -108,7 +112,8 @@ Coverage:
   holes).
 - **Structure:** multi-body parts, assemblies with full product-structure instancing,
   per-representation units, `BREP_WITH_VOIDS`; AP242 tessellated-geometry bodies pass through
-  as-is.
+  as-is. Face/body presentation colors (`STYLED_ITEM` / `OVER_RIDING_STYLED_ITEM`, AP214/AP242)
+  are extracted palette-indexed.
 
 Robustness is tracked over four corpora of increasing wildness, cross-validated against
 OpenCASCADE output with the `gapcheck` harness (per-face deviation + watertightness). Where it
@@ -155,6 +160,21 @@ const result = importStep(stepText, { surfaceDeviation: 0.01, maxEdge: 1.0 });
 // result.mesh (positions/indices), result.faceOfTri, result.solidOfTri
 if (!result.diagnostics.ok) console.warn(result.diagnostics); // see "Import diagnostics"
 writeFileSync("out.stl", writeBinarySTL(result.mesh));
+
+// STEP colors (null if the file has none): palette + palette index per B-rep face/body.
+// Triangle t's sRGB color, and a ready-made grouping key for surfaces:
+if (result.colors) {
+  const { palette, faceColor } = result.colors;
+  const rgb = palette[faceColor.get(result.faceOfTri[t])]; // undefined index = unstyled face
+}
+
+// Part/component tree (STEP product structure): names, nesting, occurrence counts.
+// node.bodies[].id keys into result.solidOfTri — filter triangles on it to hide/select a part.
+const walk = (node, depth = 0) => {
+  console.log("  ".repeat(depth) + `${node.name} ×${node.occurrences} (${node.bodies.length} bodies)`);
+  node.children.forEach((c) => walk(c, depth + 1));
+};
+walk(result.structure);
 ```
 
 Options mirror Fusion's mesh-export dialog: `surfaceDeviation` (mm), `normalDeviation` (deg),
@@ -197,8 +217,9 @@ downstream processing.
 ## Web verification studio
 
 A browser UI for visually checking output lives in [web/](web/README.md): upload a STEP, tune
-the settings, and inspect the result with deviation coloring against a reference STL (3D-scan
-style), wireframe, and open-edge highlighting. `cd web && npm install && npm run dev`.
+the settings, and inspect the result with the model's STEP colors (on by default, toggleable),
+deviation coloring against a reference STL (3D-scan style), wireframe, and open-edge
+highlighting. `cd web && npm install && npm run dev`.
 
 ## License
 
