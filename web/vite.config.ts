@@ -8,6 +8,9 @@ const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 
 export default defineConfig({
   root: fileURLToPath(new URL(".", import.meta.url)),
+  // Relative asset URLs so the built bundle works at any mount point — the apex
+  // (stepview.cnckitchen.com) or a subpath (cnckitchen.com/stepview) — without a rebuild.
+  base: "./",
   server: {
     port: 5180,
     fs: {

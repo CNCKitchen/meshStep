@@ -105,6 +105,32 @@ export function detectUncertainty(table: Table): number | null {
   return best;
 }
 
+/** Short abbreviation for a length unit, from its CONVERSION_BASED_UNIT name or its mm factor. */
+function lengthAbbrev(mmPerUnit: number, cbuName?: string): string {
+  if (cbuName) {
+    const named: Record<string, string> = {
+      inch: "in", inches: "in", in: "in",
+      foot: "ft", feet: "ft", ft: "ft",
+      yard: "yd", yd: "yd", mile: "mi",
+      thou: "thou", mil: "mil",
+      millimetre: "mm", millimeter: "mm", mm: "mm",
+      centimetre: "cm", centimeter: "cm", cm: "cm",
+      decimetre: "dm", decimeter: "dm",
+      metre: "m", meter: "m", m: "m",
+      micrometre: "µm", micrometer: "µm", micron: "µm", um: "µm",
+      kilometre: "km", kilometer: "km", km: "km",
+    };
+    const n = cbuName.trim().toLowerCase();
+    return named[n] ?? cbuName.trim(); // unknown named unit → show its own name
+  }
+  const byFactor: Array<[number, string]> = [
+    [1, "mm"], [10, "cm"], [100, "dm"], [1000, "m"], [1e4, "dam"], [1e5, "hm"], [1e6, "km"],
+    [0.001, "µm"], [1e-6, "nm"], [25.4, "in"], [304.8, "ft"],
+  ];
+  for (const [f, a] of byFactor) if (Math.abs(mmPerUnit - f) <= 1e-9 * Math.max(1, f)) return a;
+  return `${+mmPerUnit.toPrecision(6)} mm/unit`;
+}
+
 export function detectUnits(table: Table): Units {
   let mmPerUnit: number | null = null;
   let radPerAngle: number | null = null;
@@ -117,8 +143,8 @@ export function detectUnits(table: Table): Units {
       mmPerUnit = unitFactor(table, id, "length");
       if (mmPerUnit !== null) {
         const cbu = e.complex.find((r) => r.type === "CONVERSION_BASED_UNIT");
-        label = cbu && cbu.params[0]?.k === "str" ? cbu.params[0].v.toLowerCase()
-          : mmPerUnit === 1 ? "millimetre" : mmPerUnit === 1000 ? "metre" : `${mmPerUnit}mm/unit`;
+        const cbuName = cbu && cbu.params[0]?.k === "str" ? cbu.params[0].v : undefined;
+        label = lengthAbbrev(mmPerUnit, cbuName);
       }
     }
     if (radPerAngle === null && e.complex.some((r) => r.type === "PLANE_ANGLE_UNIT")) {

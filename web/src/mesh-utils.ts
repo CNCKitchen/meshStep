@@ -27,11 +27,19 @@ export function buildSoupGeometry(positions: Float64Array | Float32Array): THREE
   return g;
 }
 
+/** LineSegments-ready edge set: 6 floats per segment, plus the solid (body) id each segment
+ * belongs to, so per-part hiding can filter the lines together with the triangles. */
+export interface EdgeSet {
+  positions: Float32Array;
+  count: number;
+  solidOfSeg: Uint32Array;
+}
+
 /**
  * Extract boundary ("open") edges of an indexed mesh: edges used by exactly one
- * triangle. A watertight mesh has none. Returns a LineSegments-ready position array.
+ * triangle. A watertight mesh has none.
  */
-export function boundaryEdges(mesh: RawMesh): { positions: Float32Array; count: number } {
+export function boundaryEdges(mesh: RawMesh, solidOfTri: Uint32Array): EdgeSet {
   const idx = mesh.indices;
   const pos = mesh.positions;
   const useCount = new Map<number, number>();
@@ -50,16 +58,166 @@ export function boundaryEdges(mesh: RawMesh): { positions: Float32Array; count: 
 
   // Second pass: collect the actual vertex pairs for edges used once.
   const out: number[] = [];
-  const emit = (u: number, v: number): void => {
+  const segSolid: number[] = [];
+  const emit = (u: number, v: number, s: number): void => {
     if (useCount.get(key(u, v)) !== 1) return;
     out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
     out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
+    segSolid.push(s);
   };
   for (let t = 0; t < idx.length; t += 3) {
     const a = idx[t]!, b = idx[t + 1]!, c = idx[t + 2]!;
-    emit(a, b); emit(b, c); emit(c, a);
+    const s = solidOfTri[t / 3] ?? 0;
+    emit(a, b, s); emit(b, c, s); emit(c, a, s);
   }
-  return { positions: new Float32Array(out), count: out.length / 6 };
+  return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
+}
+
+/**
+ * Extract CAD surface boundaries: mesh edges that separate two different B-rep faces
+ * (`faceOfTri` differs across the edge) plus any open boundary edge (used by one triangle).
+ * Because meshStep welds shared B-rep edges once and maps every triangle back to its STEP
+ * face, these are exactly the analytic face borders — rims, holes, fillet edges — sampled to
+ * the tessellation tolerance. Each segment carries its solid id (bodies are welded
+ * independently, so an edge never straddles two solids).
+ */
+export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: Uint32Array): EdgeSet {
+  const idx = mesh.indices;
+  const pos = mesh.positions;
+  const KEY = 0x4000000; // matches boundaryEdges: exact for vertex ids below ~67M
+  const key = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
+
+  const cnt = new Map<number, number>();
+  const firstFace = new Map<number, number>();
+  const feature = new Set<number>();
+  const consider = (a: number, b: number, f: number): void => {
+    const k = key(a, b);
+    const n = (cnt.get(k) ?? 0) + 1;
+    cnt.set(k, n);
+    if (n === 1) firstFace.set(k, f);
+    else if (firstFace.get(k) !== f) feature.add(k); // edge straddles two distinct faces
+  };
+  const tris = idx.length / 3;
+  for (let t = 0; t < tris; t++) {
+    const f = faceOfTri[t] ?? 0;
+    const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
+    consider(a, b, f); consider(b, c, f); consider(c, a, f);
+  }
+
+  const out: number[] = [];
+  const segSolid: number[] = [];
+  const seen = new Set<number>();
+  const emit = (u: number, v: number, s: number): void => {
+    const k = key(u, v);
+    if (seen.has(k)) return;
+    if (cnt.get(k) !== 1 && !feature.has(k)) return; // interior-to-a-face edge: skip
+    seen.add(k);
+    out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
+    out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
+    segSolid.push(s);
+  };
+  for (let t = 0; t < tris; t++) {
+    const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
+    const s = solidOfTri[t] ?? 0;
+    emit(a, b, s); emit(b, c, s); emit(c, a, s);
+  }
+  return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
+}
+
+/** Triangle index buffer with every triangle of a hidden solid removed. */
+export function filterTriangles(fullIndex: Uint32Array, solidOfTri: Uint32Array, hidden: ReadonlySet<number>): Uint32Array {
+  const out = new Uint32Array(fullIndex.length);
+  let n = 0;
+  for (let t = 0; t < solidOfTri.length; t++) {
+    if (hidden.has(solidOfTri[t]!)) continue;
+    out[n] = fullIndex[t * 3]!; out[n + 1] = fullIndex[t * 3 + 1]!; out[n + 2] = fullIndex[t * 3 + 2]!;
+    n += 3;
+  }
+  return out.subarray(0, n);
+}
+
+/** An EdgeSet minus the segments belonging to the given solids — used to strip open-by-design
+ * sheet-body boundaries out of the open-edge (defect) overlay. */
+export function dropSolidSegments(edges: EdgeSet, drop: ReadonlySet<number>): EdgeSet {
+  if (drop.size === 0) return edges;
+  const positions = new Float32Array(edges.positions.length);
+  const solidOfSeg = new Uint32Array(edges.count);
+  let n = 0;
+  for (let s = 0; s < edges.count; s++) {
+    if (drop.has(edges.solidOfSeg[s]!)) continue;
+    positions.set(edges.positions.subarray(s * 6, s * 6 + 6), n * 6);
+    solidOfSeg[n] = edges.solidOfSeg[s]!;
+    n++;
+  }
+  return { positions: positions.subarray(0, n * 6), count: n, solidOfSeg: solidOfSeg.subarray(0, n) };
+}
+
+/** Line-segment positions with every segment of a hidden solid removed. */
+export function filterSegments(edges: EdgeSet, hidden: ReadonlySet<number>): Float32Array {
+  const out = new Float32Array(edges.positions.length);
+  let n = 0;
+  for (let s = 0; s < edges.count; s++) {
+    if (hidden.has(edges.solidOfSeg[s]!)) continue;
+    out.set(edges.positions.subarray(s * 6, s * 6 + 6), n);
+    n += 6;
+  }
+  return out.subarray(0, n);
+}
+
+/**
+ * Per-vertex colors for STEP face colors, splitting welded vertices along color borders.
+ * The mesh welds face boundaries, so a border vertex is shared by triangles of different
+ * colors — a single per-vertex color would smear a gradient across every border triangle.
+ * Vertices whose incident triangles all agree keep their index; a vertex on a color border
+ * is duplicated once per additional color, so borders stay crisp. `colorOfTri` holds a
+ * palette index per triangle (-1 = unstyled -> defaultRGB). Colors must be in the renderer's
+ * working color space (convert sRGB before calling).
+ */
+export function splitByTriColor(
+  mesh: RawMesh,
+  colorOfTri: Int32Array,
+  palette: ReadonlyArray<readonly [number, number, number]>,
+  defaultRGB: readonly [number, number, number],
+): { mesh: RawMesh; colors: Float32Array } {
+  const nV = mesh.positions.length / 3;
+  const nT = colorOfTri.length;
+  const indices = new Uint32Array(nT * 3);
+  const vertColor = new Int32Array(nV).fill(-2); // -2 = not seen yet
+  // (vertex, color) -> duplicated vertex index. Key stays exact below 2^53 (nV in the millions,
+  // palette small).
+  const K = palette.length + 2;
+  const dup = new Map<number, number>();
+  const extraPos: number[] = [];
+  const extraColor: number[] = [];
+  for (let t = 0; t < nT; t++) {
+    const c = colorOfTri[t]!;
+    for (let e = 0; e < 3; e++) {
+      const v = mesh.indices[t * 3 + e]!;
+      if (vertColor[v] === -2) vertColor[v] = c;
+      if (vertColor[v] === c) { indices[t * 3 + e] = v; continue; }
+      const k = v * K + (c + 1);
+      let nv = dup.get(k);
+      if (nv === undefined) {
+        nv = nV + extraColor.length;
+        dup.set(k, nv);
+        extraPos.push(mesh.positions[v * 3]!, mesh.positions[v * 3 + 1]!, mesh.positions[v * 3 + 2]!);
+        extraColor.push(c);
+      }
+      indices[t * 3 + e] = nv;
+    }
+  }
+  const totalV = nV + extraColor.length;
+  const colors = new Float32Array(totalV * 3);
+  const setC = (i: number, c: number): void => {
+    const rgb = c >= 0 ? palette[c]! : defaultRGB;
+    colors[i * 3] = rgb[0]; colors[i * 3 + 1] = rgb[1]; colors[i * 3 + 2] = rgb[2];
+  };
+  for (let v = 0; v < nV; v++) setC(v, vertColor[v]!);
+  for (let i = 0; i < extraColor.length; i++) setC(nV + i, extraColor[i]!);
+  const positions = new Float64Array(totalV * 3);
+  positions.set(mesh.positions);
+  positions.set(extraPos, nV * 3);
+  return { mesh: { positions, indices }, colors };
 }
 
 /** Triangle count of an indexed mesh. */
