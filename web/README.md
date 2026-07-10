@@ -39,7 +39,9 @@ freezes.
 ## Features
 
 - **Upload a STEP** file and convert it with the same options as the library:
-  surface deviation, normal deviation, max edge length.
+  surface deviation, normal deviation, max edge length. Surface deviation and
+  max edge auto-scale to the model's size on load (a fast pre-pass estimates
+  the bounding box before converting); edit either field and your values win.
 - **Tessellated view** — orbit/zoom the generated mesh.
 - **Model colors** — the STEP file's face/body colors (`STYLED_ITEM`), rendered
   by default when present, with a show/hide toggle. Colors stay crisp across
@@ -60,6 +62,10 @@ freezes.
 - **Wireframe** overlay to inspect the mesh.
 - **Open-edge highlighting** — boundary edges (used by a single triangle) drawn
   in red. A watertight mesh shows none; the corner readout reports the count.
+  Sheet (surface) bodies are open **by design** — their boundary edges are
+  excluded from the red overlay and the counters, so a sheet-metal model reads
+  "Clean · N sheet bodies" instead of thousands of false open edges. Sheet
+  bodies are tagged in the parts tree.
 
 ## Quick test
 

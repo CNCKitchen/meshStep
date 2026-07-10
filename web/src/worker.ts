@@ -2,12 +2,24 @@
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
-import { importStep, type ImportOptions, type MeshResult, type ModelColors, type PartNode } from "../../src/index.ts";
+import { importStep, estimateStepSize, type ImportOptions, type ImportDiagnostics, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
 
 export interface ConvertRequest {
   type: "convert";
   stepText: string;
   opts: ImportOptions;
+}
+
+/** Fast size pre-pass (parse + point scan, no tessellation) — runs on file load so the UI can
+ * pick size-adaptive tessellation defaults before the user hits Convert. */
+export interface MeasureRequest {
+  type: "measure";
+  stepText: string;
+}
+
+export interface SizeMessage {
+  type: "size";
+  estimate: SizeEstimate | null;
 }
 
 export interface MeshPayload {
@@ -30,6 +42,11 @@ export interface ConvertResult {
   colors: ModelColors | null;
   /** Part/component tree; bodies[].id keys into mesh.solidOfTri. */
   structure: PartNode;
+  /** Solid ids of surface (sheet) bodies — their boundary edges are open BY DESIGN, so the UI
+   * must not count or paint them as watertightness defects. */
+  openSolids: number[];
+  /** Authoritative conversion verdict: openEdges/nonManifoldEdges already exclude openSolids. */
+  diagnostics: ImportDiagnostics;
 }
 
 export interface ProgressMessage {
@@ -42,7 +59,8 @@ export interface ErrorMessage {
   message: string;
 }
 
-export type WorkerOut = ConvertResult | ProgressMessage | ErrorMessage;
+export type WorkerIn = ConvertRequest | MeasureRequest;
+export type WorkerOut = ConvertResult | ProgressMessage | ErrorMessage | SizeMessage;
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
@@ -63,8 +81,12 @@ function post(msg: WorkerOut, transfer?: Transferable[]): void {
   ctx.postMessage(msg, transfer ?? []);
 }
 
-ctx.onmessage = (ev: MessageEvent<ConvertRequest>) => {
+ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
   const req = ev.data;
+  if (req.type === "measure") {
+    post({ type: "size", estimate: estimateStepSize(req.stepText) });
+    return;
+  }
   if (req.type !== "convert") return;
   try {
     post({ type: "progress", stage: "Tessellating…" });
@@ -85,6 +107,8 @@ ctx.onmessage = (ev: MessageEvent<ConvertRequest>) => {
         bbox,
         colors: tess.colors,
         structure: tess.structure,
+        openSolids: tess.openSolids,
+        diagnostics: tess.diagnostics,
       },
       // Transfer the underlying buffers to avoid a copy.
       [pos.buffer, idx.buffer, fot.buffer, sot.buffer],

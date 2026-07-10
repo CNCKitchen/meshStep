@@ -86,6 +86,7 @@ export type { BrepModel } from "./brep/build.ts";
 export { meshDefects, type ImportDiagnostics, type MeshWarning, type WarningCode, type WarningSeverity, type EdgeDefects } from "./mesh/diag.ts";
 export { extractColors, type ModelColors, type RGB } from "./step/styles.ts";
 export { extractStructure, type PartNode, type PartBody } from "./step/structure.ts";
+export { estimateStepSize, autoTessellation, type SizeEstimate } from "./step/measure.ts";
 
 export interface ImportOptions {
   /** Run the curvature-adaptive isotropic remesh (default false). The raw tessellation is already

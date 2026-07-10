@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./styles.css";
 import * as THREE from "three";
-import { readSTL, writeBinarySTL, parseStepHeader, type PartNode } from "../../src/index.ts";
+import { readSTL, writeBinarySTL, parseStepHeader, autoTessellation, type PartNode } from "../../src/index.ts";
 import { Viewer, BASE_COLOR } from "./viewer.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
   buildIndexedGeometry,
   buildSoupGeometry,
   boundaryEdges,
+  dropSolidSegments,
   featureEdges,
   splitByTriColor,
   triCount,
@@ -52,6 +53,9 @@ const legMeta = $("legMeta");
 const statsEl = $("stats");
 const partsPanel = $("partsPanel");
 const partsTree = $("partsTree");
+const autoNote = $("autoNote");
+const surfaceDeviationEl = $<HTMLInputElement>("surfaceDeviation");
+const maxEdgeEl = $<HTMLInputElement>("maxEdge");
 
 // info panel
 const infoPanel = $("infoPanel");
@@ -109,28 +113,56 @@ let worker: Worker | null = null;
 
 let mesh: RawMesh | null = null;
 let geo: THREE.BufferGeometry | null = null;
-let openEdges = 0;
+let openEdges = 0; // unexpected (defect) open edges — sheet-body boundaries excluded
+let sheetBodies = 0;
+let openSolidsSet = new Set<number>();
 
 let reference: ReferenceSurface | null = null;
 let dev: DeviationResult | null = null;
 let manualRange: number | null = null; // null => auto
 
 // ---- input: STEP ----
+// Size-adaptive tessellation defaults: a fast worker pre-pass estimates the model's bbox
+// diagonal on load and scales surface deviation / max edge to it — unless the user already
+// touched those fields for this file (their numbers win).
+let tessEdited = false;
+surfaceDeviationEl.addEventListener("input", () => { tessEdited = true; autoNote.hidden = true; });
+maxEdgeEl.addEventListener("input", () => { tessEdited = true; autoNote.hidden = true; });
+
+function applyAutoDefaults(diag: number): void {
+  if (tessEdited) return;
+  const d = autoTessellation(diag);
+  surfaceDeviationEl.value = String(d.surfaceDeviation);
+  maxEdgeEl.value = String(d.maxEdge);
+  autoNote.textContent = `auto for ~${fmtLen(diag)} mm model`;
+  autoNote.hidden = false;
+}
+
 stepFile.addEventListener("change", async () => {
   const f = stepFile.files?.[0];
   if (!f) return;
+  stepFile.value = ""; // so re-picking the same file fires change again (the name lives in #stepName)
   stepText = await f.text();
   stepBaseName = f.name.replace(/\.(step|stp)$/i, "") || "mesh";
   stepName.textContent = f.name;
   convertBtn.disabled = false;
+  tessEdited = false;
+  autoNote.hidden = true;
   setStatus("");
   showHeaderInfo(stepText);
+  // Measure in the background; Convert terminates this worker, so a click before the estimate
+  // lands simply keeps the current field values.
+  worker?.terminate();
+  worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
+  worker.onmessage = (ev: MessageEvent<WorkerOut>) => onWorkerMessage(ev.data);
+  worker.postMessage({ type: "measure", stepText });
 });
 
 // ---- input: reference STL ----
 refFile.addEventListener("change", async () => {
   const f = refFile.files?.[0];
   if (!f) return;
+  refFile.value = ""; // same-file re-pick must fire change (name lives in #refName)
   try {
     const buf = await f.arrayBuffer();
     const soup = readSTL(buf);
@@ -174,6 +206,10 @@ convertBtn.addEventListener("click", () => {
 });
 
 function onWorkerMessage(msg: WorkerOut): void {
+  if (msg.type === "size") {
+    if (msg.estimate) applyAutoDefaults(msg.estimate.diag);
+    return;
+  }
   if (msg.type === "progress") {
     overlayText.textContent = msg.stage;
     return;
@@ -214,8 +250,13 @@ function applyResult(res: ConvertResult): void {
   tColors.disabled = !faceColors;
   geo = buildIndexedGeometry(displayMesh);
 
-  const b = boundaryEdges(mesh, res.mesh.solidOfTri);
-  openEdges = b.count;
+  // Open-edge (defect) overlay: a sheet body's boundary is open BY DESIGN — drop those solids'
+  // segments so the red highlight and the counters only report unexpected openings. The
+  // authoritative count comes from the import diagnostics (same exclusion, core-side).
+  openSolidsSet = new Set(res.openSolids);
+  sheetBodies = res.openSolids.length;
+  openEdges = res.diagnostics.openEdges;
+  const b = dropSolidSegments(boundaryEdges(mesh, res.mesh.solidOfTri), openSolidsSet);
   const feat = featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
 
   viewer.setMesh(geo, b, feat, faceColors, res.mesh.solidOfTri);
@@ -324,21 +365,27 @@ function partRow(label: string, meta: string, solids: number[], depth: number, c
 
 function nodeRows(n: PartNode, depth: number): HTMLElement[] {
   const rows: HTMLElement[] = [];
+  // "sheet" tags a surface body (open by design) so a boundary-edged part reads as intended.
+  const sheetTag = (ids: number[]): string =>
+    ids.length > 0 && ids.every((id) => openSolidsSet.has(id)) ? "sheet" : "";
   for (const child of n.children) {
     const solids = subtreeSolids(child);
-    const meta = (child.occurrences > 1 ? `×${child.occurrences}` : "")
-      + (child.bodies.length > 1 ? ` ${child.bodies.length} bodies` : "");
+    const meta = [
+      child.occurrences > 1 ? `×${child.occurrences}` : "",
+      child.bodies.length > 1 ? `${child.bodies.length} bodies` : "",
+      sheetTag(solids),
+    ].filter(Boolean).join(" · ");
     const expandable = child.children.length > 0 || child.bodies.length > 1;
-    rows.push(partRow(child.name || "(unnamed)", meta.trim(), solids, depth,
+    rows.push(partRow(child.name || "(unnamed)", meta, solids, depth,
       expandable ? () => nodeRows(child, depth + 1) : null));
   }
   if (n.children.length > 0 && n.bodies.length === 1) {
     // A single own body next to subassemblies still deserves a row of its own.
     const b = n.bodies[0]!;
-    rows.push(partRow(b.name || "Body", "", [b.id], depth, null));
+    rows.push(partRow(b.name || "Body", sheetTag([b.id]), [b.id], depth, null));
   } else if (n.bodies.length > 1 || (n.children.length === 0 && n.bodies.length > 0)) {
     for (const [i, b] of n.bodies.entries()) {
-      rows.push(partRow(b.name || `Body ${i + 1}`, "", [b.id], depth, null));
+      rows.push(partRow(b.name || `Body ${i + 1}`, sheetTag([b.id]), [b.id], depth, null));
     }
   }
   return rows;
@@ -459,8 +506,9 @@ function refreshStats(): void {
   }
   const lines = [
     `${triCount(mesh).toLocaleString()} triangles`,
-    `${openEdges} open edge${openEdges === 1 ? "" : "s"}`,
+    `${openEdges}${sheetBodies > 0 ? " unexpected" : ""} open edge${openEdges === 1 ? "" : "s"}`,
   ];
+  if (sheetBodies > 0) lines.push(`${sheetBodies} sheet bod${sheetBodies === 1 ? "y" : "ies"}`);
   if (dev && tDev.checked) {
     lines.push(`max dev ${dev.maxAbs.toFixed(4)} mm`, `rms ${dev.rms.toFixed(4)} mm`);
   }
@@ -488,16 +536,27 @@ function showGeometryInfo(res: ConvertResult, edges: number): void {
   infoPanel.hidden = false;
   iUnits.textContent = res.units || "—";
   iDims.textContent = res.bbox ? fmtDims(res.bbox) : "—";
-  iBodies.textContent = res.stats.solids.toLocaleString();
+  const sheets = res.openSolids.length;
+  iBodies.textContent = sheets > 0
+    ? `${res.stats.solids.toLocaleString()} (${sheets.toLocaleString()} sheet${sheets === 1 ? "" : "s"})`
+    : res.stats.solids.toLocaleString();
   iFaces.textContent = res.stats.facesTotal.toLocaleString();
   iTris.textContent = triCount(res.mesh).toLocaleString();
   watertight.hidden = false;
-  if (edges === 0) {
+  if (edges === 0 && sheets === 0) {
     watertight.textContent = "✓ Watertight · print-ready";
     watertight.className = "badge ok";
+    watertight.title = "";
+  } else if (edges === 0) {
+    // Sheet bodies (OPEN_SHELL surface models) have boundary edges by design — with none
+    // unexpected, the conversion is clean, it just isn't a solid.
+    watertight.textContent = `✓ Clean · ${sheets.toLocaleString()} sheet bod${sheets === 1 ? "y" : "ies"}`;
+    watertight.className = "badge ok";
+    watertight.title = "Surface (sheet) bodies are open by design; their boundary edges are not defects. No unexpected open edges found.";
   } else {
-    watertight.textContent = `⚠ ${edges.toLocaleString()} open edge${edges === 1 ? "" : "s"}`;
+    watertight.textContent = `⚠ ${edges.toLocaleString()} unexpected open edge${edges === 1 ? "" : "s"}`;
     watertight.className = "badge warn";
+    watertight.title = sheets > 0 ? `Sheet-body boundaries (${sheets} bodies) are excluded from this count.` : "";
   }
 }
 

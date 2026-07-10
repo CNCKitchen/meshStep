@@ -136,6 +136,22 @@ export function filterTriangles(fullIndex: Uint32Array, solidOfTri: Uint32Array,
   return out.subarray(0, n);
 }
 
+/** An EdgeSet minus the segments belonging to the given solids — used to strip open-by-design
+ * sheet-body boundaries out of the open-edge (defect) overlay. */
+export function dropSolidSegments(edges: EdgeSet, drop: ReadonlySet<number>): EdgeSet {
+  if (drop.size === 0) return edges;
+  const positions = new Float32Array(edges.positions.length);
+  const solidOfSeg = new Uint32Array(edges.count);
+  let n = 0;
+  for (let s = 0; s < edges.count; s++) {
+    if (drop.has(edges.solidOfSeg[s]!)) continue;
+    positions.set(edges.positions.subarray(s * 6, s * 6 + 6), n * 6);
+    solidOfSeg[n] = edges.solidOfSeg[s]!;
+    n++;
+  }
+  return { positions: positions.subarray(0, n * 6), count: n, solidOfSeg: solidOfSeg.subarray(0, n) };
+}
+
 /** Line-segment positions with every segment of a hidden solid removed. */
 export function filterSegments(edges: EdgeSet, hidden: ReadonlySet<number>): Float32Array {
   const out = new Float32Array(edges.positions.length);

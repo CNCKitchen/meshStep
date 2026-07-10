@@ -181,6 +181,18 @@ Options mirror Fusion's mesh-export dialog: `surfaceDeviation` (mm), `normalDevi
 `maxEdge` (mm), plus `remesh: true` for uniform-isotropic output (default off — the raw
 tessellation is watertight and shades cleaner).
 
+The tolerances are absolute, so one default can't fit both a 5 mm clip and a 3 m assembly.
+`estimateStepSize(src)` measures the model without tessellating (parse + point scan, sub-second
+even on large assemblies) and `autoTessellation(diagMm)` turns that into size-adaptive defaults —
+anchored so a ~100 mm part gets the standard 0.01 mm / 1 mm:
+
+```ts
+import { estimateStepSize, autoTessellation } from "meshstep";
+const est = estimateStepSize(stepText); // { bbox, diag, units } | null
+const opts = est ? autoTessellation(est.diag) : {}; // { surfaceDeviation, maxEdge }
+const result = importStep(stepText, opts);
+```
+
 ## Import diagnostics
 
 Every import returns a `diagnostics` verdict so an application can tell a trustworthy conversion
