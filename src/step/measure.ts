@@ -117,13 +117,16 @@ const clamp = (v: number, lo: number, hi: number): number => Math.min(hi, Math.m
 
 /**
  * Size-adaptive tessellation defaults, anchored so a ~100 mm part gets the library defaults
- * (0.01 mm surface deviation, 1 mm max edge) and everything scales linearly with model size:
- * a 10 mm clip tightens to 0.002/0.2, a 3 m assembly relaxes to 0.2/20. Clamps keep tiny
- * models from demanding sub-micron chords and huge ones from degenerating into facets.
+ * (0.01 mm surface deviation, 1 mm max edge). Max edge scales linearly with model size, but
+ * surface deviation scales linearly below that anchor but only doubles per decade above it
+ * (100 mm → 0.01, 1000 mm → 0.02): chord error is an absolute surface-quality budget, so
+ * letting it grow 10× on metre-scale parts visibly facets them. Clamps keep tiny models from
+ * demanding sub-micron chords.
  */
 export function autoTessellation(diagMm: number): { surfaceDeviation: number; maxEdge: number } {
+  const dev = diagMm <= 100 ? diagMm * 1e-4 : 0.01 * 2 ** Math.log10(diagMm / 100);
   return {
-    surfaceDeviation: nice(clamp(diagMm * 1e-4, 0.001, 0.5)),
+    surfaceDeviation: nice(clamp(dev, 0.001, 0.1)),
     maxEdge: nice(clamp(diagMm * 1e-2, 0.1, 100)),
   };
 }

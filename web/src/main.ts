@@ -53,6 +53,8 @@ const legMeta = $("legMeta");
 const statsEl = $("stats");
 const partsPanel = $("partsPanel");
 const partsTree = $("partsTree");
+const partsShowAll = $<HTMLButtonElement>("partsShowAll");
+const partsHideAll = $<HTMLButtonElement>("partsHideAll");
 const autoNote = $("autoNote");
 const surfaceDeviationEl = $<HTMLInputElement>("surfaceDeviation");
 const maxEdgeEl = $<HTMLInputElement>("maxEdge");
@@ -279,6 +281,7 @@ function applyResult(res: ConvertResult): void {
 // Hidden state lives in one Set of solid ids; checkbox checked/indeterminate states are derived
 // from it after every change, so parent and child boxes can never disagree with the viewer.
 let hiddenParts = new Set<number>();
+let allPartSolids: number[] = [];
 const partRows: { cb: HTMLInputElement; row: HTMLElement; solids: number[] }[] = [];
 
 /** Collapse wrapper levels (a product whose rep only points at one sub-product carries no
@@ -396,11 +399,21 @@ function buildPartsPanel(root: PartNode): void {
   partRows.length = 0;
   partsTree.textContent = "";
   const merged = mergeChains(root);
+  allPartSolids = subtreeSolids(merged);
   const show = merged.children.length > 0 || merged.bodies.length > 1;
   partsPanel.hidden = !show;
   if (!show) return;
   for (const el of nodeRows(merged, 0)) partsTree.appendChild(el);
 }
+
+partsShowAll.addEventListener("click", () => {
+  hiddenParts.clear();
+  applyHiddenParts();
+});
+partsHideAll.addEventListener("click", () => {
+  hiddenParts = new Set(allPartSolids);
+  applyHiddenParts();
+});
 
 // ---- export ----
 exportBtn.addEventListener("click", () => {
