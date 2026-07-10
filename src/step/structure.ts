@@ -8,6 +8,7 @@
 // and replicated with the SAME solid ids, so one node with `occurrences: N` is the finest
 // granularity a consumer can act on (hiding it hides all N instances).
 import { Table, ref, refList, str } from "./entities.ts";
+import { assemblyLinks } from "./assembly.ts";
 import type { BSolid } from "../brep/build.ts";
 
 /** One solid body: `id` matches the values of MeshResult.solidOfTri. */
@@ -97,12 +98,7 @@ function buildTree(
     const a = ref(srr.params[2]!), b = ref(srr.params[3]!);
     equiv.set(a, b); equiv.set(b, a);
   }
-  const links: { child: number; parent: number }[] = [];
-  for (const [id] of table.byType("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION")) {
-    const rr = table.sub(id, "REPRESENTATION_RELATIONSHIP");
-    if (!rr || rr.params[2]?.k !== "ref" || rr.params[3]?.k !== "ref") continue;
-    links.push({ child: ref(rr.params[2]!), parent: ref(rr.params[3]!) });
-  }
+  const links: { child: number; parent: number }[] = assemblyLinks(table);
   if (links.length === 0 && solidsOfRep.size === 1) {
     // Single-part file: one node with the product's own name.
     const [repId, ids] = [...solidsOfRep][0]!;

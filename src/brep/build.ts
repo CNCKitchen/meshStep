@@ -6,6 +6,7 @@ import type { Vec3 } from "../geom/vec.ts";
 import { Table, ref, refList, enumOf, num } from "../step/entities.ts";
 import { parseStep } from "../step/parser.ts";
 import { detectUnits, detectUncertainty, contextLengthScales, type Units } from "../step/units.ts";
+import { assemblyLinks } from "../step/assembly.ts";
 import { readPoint, readPlacement, type Frame } from "../geom/placement.ts";
 import { makeCurve } from "../geom/curves.ts";
 
@@ -109,18 +110,16 @@ function assemblyInfo(t: Table, s: number): {
   };
 
   // child rep -> [{ parent rep, transform mapping child frame -> parent frame }] (one per occurrence)
+  // assemblyLinks resolves which rep is the child per relationship (exporters disagree on the
+  // (rep_1, rep_2) order); each IDT placement is read in its own rep's units.
   const parents = new Map<number, { rep: number; xf: Frame }[]>();
-  for (const [id, rrwt] of t.byType("REPRESENTATION_RELATIONSHIP_WITH_TRANSFORMATION")) {
-    const rr = t.sub(id, "REPRESENTATION_RELATIONSHIP");
-    if (!rr || rr.params[2]?.k !== "ref" || rr.params[3]?.k !== "ref") continue;
-    const child = ref(rr.params[2]!), par = ref(rr.params[3]!);
-    const idt = t.record(ref(rrwt.params[0]!)); // ITEM_DEFINED_TRANSFORMATION(name, desc, item1, item2)
-    // item1 is a placement in the CHILD rep, item2 in the PARENT rep — each in its rep's own units.
-    const p1 = readPlacement(t, ref(idt.params[2]!), scaleOfRep(child));
-    const p2 = readPlacement(t, ref(idt.params[3]!), scaleOfRep(par));
-    const arr = parents.get(child) ?? [];
-    arr.push({ rep: par, xf: composeF(p2, invF(p1)) }); // maps item1 frame -> item2 frame
-    parents.set(child, arr);
+  for (const l of assemblyLinks(t)) {
+    if (l.childItem === undefined || l.parentItem === undefined) continue;
+    const pc = readPlacement(t, l.childItem, scaleOfRep(l.child));
+    const pp = readPlacement(t, l.parentItem, scaleOfRep(l.parent));
+    const arr = parents.get(l.child) ?? [];
+    arr.push({ rep: l.parent, xf: composeF(pp, invF(pc)) }); // maps child item frame -> parent item frame
+    parents.set(l.child, arr);
   }
   // identity SHAPE_REPRESENTATION_RELATIONSHIP links a placeholder rep to the geometry rep (ABSR)
   const equiv = new Map<number, number>();
