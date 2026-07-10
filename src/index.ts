@@ -10,6 +10,7 @@ import type { IndexedMesh } from "./io/stl.ts";
 import { meshDefects, type ImportDiagnostics } from "./mesh/diag.ts";
 import { extractColors, type ModelColors } from "./step/styles.ts";
 import { extractStructure, type PartNode } from "./step/structure.ts";
+import { collectMeasureGeometry, type MeasureGeometry } from "./brep/measure-geometry.ts";
 
 /** Move each part's vertices into its assembly world placement(s). Each vertex belongs to one solid
  * (bodies are welded independently), so the first instance transforms in place; a part used N times
@@ -87,6 +88,7 @@ export { meshDefects, type ImportDiagnostics, type MeshWarning, type WarningCode
 export { extractColors, type ModelColors, type RGB } from "./step/styles.ts";
 export { extractStructure, type PartNode, type PartBody } from "./step/structure.ts";
 export { estimateStepSize, autoTessellation, type SizeEstimate } from "./step/measure.ts";
+export type { MeasureGeometry, MeasureEdge, MeasureFace } from "./brep/measure-geometry.ts";
 
 export interface ImportProgress {
   /** "parse" fires once before the B-rep build (duration unknown → indeterminate UI);
@@ -116,6 +118,9 @@ export interface ImportOptions {
   remeshIterations?: number;
   /** Diagnostic hook: called once per B-rep face with the mesher that produced it. */
   trace?: TessOptions["trace"];
+  /** Also collect per-edge/per-face analytic measurement geometry (exact circle centers/radii,
+   * boundary polylines coincident with the mesh) into `ImportResult.measure` (default false). */
+  measureGeometry?: boolean;
 }
 
 export interface ImportResult extends MeshResult {
@@ -134,6 +139,9 @@ export interface ImportResult extends MeshResult {
    * highlight a part by filtering triangles on those ids. A part occurring N times in the
    * assembly is one node with `occurrences: N` (instances share solid ids). */
   structure: PartNode;
+  /** Analytic measurement geometry (per-edge curve identity + exact boundary polylines,
+   * instance-placed like the mesh) when `measureGeometry` was requested. */
+  measure?: MeasureGeometry;
 }
 
 /** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
@@ -154,6 +162,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   const tess: TessOptions = {
     chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad, trace: opts.trace,
     onProgress: onProgress && ((done, total) => onProgress({ phase: "tessellate", done, total })),
+    collectEdgePolylines: opts.measureGeometry,
   };
   const result = tessellate(brep, tess);
   onProgress?.({ phase: "finalize", done: 0, total: 0 });
@@ -164,12 +173,15 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
     if (solid.instances) solidXf.set(solid.id, solid.instances);
     else if (solid.transform) solidXf.set(solid.id, [solid.transform]);
   }
+  const measure = opts.measureGeometry && result.edgePolylines
+    ? collectMeasureGeometry(brep, result.edgePolylines, solidXf) : undefined;
+  delete result.edgePolylines; // consumed above — keep the raw polyline map out of the result
   // AP242 tessellated-geometry bodies have no analytic surfaces, so the curvature-adaptive remesh
   // can't project — return the (already watertight) faceted mesh as imported.
   if (opts.remesh !== true || brep.solids.length === 0) {
     orientConsistent(result.mesh, result.solidOfTri);
     const placed = applyAssemblyPlacement(result.mesh, result.faceOfTri, result.solidOfTri, solidXf);
-    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure };
+    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure, measure };
   }
 
   const surf = new Map<number, Surface | null>();
@@ -186,5 +198,5 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   const solidOfTri = Uint32Array.from(r.faceOfTri, (f) => solidOfFace.get(f) ?? 0);
   orientConsistent(r.mesh, solidOfTri); // fix any triangles flipped by smoothing
   const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf);
-  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure };
+  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure, measure };
 }

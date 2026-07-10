@@ -45,6 +45,11 @@ const tTransparent = $<HTMLInputElement>("tTransparent");
 const tEdgesOnly = $<HTMLInputElement>("tEdgesOnly");
 const tSection = $<HTMLInputElement>("tSection");
 const sectionRow = $("sectionRow");
+const tMeasure = $<HTMLInputElement>("tMeasure");
+const measureRow = $("measureRow");
+const mDist = $<HTMLButtonElement>("mDist");
+const mEdge = $<HTMLButtonElement>("mEdge");
+const mClear = $<HTMLButtonElement>("mClear");
 const projBtn = $<HTMLButtonElement>("projBtn");
 const tRef = $<HTMLInputElement>("tRef");
 const tDev = $<HTMLInputElement>("tDev");
@@ -279,6 +284,10 @@ function applyResult(res: ConvertResult): void {
   closeMenus(); // a stale context menu would act on the previous model's ids
 
   viewer.setMesh(geo, b, feat, faceColors, res.mesh.solidOfTri);
+  // After setMesh (which clears the previous model's measurements). Distance measuring works on
+  // bare surface points even when the payload has no analytic edges (AP242 tessellated bodies).
+  viewer.setMeasureData(res.measure);
+  tMeasure.disabled = false;
   viewer.fit();
   buildPartsPanel(res.structure);
 
@@ -698,6 +707,24 @@ $<HTMLButtonElement>("secX").addEventListener("click", () => viewer.setSectionAx
 $<HTMLButtonElement>("secY").addEventListener("click", () => viewer.setSectionAxis("y"));
 $<HTMLButtonElement>("secZ").addEventListener("click", () => viewer.setSectionAxis("z"));
 $<HTMLButtonElement>("secFlip").addEventListener("click", () => viewer.flipSection());
+
+// ---- measure mode ----
+tMeasure.addEventListener("change", () => {
+  viewer.setMeasure(tMeasure.checked);
+  measureRow.hidden = !tMeasure.checked;
+});
+viewer.onMeasureExit = () => { // ESC in the viewport leaves the mode — sync the sidebar
+  tMeasure.checked = false;
+  measureRow.hidden = true;
+};
+function setMeasureMode(mode: "distance" | "edge"): void {
+  viewer.setMeasureMode(mode);
+  mDist.classList.toggle("active", mode === "distance");
+  mEdge.classList.toggle("active", mode === "edge");
+}
+mDist.addEventListener("click", () => setMeasureMode("distance"));
+mEdge.addEventListener("click", () => setMeasureMode("edge"));
+mClear.addEventListener("click", () => viewer.clearMeasurements());
 
 let orthoOn = false;
 projBtn.addEventListener("click", () => {

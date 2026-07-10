@@ -295,6 +295,16 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .section-row { display: flex; gap: 6px; margin: 2px 0 4px 23px; }
 .section-row[hidden] { display: none; }
 
+/* ---- measure mode ---- */
+.parts-btn.active { border-color: var(--accent); color: var(--accent); }
+#viewport.measuring canvas { cursor: crosshair; }
+.measure-label {
+  background: var(--chip-bg); color: var(--text); border: 1px solid var(--line);
+  border-radius: 5px; padding: 2px 7px; font-size: 12px; font-weight: 600;
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  pointer-events: none; backdrop-filter: blur(4px);
+}
+
 /* ---- viewport context menu + part-info popup ---- */
 .ctx-menu {
   position: fixed; z-index: 30; min-width: 170px; max-width: 280px;

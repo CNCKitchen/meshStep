@@ -2,7 +2,7 @@
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
-import { importStep, estimateStepSize, type ImportOptions, type ImportDiagnostics, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
+import { importStep, estimateStepSize, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
 
 export interface ConvertRequest {
   type: "convert";
@@ -47,6 +47,9 @@ export interface ConvertResult {
   openSolids: number[];
   /** Authoritative conversion verdict: openEdges/nonManifoldEdges already exclude openSolids. */
   diagnostics: ImportDiagnostics;
+  /** Analytic measurement geometry (exact circle centers/radii + edge polylines coincident with
+   * the mesh), instance-placed like the mesh; null for AP242 tessellated bodies with no B-rep. */
+  measure: MeasureGeometry | null;
 }
 
 export interface ProgressMessage {
@@ -100,6 +103,7 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
     const tess = importStep(req.stepText, {
       ...req.opts,
       remesh: false,
+      measureGeometry: true,
       onProgress: (p) => {
         if (p.phase === "finalize") { post({ type: "progress", stage: "Finalizing…", fraction: 1 }); return; }
         if (p.phase !== "tessellate" || p.total <= 0) return;
@@ -128,9 +132,11 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
         structure: tess.structure,
         openSolids: tess.openSolids,
         diagnostics: tess.diagnostics,
+        measure: tess.measure ?? null,
       },
       // Transfer the underlying buffers to avoid a copy.
-      [pos.buffer, idx.buffer, fot.buffer, sot.buffer],
+      [pos.buffer, idx.buffer, fot.buffer, sot.buffer,
+        ...(tess.measure ? [tess.measure.points.buffer] : [])],
     );
   } catch (err) {
     post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });

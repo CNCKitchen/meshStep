@@ -130,6 +130,12 @@
             <button type="button" class="parts-btn" id="secZ" title="Section perpendicular to Z">Z</button>
             <button type="button" class="parts-btn" id="secFlip" title="Keep the other half">Flip</button>
           </div>
+          <label class="toggle"><input type="checkbox" id="tMeasure" disabled /> Measure (distance, Ø)</label>
+          <div class="section-row" id="measureRow" hidden>
+            <button type="button" class="parts-btn active" id="mDist" title="Point-to-point distance (snaps to vertices, hole centers, edges)">Distance</button>
+            <button type="button" class="parts-btn" id="mEdge" title="Click an edge: length, hole Ø, arc radius">Edge</button>
+            <button type="button" class="parts-btn" id="mClear" title="Remove all measurements">Clear</button>
+          </div>
         </section>
 
         <section class="panel" id="partsPanel" hidden>

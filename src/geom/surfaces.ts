@@ -816,3 +816,49 @@ export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface 
 export { Sphere, BSplineSurface };
 export const isSphere = (s: Surface): s is Sphere => s.kind === "SPHERICAL_SURFACE";
 export const isBSpline = (s: Surface): s is BSplineSurface => s.kind === "B_SPLINE_SURFACE";
+
+/** Analytic identity of a face surface, for measurement tools. Params in mm / radians. */
+export interface SurfaceInfo {
+  kind: string; // STEP kind: PLANE | CYLINDRICAL_SURFACE | CONICAL_SURFACE | ... ("" for complex)
+  origin?: Vec3;
+  /** Plane normal / cylinder-cone-revolution axis. */
+  axis?: Vec3;
+  radius?: number;
+  semiAngle?: number;
+}
+
+/**
+ * Extract the analytic parameters of a face surface (placement origin, axis, radius) without
+ * building an evaluable Surface. Mirrors `makeSurface`'s record layout for the fixed quadrics;
+ * swept/B-spline/complex surfaces report only their kind.
+ */
+export function analyzeSurface(t: Table, id: number, s: number, aRad = 1): SurfaceInfo {
+  const kind = t.typeOf(id);
+  if (!kind) return { kind: "" };
+  const r = t.record(id);
+  switch (kind) {
+    case "PLANE": {
+      const f = readPlacement(t, ref(r.params[1]!), s);
+      return { kind, origin: f.o, axis: f.z };
+    }
+    case "CYLINDRICAL_SURFACE": {
+      const f = readPlacement(t, ref(r.params[1]!), s);
+      return { kind, origin: f.o, axis: f.z, radius: num(r.params[2]!) * s };
+    }
+    case "CONICAL_SURFACE": {
+      const f = readPlacement(t, ref(r.params[1]!), s);
+      return { kind, origin: f.o, axis: f.z, radius: num(r.params[2]!) * s, semiAngle: num(r.params[3]!) * aRad };
+    }
+    case "SPHERICAL_SURFACE": {
+      const f = readPlacement(t, ref(r.params[1]!), s);
+      return { kind, origin: f.o, radius: num(r.params[2]!) * s };
+    }
+    case "TOROIDAL_SURFACE":
+    case "DEGENERATE_TOROIDAL_SURFACE": {
+      const f = readPlacement(t, ref(r.params[1]!), s);
+      return { kind, origin: f.o, axis: f.z, radius: num(r.params[2]!) * s };
+    }
+    default:
+      return { kind };
+  }
+}

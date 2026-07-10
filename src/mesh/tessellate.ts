@@ -44,6 +44,10 @@ export interface TessOptions {
    * monotone counts. `total` is fixed up front, so done/total is a usable fraction — including for
    * assemblies, where every solid's faces are in the count. Callers throttle; this stays sync. */
   onProgress?: (done: number, total: number) => void;
+  /** Attach the per-edge boundary polylines (part-local mm, post-densification) to the result.
+   * These are the exact samplings the mesh was built from, so measurement/snap geometry derived
+   * from them is coincident with rendered feature edges — resampling outside tessellate is not. */
+  collectEdgePolylines?: boolean;
 }
 
 export interface MeshResult {
@@ -58,6 +62,8 @@ export interface MeshResult {
   /** Structured findings from the rescue/fallback meshing paths (dropped/skipped faces, heuristic
    * fills, degenerate boundaries) — the per-face half of the import diagnostics. */
   warnings: MeshWarning[];
+  /** Per-edge boundary polylines (part-local mm) when `collectEdgePolylines` was set. */
+  edgePolylines?: Map<number, Vec3[]>;
 }
 
 const bump = (o: Record<string, number>, k: string): void => { o[k] = (o[k] ?? 0) + 1; };
@@ -4046,6 +4052,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     openSolids: brep.solids.filter((s) => s.open).map((s) => s.id),
     stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped },
     warnings: takeWarnings(),
+    ...(opts.collectEdgePolylines ? { edgePolylines: sampled } : {}),
   };
 }
 

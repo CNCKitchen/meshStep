@@ -2,8 +2,12 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { ViewHelper } from "three/addons/helpers/ViewHelper.js";
+import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
+import { MeshBVH } from "three-mesh-bvh";
 import { filterTriangles, filterSegments, type EdgeSet } from "./mesh-utils.ts";
 import { SectionController } from "./section.ts";
+import { MeasureController, type MeasureMode } from "./measure.ts";
+import type { MeasureGeometry } from "../../src/index.ts";
 
 interface Content {
   group: THREE.Group;
@@ -109,6 +113,19 @@ export class Viewer {
   // Axes triad in the lower-right corner showing the world orientation.
   private viewHelper: ViewHelper;
 
+  // Measurement mode: snapping, markers and committed dimensions (measure.ts). Labels render as
+  // DOM elements through a CSS2DRenderer overlay pass (theme-aware, never section-clipped).
+  private measure: MeasureController;
+  private labelRenderer: CSS2DRenderer;
+  // Lazy BVH over the FULL (unfiltered) triangle index for measurement raycasts: built on first
+  // use (multi-million-tri builds would jank every conversion otherwise), survives part hiding
+  // (hits are filtered by solidOfTri instead), invalidated when the model changes.
+  private pickBvh: MeshBVH | null = null;
+  private pickGeo: THREE.BufferGeometry | null = null;
+
+  /** Measure mode was exited internally (ESC) — sync the sidebar toggle. */
+  onMeasureExit: (() => void) | null = null;
+
   constructor(container: HTMLElement) {
     this.container = container;
     // stencil: required for the filled section caps (default off since r163).
@@ -167,6 +184,27 @@ export class Viewer {
       partCenter: () => this.contentCenter(),
     });
 
+    // DOM-label overlay pass (measurement readouts). pointer-events: none so orbit/wheel/
+    // section-gizmo interactions pass straight through to the canvas.
+    this.labelRenderer = new CSS2DRenderer();
+    const lr = this.labelRenderer.domElement;
+    lr.style.position = "absolute";
+    lr.style.inset = "0";
+    lr.style.pointerEvents = "none";
+    container.appendChild(lr);
+
+    this.measure = new MeasureController({
+      scene: this.scene,
+      camera: () => this.camera,
+      domElement: () => this.renderer.domElement,
+      raycastSurface: (x, y) => this.raycastSurface(x, y),
+      sectionPlane: () => (this.section.enabled ? this.section.plane : null),
+      hiddenSolids: () => this.hiddenSolids,
+      busy: () => this.section.busy(),
+      onEnabledChanged: () => this.onMeasureExit?.(),
+      bboxDiag: () => this.contentDiag(),
+    });
+
     this.installNavigation(this.renderer.domElement);
 
     window.addEventListener("resize", () => this.resize());
@@ -178,6 +216,7 @@ export class Viewer {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
     this.renderer.setSize(w, h, true);
+    this.labelRenderer.setSize(w, h);
     this.persp.aspect = w / h;
     this.persp.updateProjectionMatrix();
     this.setOrthoFrustum(this.ortho.top - this.ortho.bottom); // preserve current world height
@@ -335,6 +374,40 @@ export class Viewer {
       : hits[0];
     if (!hit || hit.faceIndex == null) return null;
     return this.drawnSolidOfTri[hit.faceIndex] ?? null;
+  }
+
+  /** Lazy full-index BVH for measurement raycasts. `indirect: true` is essential: the default
+   *  build REORDERS the index in place, which would scramble the triangle -> solidOfTri mapping
+   *  (and the drawn mesh, since the position/index buffers are shared with the visible solid). */
+  private ensurePickBvh(): MeshBVH | null {
+    if (this.pickBvh) return this.pickBvh;
+    const c = this.content;
+    if (!c.solid || !this.fullIndex) return null;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute("position", c.solid.geometry.getAttribute("position"));
+    geo.setIndex(new THREE.BufferAttribute(this.fullIndex, 1));
+    this.pickGeo = geo;
+    this.pickBvh = new MeshBVH(geo, { indirect: true });
+    return this.pickBvh;
+  }
+
+  /** Nearest VISIBLE surface point under the client coords for the measure tool: BVH raycast on
+   *  the full mesh, skipping hidden parts and (in section view) hits on the clipped-away side. */
+  private raycastSurface(clientX: number, clientY: number): THREE.Vector3 | null {
+    const bvh = this.ensurePickBvh();
+    if (!bvh) return null;
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hits = bvh.raycast(this.raycaster.ray, THREE.DoubleSide);
+    hits.sort((a, b) => a.distance - b.distance);
+    for (const h of hits) {
+      if (h.faceIndex != null && this.solidOfTri && this.hiddenSolids.has(this.solidOfTri[h.faceIndex]!)) continue;
+      if (this.section.enabled && this.section.plane.distanceToPoint(h.point) < -1e-6) continue;
+      return h.point.clone();
+    }
+    return null;
   }
 
   private beginOrbit(ev: PointerEvent): void {
@@ -536,9 +609,11 @@ export class Viewer {
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.controls.update();
+    this.measure.update(); // process queued hover + keep markers a constant apparent size
     this.renderer.clear(); // autoClear is off for the axes-triad second pass
     this.renderer.render(this.scene, this.camera);
     this.viewHelper.render(this.renderer);
+    this.labelRenderer.render(this.scene, this.camera);
   };
 
   /** Push/remove the section clipping plane on every content material. */
@@ -597,6 +672,8 @@ export class Viewer {
     this.faceColors = faceColors;
     this.devColors = null; // stale deviation colors would mismatch the new vertex count
     this.lastOrbitPivot = null; // a pivot on the old model would be off-surface
+    this.disposePickBvh(); // built from the old model's buffers
+    this.measure.setData(null); // old measurements/labels would float over the new model
     this.solidOfTri = solidOfTri;
     this.drawnSolidOfTri = solidOfTri;
     this.fullIndex = (geometry.getIndex()?.array as Uint32Array) ?? null;
@@ -791,9 +868,19 @@ export class Viewer {
   /** Swap which half of the model is kept. */
   flipSection(): void { this.section.flip(); }
 
+  // ---------- measurement ----------
+
+  /** Toggle measure mode (snap-assisted distance / edge dimensions). */
+  setMeasure(v: boolean): void { this.measure.setEnabled(v); }
+  setMeasureMode(m: MeasureMode): void { this.measure.setMode(m); }
+  /** Swap the model's measurement payload (null = no B-rep / clear everything). */
+  setMeasureData(d: MeasureGeometry | null): void { this.measure.setData(d); }
+  clearMeasurements(): void { this.measure.clearAll(); }
+
   /** Match the 3D background to the UI theme. */
   setTheme(mode: "light" | "dark"): void {
     this.scene.background = new THREE.Color(mode === "light" ? 0xe9edf2 : 0x14181d);
+    this.measure.setTheme(mode);
   }
   setReferenceVisible(v: boolean): void { this.showReference = v; this.applyVisibility(); }
   setDeviation(v: boolean): void { this.deviationOn = v; this.applyVisibility(); }
@@ -871,6 +958,13 @@ export class Viewer {
     this.controls.target.copy(center);
     this.controls.update();
     this.lastOrbitPivot = center.clone();
+  }
+
+  private disposePickBvh(): void {
+    // The shadow geometry shares the solid's position/index buffers — dispose() would destroy
+    // the GPU buffers of the visible mesh, so only drop the references.
+    this.pickBvh = null;
+    this.pickGeo = null;
   }
 
   private disposeMeshes(c: Content): void {

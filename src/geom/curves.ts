@@ -189,6 +189,69 @@ export function makeCurve(t: Table, id: number, s: number, aRad = 1): Curve3 | n
   return null;
 }
 
+// ---- Edge-curve classification (measurement metadata) ------------------------------------------
+
+/** Analytic identity of one EDGE_CURVE, for measurement tools. Params are in mm (scaled). */
+export interface EdgeCurveInfo {
+  kind: "line" | "circle" | "ellipse" | "other";
+  /** Circle/ellipse center and plane normal. */
+  center?: Vec3;
+  axis?: Vec3;
+  /** Circle radius / ellipse semi-axes. */
+  radius?: number;
+  radius2?: number;
+  /** Unit direction for a line edge. */
+  dir?: Vec3;
+  /** Signed traversed arc angle v0 -> v1 (rad); ±2π for a full circle. */
+  sweep?: number;
+  /** Exact analytic length where closed-form (line, circular arc); undefined otherwise. */
+  length?: number;
+}
+
+/**
+ * Classify the curve of an EDGE_CURVE from vertex v0 to v1 and extract its analytic parameters.
+ * Mirrors `sampleEdgePolyline`'s dispatch (unwraps SURFACE_CURVE/SEAM_CURVE/INTERSECTION_CURVE and
+ * TRIMMED_CURVE to the underlying conic/line) and its arc-sweep convention, so the reported
+ * radius/center/sweep describe exactly the geometry the mesh boundary was sampled from.
+ */
+export function analyzeEdgeCurve(t: Table, curveId: number, v0: Vec3, v1: Vec3, sameSense: boolean, s: number): EdgeCurveInfo {
+  const kind = t.typeOf(curveId);
+  if (kind === "SURFACE_CURVE" || kind === "SEAM_CURVE" || kind === "INTERSECTION_CURVE" || kind === "TRIMMED_CURVE") {
+    return analyzeEdgeCurve(t, ref(t.record(curveId).params[1]!), v0, v1, sameSense, s);
+  }
+  // Sweep of a conic edge: same full-circle gate (default-tolerance cap) and sense-directed
+  // normalization as sampleEdgePolyline.
+  const conicSweep = (t0: number, t1: number): number => {
+    if (dist(v0, v1) < 1e-5) return sameSense ? TWO_PI : -TWO_PI;
+    let d = t1 - t0;
+    if (sameSense) { while (d <= 0) d += TWO_PI; while (d > TWO_PI) d -= TWO_PI; }
+    else { while (d >= 0) d -= TWO_PI; while (d < -TWO_PI) d += TWO_PI; }
+    return d;
+  };
+  if (kind === "CIRCLE") {
+    const rec = t.record(curveId);
+    const f = readPlacement(t, ref(rec.params[1]!), s);
+    const R = num(rec.params[2]!) * s;
+    const ang = (p: Vec3): number => { const d = sub(p, f.o); return Math.atan2(dot(d, f.y), dot(d, f.x)); };
+    const sweep = conicSweep(ang(v0), ang(v1));
+    return { kind: "circle", center: f.o, axis: f.z, radius: R, sweep, length: Math.abs(sweep) * R };
+  }
+  if (kind === "ELLIPSE") {
+    const rec = t.record(curveId);
+    const f = readPlacement(t, ref(rec.params[1]!), s);
+    const a = num(rec.params[2]!) * s, b = num(rec.params[3]!) * s;
+    const at = (p: Vec3): number => { const d = sub(p, f.o); return Math.atan2(dot(d, f.y) / b, dot(d, f.x) / a); };
+    return { kind: "ellipse", center: f.o, axis: f.z, radius: a, radius2: b, sweep: conicSweep(at(v0), at(v1)) };
+  }
+  if (kind === "LINE") {
+    const rec = t.record(curveId); // LINE(name, pnt#, vector#)
+    const vec = t.record(ref(rec.params[2]!));
+    const dir = readDirection(t, ref(vec.params[1]!));
+    return { kind: "line", dir, length: dist(v0, v1) };
+  }
+  return { kind: "other" };
+}
+
 /**
  * Adaptively sample a Curve3 over [ta, tb] (defaults to its whole domain): start uniform, then
  * bisect any segment whose midpoint sags more than chordTol off the chord or that is longer than
