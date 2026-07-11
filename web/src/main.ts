@@ -2,7 +2,7 @@
 import "./styles.css";
 import * as THREE from "three";
 import { readSTL, writeBinarySTL, isBinarySTL, parseStepHeader, autoTessellation, type PartNode } from "../../src/index.ts";
-import { Viewer, BASE_COLOR } from "./viewer.ts";
+import { Viewer, BASE_COLOR, type CameraView } from "./viewer.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
   buildIndexedGeometry,
@@ -39,17 +39,18 @@ const progressBar = $("progressBar");
 const progressFill = $("progressFill");
 
 const tColors = $<HTMLInputElement>("tColors");
-const tWire = $<HTMLInputElement>("tWire");
+const tColorsLabel = $("tColorsLabel");
 const tEdges = $<HTMLInputElement>("tEdges");
 const tFeature = $<HTMLInputElement>("tFeature");
 const tFeatureLabel = $("tFeatureLabel");
 const creaseField = $("creaseField");
 const creaseAngle = $<HTMLInputElement>("creaseAngle");
-const tTransparent = $<HTMLInputElement>("tTransparent");
-const tEdgesOnly = $<HTMLInputElement>("tEdgesOnly");
-const tSection = $<HTMLInputElement>("tSection");
+const styleBtns = Array.from(document.querySelectorAll<HTMLButtonElement>("#styleSeg .seg-btn"));
+const viewsBtn = $<HTMLButtonElement>("viewsBtn");
+const viewsMenu = $("viewsMenu");
+const sectionBtn = $<HTMLButtonElement>("sectionBtn");
 const sectionRow = $("sectionRow");
-const tMeasure = $<HTMLInputElement>("tMeasure");
+const measureBtn = $<HTMLButtonElement>("measureBtn");
 const measureRow = $("measureRow");
 const mDist = $<HTMLButtonElement>("mDist");
 const mEdge = $<HTMLButtonElement>("mEdge");
@@ -64,8 +65,6 @@ const legend = $("legend");
 const legNeg = $("legNeg");
 const legPos = $("legPos");
 const legMeta = $("legMeta");
-const statsEl = $("stats");
-const vpLabel = $("vpLabel");
 const partsPanel = $("partsPanel");
 const partsTree = $("partsTree");
 const partsShowAll = $<HTMLButtonElement>("partsShowAll");
@@ -84,6 +83,8 @@ const iDims = $("iDims");
 const iBodies = $("iBodies");
 const iFaces = $("iFaces");
 const iTris = $("iTris");
+const iEdgesRow = $("iEdgesRow");
+const iEdges = $("iEdges");
 const iDate = $("iDate");
 
 // ---- store funnel (mirrors bumpmesh) ----
@@ -131,11 +132,10 @@ let worker: Worker | null = null;
 let mesh: RawMesh | null = null;
 let isStlModel = false; // current model came from an STL (no B-rep: crease edges, no CAD faces)
 let geo: THREE.BufferGeometry | null = null;
-let openEdges = 0; // unexpected (defect) open edges — sheet-body boundaries excluded
-let sheetBodies = 0;
 let openSolidsSet = new Set<number>();
 let solidOfTri: Uint32Array | null = null; // per-triangle body id (context-menu part info)
 let defectEdges: EdgeSet | null = null; // open-edge segments, sheet bodies excluded
+let defectSolids = new Set<number>(); // bodies with unexpected open edges — marked in the parts tree
 
 let reference: ReferenceSurface | null = null;
 let dev: DeviationResult | null = null;
@@ -213,7 +213,6 @@ refFile.addEventListener("change", async () => {
     tRef.disabled = false;
     tDev.disabled = false;
     recomputeDeviation();
-    refreshStats();
   } catch (err) {
     refName.textContent = "Failed to read STL";
     console.error(err);
@@ -277,6 +276,7 @@ function applyResult(res: ConvertResult): void {
   // for export and edge extraction; only the display geometry gets the extra border vertices.
   let faceColors: Float32Array | null = null;
   let displayMesh: RawMesh = mesh;
+  const hasStepColors = !!res.colors;
   if (res.colors) {
     const { palette, faceColor } = res.colors;
     const colorOfTri = new Int32Array(res.mesh.faceOfTri.length);
@@ -291,18 +291,44 @@ function applyResult(res: ConvertResult): void {
     const split = splitByTriColor(mesh, colorOfTri, linear, [c.r, c.g, c.b]);
     displayMesh = split.mesh;
     faceColors = split.colors;
+  } else {
+    // No colors in the file (STL, or a colorless STEP): offer random per-body colors instead so
+    // assembly parts are easy to tell apart. Same display path, palette from golden-ratio hues.
+    const sot = res.mesh.solidOfTri;
+    const paletteOfSolid = new Map<number, number>();
+    for (let t = 0; t < sot.length; t++) {
+      if (!paletteOfSolid.has(sot[t]!)) paletteOfSolid.set(sot[t]!, paletteOfSolid.size);
+    }
+    if (paletteOfSolid.size > 1) {
+      const c = new THREE.Color();
+      const palette: [number, number, number][] = [];
+      for (let i = 0; i < paletteOfSolid.size; i++) {
+        c.setHSL((0.08 + i * 0.61803398875) % 1, 0.55, 0.55, THREE.SRGBColorSpace);
+        palette.push([c.r, c.g, c.b]);
+      }
+      const colorOfTri = new Int32Array(sot.length);
+      for (let t = 0; t < sot.length; t++) colorOfTri[t] = paletteOfSolid.get(sot[t]!)!;
+      c.set(BASE_COLOR);
+      const split = splitByTriColor(mesh, colorOfTri, palette, [c.r, c.g, c.b]);
+      displayMesh = split.mesh;
+      faceColors = split.colors;
+    }
   }
+  tColorsLabel.textContent = hasStepColors ? "Model colors (from STEP)" : "Random colors (per part)";
   tColors.disabled = !faceColors;
-  tSection.disabled = false; // there is a solid to cut now
+  tColors.checked = hasStepColors && !!faceColors; // file colors show by default; random is opt-in
+  sectionBtn.disabled = false; // there is a solid to cut now
   geo = buildIndexedGeometry(displayMesh);
 
   // Open-edge (defect) overlay: a sheet body's boundary is open BY DESIGN — drop those solids'
   // segments so the red highlight and the counters only report unexpected openings. The
   // authoritative count comes from the import diagnostics (same exclusion, core-side).
   openSolidsSet = new Set(res.openSolids);
-  sheetBodies = res.openSolids.length;
-  openEdges = res.diagnostics.openEdges;
+  const openEdges = res.diagnostics.openEdges;
   const b = dropSolidSegments(boundaryEdges(mesh, res.mesh.solidOfTri), openSolidsSet);
+  // Bodies with defect segments get flagged in the parts tree (sheet bodies already dropped).
+  defectSolids = new Set();
+  for (let s = 0; s < b.count; s++) defectSolids.add(b.solidOfSeg[s]!);
   // An STL has no CAD faces — "surface boundaries" become crease edges above the angle
   // threshold (dihedral between adjacent triangles), re-detectable live via the angle field.
   isStlModel = res.kind === "stl";
@@ -316,10 +342,11 @@ function applyResult(res: ConvertResult): void {
   closeMenus(); // a stale context menu would act on the previous model's ids
 
   viewer.setMesh(geo, b, feat, faceColors, res.mesh.solidOfTri);
+  viewer.setShowColors(tColors.checked); // the flag persists across loads; match the checkbox
   // After setMesh (which clears the previous model's measurements). Distance measuring works on
   // bare surface points even when the payload has no analytic edges (AP242 tessellated bodies).
   viewer.setMeasureData(res.measure);
-  tMeasure.disabled = false;
+  measureBtn.disabled = false;
   viewer.fit();
   buildPartsPanel(res.structure);
 
@@ -327,12 +354,10 @@ function applyResult(res: ConvertResult): void {
 
   dev = null;
   recomputeDeviation();
-  refreshStats();
 
   hideOverlay();
   convertBtn.disabled = !stepText; // stays disabled for a loaded STL (nothing to convert)
   exportBtn.disabled = false;
-  vpLabel.textContent = res.kind === "stl" ? "STL mesh" : "Tessellated";
   setStatus(`${res.kind === "stl" ? "Loaded" : "Done"} · ${triCount(mesh).toLocaleString()} tris`);
 }
 
@@ -415,6 +440,11 @@ function partRow(label: string, meta: string, solids: number[], depth: number, c
   const metaEl = document.createElement("span");
   metaEl.className = "part-meta";
   metaEl.textContent = meta;
+
+  if (solids.some((id) => defectSolids.has(id))) {
+    row.classList.add("leaky");
+    name.title = `${label} — has open edges`;
+  }
 
   row.append(caret, cb, name, metaEl);
   partRows.push({ cb, row, solids });
@@ -506,6 +536,7 @@ const partPop = $("partPop");
 function closeMenus(): void {
   ctxMenu.hidden = true;
   partPop.hidden = true;
+  viewsMenu.hidden = true;
   viewer.setHighlightSolids(null);
 }
 
@@ -534,10 +565,19 @@ function placeAt(el: HTMLElement, x: number, y: number): void {
 viewer.onContextMenu = (solidId, x, y) => {
   closeMenus();
   if (!mesh) return;
+  // Everything the click ray passes through, front to back (hidden parts included): the menu
+  // can be retargeted onto an interior part without hiding the externals first. If only
+  // hidden parts sit under the cursor, the front-most of those becomes the target.
+  const rayIds = viewer.pickSolidsThrough(x, y);
+  openCtxMenu(solidId ?? rayIds[0] ?? null, rayIds, x, y);
+};
+
+/** Build (or rebuild, when retargeting via the ray list) the viewport context menu. */
+function openCtxMenu(targetId: number | null, rayIds: number[], x: number, y: number): void {
   ctxMenu.textContent = "";
-  const info = solidId == null ? undefined : solidInfo.get(solidId);
-  if (info && solidId != null) {
-    const id = solidId;
+  const info = targetId == null ? undefined : solidInfo.get(targetId);
+  if (info && targetId != null) {
+    const id = targetId;
     const title = document.createElement("div");
     title.className = "ctx-title";
     title.textContent = info.label;
@@ -559,6 +599,43 @@ viewer.onContextMenu = (solidId, x, y) => {
     const sep = document.createElement("div");
     sep.className = "ctx-sep";
     ctxMenu.appendChild(sep);
+    if (rayIds.length > 1) {
+      const sub = document.createElement("div");
+      sub.className = "ctx-subtitle";
+      sub.textContent = "Under cursor · front to back";
+      ctxMenu.appendChild(sub);
+      const list = document.createElement("div");
+      list.className = "ctx-ray";
+      for (const rid of rayIds) {
+        const rInfo = solidInfo.get(rid);
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = "ctx-item ctx-ray-item" + (rid === id ? " current" : "");
+        const dot = document.createElement("span");
+        dot.className = "ctx-ray-dot";
+        dot.textContent = rid === id ? "●" : "○";
+        const name = document.createElement("span");
+        name.className = "ctx-ray-name";
+        name.textContent = rInfo?.label ?? `Body ${rid}`;
+        name.title = name.textContent;
+        b.append(dot, name);
+        if (hiddenParts.has(rid)) {
+          const tag = document.createElement("span");
+          tag.className = "ctx-ray-tag";
+          tag.textContent = "hidden";
+          b.appendChild(tag);
+        }
+        // Retarget the open menu: title + actions rebuild for the picked part.
+        b.addEventListener("click", () => openCtxMenu(rid, rayIds, x, y));
+        b.addEventListener("mouseenter", () => viewer.setHighlightSolids(new Set([rid])));
+        b.addEventListener("mouseleave", () => viewer.setHighlightSolids(new Set([id])));
+        list.appendChild(b);
+      }
+      ctxMenu.appendChild(list);
+      const sep2 = document.createElement("div");
+      sep2.className = "ctx-sep";
+      ctxMenu.appendChild(sep2);
+    }
   }
   ctxMenu.append(
     menuItem("Show all parts", () => {
@@ -568,7 +645,7 @@ viewer.onContextMenu = (solidId, x, y) => {
     menuItem("Fit view", () => viewer.fit()),
   );
   placeAt(ctxMenu, x, y);
-};
+}
 
 function showPartInfo(info: SolidInfo, solidId: number, x: number, y: number): void {
   if (!mesh || !solidOfTri) return;
@@ -650,9 +727,10 @@ function showPartInfo(info: SolidInfo, solidId: number, x: number, y: number): v
 }
 
 document.addEventListener("pointerdown", (ev) => {
-  if (ctxMenu.hidden && partPop.hidden) return;
+  if (ctxMenu.hidden && partPop.hidden && viewsMenu.hidden) return;
   const t = ev.target as Node;
-  if (ctxMenu.contains(t) || partPop.contains(t)) return;
+  // The Views button toggles its own menu on click — closing here too would reopen it.
+  if (ctxMenu.contains(t) || partPop.contains(t) || viewsMenu.contains(t) || t === viewsBtn) return;
   closeMenus();
 });
 document.addEventListener("keydown", (ev) => {
@@ -660,7 +738,7 @@ document.addEventListener("keydown", (ev) => {
 });
 // Zooming under an open menu would leave it hovering over the wrong spot.
 document.addEventListener("wheel", () => {
-  if (!ctxMenu.hidden || !partPop.hidden) closeMenus();
+  if (!ctxMenu.hidden || !partPop.hidden || !viewsMenu.hidden) closeMenus();
 }, { capture: true, passive: true });
 
 // ---- export ----
@@ -692,7 +770,6 @@ function recolorDeviation(): void {
   const clamp = manualRange ?? Math.max(dev.maxAbs, 1e-9);
   viewer.setDeviationColors(colorize(dev.signed, clamp));
   updateLegend(clamp);
-  refreshStats();
 }
 
 function colorize(signed: Float32Array, clamp: number): Float32Array {
@@ -731,36 +808,58 @@ creaseAngle.addEventListener("input", () => {
 });
 
 tColors.addEventListener("change", () => viewer.setShowColors(tColors.checked));
-tWire.addEventListener("change", () => viewer.setWireframe(tWire.checked));
 tEdges.addEventListener("change", () => viewer.setOpenEdges(tEdges.checked));
 tFeature.addEventListener("change", () => viewer.setFeatureEdges(tFeature.checked));
-tTransparent.addEventListener("change", () => viewer.setTransparent(tTransparent.checked));
-tEdgesOnly.addEventListener("change", () => {
-  viewer.setSurfacesVisible(!tEdgesOnly.checked);
+
+// The watertightness warning doubles as a shortcut to SEE the problem it reports.
+watertight.addEventListener("click", () => {
+  if (!watertight.classList.contains("warn")) return;
+  tEdges.checked = !tEdges.checked;
+  viewer.setOpenEdges(tEdges.checked);
+});
+
+// ---- render style (segmented) ----
+// One mutually exclusive style instead of independent transparent/wireframe/edges-only
+// checkboxes — the combinations were meaningless and needed patching up anyway.
+type RenderStyle = "shaded" | "transparent" | "wireframe" | "edges";
+function setRenderStyle(style: RenderStyle): void {
+  viewer.setTransparent(style === "transparent");
+  viewer.setWireframe(style === "wireframe");
+  viewer.setSurfacesVisible(style !== "edges");
   // A pure edge view is meaningless without the CAD boundaries — turn them on.
-  if (tEdgesOnly.checked && !tFeature.checked) {
+  if (style === "edges" && !tFeature.checked) {
     tFeature.checked = true;
     viewer.setFeatureEdges(true);
   }
-});
-tSection.addEventListener("change", () => {
-  viewer.setSection(tSection.checked);
-  sectionRow.hidden = !tSection.checked;
+  for (const b of styleBtns) b.classList.toggle("active", b.dataset.style === style);
+}
+for (const b of styleBtns) {
+  b.addEventListener("click", () => setRenderStyle(b.dataset.style as RenderStyle));
+}
+
+// ---- viewport toolbar: section tool ----
+let sectionOn = false;
+sectionBtn.addEventListener("click", () => {
+  sectionOn = !sectionOn;
+  sectionBtn.classList.toggle("active", sectionOn);
+  viewer.setSection(sectionOn);
+  sectionRow.hidden = !sectionOn;
 });
 $<HTMLButtonElement>("secX").addEventListener("click", () => viewer.setSectionAxis("x"));
 $<HTMLButtonElement>("secY").addEventListener("click", () => viewer.setSectionAxis("y"));
 $<HTMLButtonElement>("secZ").addEventListener("click", () => viewer.setSectionAxis("z"));
 $<HTMLButtonElement>("secFlip").addEventListener("click", () => viewer.flipSection());
 
-// ---- measure mode ----
-tMeasure.addEventListener("change", () => {
-  viewer.setMeasure(tMeasure.checked);
-  measureRow.hidden = !tMeasure.checked;
-});
-viewer.onMeasureExit = () => { // ESC in the viewport leaves the mode — sync the sidebar
-  tMeasure.checked = false;
-  measureRow.hidden = true;
-};
+// ---- viewport toolbar: measure tool ----
+let measureOn = false;
+function setMeasureOn(on: boolean): void {
+  measureOn = on;
+  measureBtn.classList.toggle("active", on);
+  viewer.setMeasure(on);
+  measureRow.hidden = !on;
+}
+measureBtn.addEventListener("click", () => setMeasureOn(!measureOn));
+viewer.onMeasureExit = () => setMeasureOn(false); // ESC in the viewport leaves the mode
 function setMeasureMode(mode: "distance" | "edge"): void {
   viewer.setMeasureMode(mode);
   mDist.classList.toggle("active", mode === "distance");
@@ -770,12 +869,23 @@ mDist.addEventListener("click", () => setMeasureMode("distance"));
 mEdge.addEventListener("click", () => setMeasureMode("edge"));
 mClear.addEventListener("click", () => viewer.clearMeasurements());
 
-let orthoOn = false;
+// ---- viewport toolbar: camera ----
+let orthoOn = true; // CAD-style orthographic by default; the button shows the CURRENT mode
+viewer.setProjection(true);
 projBtn.addEventListener("click", () => {
   orthoOn = !orthoOn;
   viewer.setProjection(orthoOn);
   projBtn.textContent = orthoOn ? "Ortho" : "Persp";
 });
+viewsBtn.addEventListener("click", () => {
+  viewsMenu.hidden = !viewsMenu.hidden;
+});
+for (const b of viewsMenu.querySelectorAll<HTMLButtonElement>("[data-view]")) {
+  b.addEventListener("click", () => {
+    viewsMenu.hidden = true;
+    viewer.setCameraView(b.dataset.view as CameraView);
+  });
+}
 tRef.addEventListener("change", () => viewer.setReferenceVisible(tRef.checked));
 tDev.addEventListener("change", () => {
   viewer.setDeviation(tDev.checked);
@@ -796,23 +906,6 @@ autoRange.addEventListener("click", () => {
 
 $<HTMLButtonElement>("fitBtn").addEventListener("click", () => viewer.fit());
 
-// ---- stats panel ----
-function refreshStats(): void {
-  if (!mesh) {
-    statsEl.textContent = "";
-    return;
-  }
-  const lines = [
-    `${triCount(mesh).toLocaleString()} triangles`,
-    `${openEdges}${sheetBodies > 0 ? " unexpected" : ""} open edge${openEdges === 1 ? "" : "s"}`,
-  ];
-  if (sheetBodies > 0) lines.push(`${sheetBodies} sheet bod${sheetBodies === 1 ? "y" : "ies"}`);
-  if (dev && tDev.checked) {
-    lines.push(`max dev ${dev.maxAbs.toFixed(4)} mm`, `rms ${dev.rms.toFixed(4)} mm`);
-  }
-  statsEl.textContent = lines.join("\n");
-}
-
 // ---- file info panel ----
 // Header fields render on file load (no tessellation needed); geometry fields fill in on Convert.
 function showHeaderInfo(text: string): void {
@@ -827,6 +920,7 @@ function showHeaderInfo(text: string): void {
   iBodies.textContent = "—";
   iFaces.textContent = "—";
   iTris.textContent = "—";
+  iEdgesRow.hidden = true;
   watertight.hidden = true;
 }
 
@@ -841,6 +935,7 @@ function showStlHeaderInfo(bytes: Uint8Array): void {
   iBodies.textContent = "—";
   iFaces.textContent = "—";
   iTris.textContent = "—";
+  iEdgesRow.hidden = true;
   watertight.hidden = true;
 }
 
@@ -854,6 +949,8 @@ function showGeometryInfo(res: ConvertResult, edges: number): void {
     : res.stats.solids.toLocaleString();
   iFaces.textContent = res.kind === "stl" ? "—" : res.stats.facesTotal.toLocaleString(); // an STL has no CAD faces
   iTris.textContent = triCount(res.mesh).toLocaleString();
+  iEdgesRow.hidden = edges === 0;
+  iEdges.textContent = edges.toLocaleString();
   watertight.hidden = false;
   if (edges === 0 && sheets === 0) {
     watertight.textContent = "✓ Watertight · print-ready";
@@ -868,7 +965,8 @@ function showGeometryInfo(res: ConvertResult, edges: number): void {
   } else {
     watertight.textContent = `⚠ ${edges.toLocaleString()} unexpected open edge${edges === 1 ? "" : "s"}`;
     watertight.className = "badge warn";
-    watertight.title = sheets > 0 ? `Sheet-body boundaries (${sheets} bodies) are excluded from this count.` : "";
+    watertight.title = (sheets > 0 ? `Sheet-body boundaries (${sheets} bodies) are excluded from this count. ` : "")
+      + "Click to highlight the open edges in the viewport.";
   }
 }
 

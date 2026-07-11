@@ -125,9 +125,22 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
 .toggle input:disabled { opacity: 0.4; }
 
-/* STL crease-angle field, indented under its toggle like .section-row */
+/* STL crease-angle field, indented under its toggle */
 .crease-field { margin: 2px 0 6px 23px; }
 .crease-field[hidden] { display: none; }
+
+/* segmented render-style control */
+.seg {
+  display: flex; gap: 2px; background: var(--bg);
+  border: 1px solid var(--line); border-radius: 6px; padding: 2px; margin-bottom: 6px;
+}
+.seg-btn {
+  flex: 1 1 auto; background: none; border: none; color: var(--muted);
+  font-size: 11.5px; padding: 5px 4px; border-radius: 4px; cursor: pointer;
+  transition: 0.15s; white-space: nowrap;
+}
+.seg-btn:hover { color: var(--text); }
+.seg-btn.active { background: var(--panel-2); color: var(--text); font-weight: 600; box-shadow: 0 0 0 1px var(--line); }
 
 .mini {
   background: var(--bg); border: 1px solid var(--line); color: var(--muted);
@@ -140,13 +153,15 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .info > div { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; }
 .info dt { color: var(--muted); flex: none; }
 .info dd { margin: 0; text-align: right; color: var(--text); word-break: break-word; font-variant-numeric: tabular-nums; }
+.info dd.warn { color: #ff9f0a; font-weight: 600; }
+.info > div[hidden] { display: none; }
 .badge {
   display: inline-block; font-size: 12px; font-weight: 600; border-radius: 5px;
   padding: 6px 10px; margin-bottom: 10px; width: 100%; text-align: center;
 }
 .badge[hidden] { display: none; }
 .badge.ok { background: rgba(51,221,136,0.14); color: var(--accent-2); border: 1px solid rgba(51,221,136,0.35); }
-.badge.warn { background: rgba(255,159,10,0.14); color: #ff9f0a; border: 1px solid rgba(255,159,10,0.35); }
+.badge.warn { background: rgba(255,159,10,0.14); color: #ff9f0a; border: 1px solid rgba(255,159,10,0.35); cursor: pointer; }
 
 /* legend */
 .legend { margin-top: 10px; }
@@ -170,29 +185,49 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 #stage { position: relative; overflow: hidden; }
 #viewport { position: absolute; inset: 0; }
 #viewport canvas { display: block; }
-.vp-label {
-  position: absolute; top: 12px; left: 12px; font-size: 12px; font-weight: 600;
-  background: var(--chip-bg); padding: 5px 10px; border-radius: 5px;
-  color: var(--text); pointer-events: none; backdrop-filter: blur(4px);
-}
-.vp-stats {
-  position: absolute; bottom: 12px; left: 12px; font-size: 11px; color: var(--muted);
-  background: var(--chip-bg); padding: 6px 10px; border-radius: 5px;
-  pointer-events: none; font-variant-numeric: tabular-nums; line-height: 1.5;
-  backdrop-filter: blur(4px); white-space: pre;
-}
 .hint {
   position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
   font-size: 11px; color: var(--muted); background: var(--chip-bg);
   padding: 4px 10px; border-radius: 5px; pointer-events: none;
 }
-.vp-controls { position: absolute; top: 12px; right: 12px; display: flex; gap: 8px; }
-.vp-btn {
-  background: var(--chip-bg); backdrop-filter: blur(4px);
-  border: 1px solid var(--line); color: var(--text); border-radius: 6px;
-  padding: 7px 12px; font-size: 12px; cursor: pointer; transition: 0.15s;
+/* ---- viewport toolbar (top-center stack: toolbar → contextual tool row → store CTA) ---- */
+.vp-top {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  max-width: calc(100% - 200px); z-index: 4; pointer-events: none;
 }
-.vp-btn:hover { border-color: var(--accent); }
+.vp-top > * { pointer-events: auto; }
+.vp-toolbar {
+  display: flex; align-items: stretch; gap: 2px;
+  background: var(--chip-bg); backdrop-filter: blur(4px);
+  border: 1px solid var(--line); border-radius: 8px; padding: 3px;
+  z-index: 2; /* the Views dropdown must paint above the later-in-DOM store CTA */
+}
+.vp-tbtn {
+  background: none; border: none; color: var(--text); border-radius: 5px;
+  padding: 7px 12px; font-size: 12px; font-weight: 500; cursor: pointer;
+  transition: 0.15s; white-space: nowrap;
+}
+.vp-tbtn:hover:not(:disabled) { background: var(--panel-2); }
+.vp-tbtn:disabled { color: var(--muted); opacity: 0.55; cursor: not-allowed; }
+.vp-tbtn.active, .vp-tbtn.active:hover:not(:disabled) { background: var(--accent); color: #fff; }
+.vp-tbtn.active:hover:not(:disabled) { filter: brightness(1.1); }
+.vp-sep { width: 1px; background: var(--line); margin: 3px 5px; }
+.vp-toolrow {
+  display: flex; gap: 6px;
+  background: var(--chip-bg); backdrop-filter: blur(4px);
+  border: 1px solid var(--line); border-radius: 7px; padding: 4px;
+}
+.vp-toolrow[hidden] { display: none; }
+.vp-toolrow .parts-btn { flex: none; padding: 4px 14px; background: none; }
+.vp-toolrow .parts-btn:hover { background: var(--panel-2); border-color: var(--line); }
+.vp-toolrow .parts-btn.active { border-color: var(--accent); color: var(--accent); }
+
+/* Views dropdown, anchored under its toolbar button (unlike the fixed-at-cursor .ctx-menu) */
+.vp-menu-wrap { position: relative; display: flex; }
+.views-menu { position: absolute; top: calc(100% + 8px); left: 50%; transform: translateX(-50%); min-width: 150px; }
+.views-menu .ctx-item { display: flex; justify-content: space-between; align-items: baseline; gap: 14px; }
+.views-menu .kbd { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 
 .overlay {
   position: absolute; inset: 0; background: var(--overlay-bg);
@@ -219,11 +254,8 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
   transition: width 0.12s linear;
 }
 
-/* ---- store funnel (mirrors bumpmesh) ---- */
-#store-cta-wrapper {
-  position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
-  max-width: calc(100% - 220px); z-index: 4; pointer-events: none;
-}
+/* ---- store funnel (mirrors bumpmesh) · stacked under the viewport toolbar ---- */
+#store-cta-wrapper { max-width: 100%; text-align: center; }
 #store-cta {
   display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap;
   justify-content: center; pointer-events: auto;
@@ -291,13 +323,10 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 }
 .part-caret.empty { visibility: hidden; }
 .part-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.part-row.leaky .part-name { color: var(--danger); }
 .part-row.off .part-name { opacity: 0.45; }
 .part-meta { flex: none; color: var(--muted); font-size: 11px; }
 .auto-note { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
-
-/* ---- section view ---- */
-.section-row { display: flex; gap: 6px; margin: 2px 0 4px 23px; }
-.section-row[hidden] { display: none; }
 
 /* ---- measure mode ---- */
 .parts-btn.active { border-color: var(--accent); color: var(--accent); }
@@ -329,5 +358,16 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .ctx-item:hover:not(:disabled) { background: var(--panel-2); }
 .ctx-item:disabled { color: var(--muted); cursor: default; }
 .ctx-sep { height: 1px; background: var(--line); margin: 4px 2px; }
+
+/* "Under cursor" ray-through list: every part the right-click ray crosses, front to back.
+   Clicking a row retargets the menu's actions onto that part. */
+.ctx-subtitle { padding: 3px 9px 2px; font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.6px; }
+.ctx-ray { max-height: 190px; overflow-y: auto; }
+.ctx-ray-item { display: flex; align-items: baseline; gap: 7px; }
+.ctx-ray-item .ctx-ray-dot { flex: none; font-size: 9px; color: var(--muted); }
+.ctx-ray-item.current .ctx-ray-dot { color: var(--accent); }
+.ctx-ray-item.current { font-weight: 600; }
+.ctx-ray-item .ctx-ray-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ctx-ray-item .ctx-ray-tag { margin-left: auto; flex: none; font-size: 10.5px; color: var(--muted); }
 .part-pop { min-width: 220px; }
 .part-pop .info { padding: 4px 6px 3px; }

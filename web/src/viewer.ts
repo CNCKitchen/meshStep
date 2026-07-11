@@ -25,7 +25,7 @@ const EDGE_COLOR = 0xff3b30;
 const FEATURE_COLOR = 0x0b0e12;
 const HIGHLIGHT_COLOR = 0xffa62b;
 
-type CameraView = "top" | "bottom" | "front" | "behind" | "left" | "right" | "iso";
+export type CameraView = "top" | "bottom" | "front" | "behind" | "left" | "right" | "iso";
 
 /** Keyboard camera presets (Ctrl+0 = isometric, like a browser zoom reset). */
 const VIEW_KEYS: Record<string, CameraView> = {
@@ -291,6 +291,10 @@ export class Viewer {
   private makeViewHelper(): ViewHelper {
     const h = new ViewHelper(this.camera, this.renderer.domElement);
     h.setLabels("X", "Y", "Z");
+    // Drop the grey negative-axis dots — only the three labelled axes carry information here.
+    h.traverse((o) => {
+      if (typeof o.userData.type === "string" && o.userData.type.startsWith("neg")) o.visible = false;
+    });
     return h;
   }
 
@@ -411,6 +415,33 @@ export class Viewer {
       return h.point.clone();
     }
     return null;
+  }
+
+  /** All body ids whose surface the ray through (clientX, clientY) crosses, nearest first,
+   *  deduped. Cast against the FULL mesh, so bodies occluded by others — and hidden ones —
+   *  are found too (the context menu uses this to retarget an action onto an interior part
+   *  without hiding the externals first). Section view: clipped-away hits don't count. */
+  pickSolidsThrough(clientX: number, clientY: number): number[] {
+    const bvh = this.ensurePickBvh();
+    if (!bvh || !this.solidOfTri) return [];
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    const hits = bvh.raycast(this.raycaster.ray, THREE.DoubleSide);
+    hits.sort((a, b) => a.distance - b.distance);
+    const seen = new Set<number>();
+    const out: number[] = [];
+    for (const h of hits) {
+      if (h.faceIndex == null) continue;
+      if (this.section.enabled && this.section.plane.distanceToPoint(h.point) < -1e-6) continue;
+      const id = this.solidOfTri[h.faceIndex]!;
+      if (!seen.has(id)) {
+        seen.add(id);
+        out.push(id);
+      }
+    }
+    return out;
   }
 
   private beginOrbit(ev: PointerEvent): void {

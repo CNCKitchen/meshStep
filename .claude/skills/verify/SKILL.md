@@ -38,8 +38,10 @@ const browser = await puppeteer.launch({
 
 Flow: `(await page.$("#stepFile")).uploadFile(path)` → wait `#convertBtn` enabled → click it →
 wait until `#status` starts with "Done" (pixel-pump: ~70 s in-browser) → screenshot. Toggles are
-checkboxes `#tColors #tFeature #tTransparent #tEdgesOnly #tWire #tEdges #tRef #tDev`; reference
-STL goes in `#refFile`. Dismiss the sponsor/CTA overlays first or they cover the viewport:
+checkboxes `#tColors #tFeature #tEdges #tRef #tDev`; render style is a segmented control
+(`#styleSeg .seg-btn[data-style=shaded|transparent|wireframe|edges]`); camera + tools live in the
+viewport toolbar (`#fitBtn #viewsBtn #projBtn #sectionBtn #measureBtn`, tool rows `#sectionRow
+#measureRow`); reference STL goes in `#refFile`. Dismiss the sponsor/CTA overlays first or they cover the viewport:
 
 ```js
 await page.evaluate(() => {

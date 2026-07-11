@@ -98,9 +98,59 @@ function post(msg: WorkerOut, transfer?: Transferable[]): void {
   ctx.postMessage(msg, transfer ?? []);
 }
 
-/** STL path: parse + weld into an indexed mesh — no tessellation. The single body gets id 0 and
- * every triangle "face" 0, so feature-edge extraction degrades to open edges only (an STL has no
- * CAD faces) and the part-info popup / watertight audit work exactly as for a converted STEP. */
+/** Label each triangle with its connected component (shell) so a multi-shell STL gets per-shell
+ * part rows, defect attribution and part info. Triangles connect only across MANIFOLD edges
+ * (exactly 2 incident triangles): welding coincident vertices makes touching solids share whole
+ * edges at their contact faces, and those carry 4 triangles — treating them as boundaries splits
+ * the shells the same way slicers (admesh / BambuStudio) do. Vertex- or plain edge-connectivity
+ * would fuse them (verified on a real two-body export). */
+function labelShells(indices: Uint32Array, vertexCount: number, solidOfTri: Uint32Array): number {
+  const nT = solidOfTri.length;
+  const edgeKey = (t: number, e: number): number => {
+    const u = indices[t * 3 + e]!, v = indices[t * 3 + ((e + 1) % 3)]!;
+    return (u < v ? u : v) * vertexCount + (u < v ? v : u); // < 2^53 for any real mesh
+  };
+  // Pass 1: incident-triangle count per undirected edge (capped at 3 — only "exactly 2" matters).
+  const edgeCount = new Map<number, number>();
+  for (let t = 0; t < nT; t++) {
+    for (let e = 0; e < 3; e++) {
+      const k = edgeKey(t, e);
+      const c = edgeCount.get(k);
+      if (c === undefined) edgeCount.set(k, 1);
+      else if (c < 3) edgeCount.set(k, c + 1);
+    }
+  }
+  // Pass 2: union the two triangles of every manifold edge.
+  const parent = new Uint32Array(nT);
+  for (let i = 0; i < nT; i++) parent[i] = i;
+  const find = (x: number): number => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; }
+    return x;
+  };
+  const firstTri = new Map<number, number>();
+  for (let t = 0; t < nT; t++) {
+    for (let e = 0; e < 3; e++) {
+      const k = edgeKey(t, e);
+      if (edgeCount.get(k) !== 2) continue;
+      const first = firstTri.get(k);
+      if (first === undefined) firstTri.set(k, t);
+      else parent[find(t)] = find(first);
+    }
+  }
+  const shellOfRoot = new Map<number, number>();
+  for (let t = 0; t < nT; t++) {
+    const r = find(t);
+    let s = shellOfRoot.get(r);
+    if (s === undefined) { s = shellOfRoot.size; shellOfRoot.set(r, s); }
+    solidOfTri[t] = s;
+  }
+  return Math.max(1, shellOfRoot.size);
+}
+
+/** STL path: parse + weld into an indexed mesh — no tessellation. Each connected shell becomes
+ * a body (a single-shell file is named after the file), every triangle keeps "face" 0, so
+ * feature-edge extraction degrades to open edges only (an STL has no CAD faces) and the
+ * part-info popup / watertight audit work exactly as for a converted STEP. */
 function loadStl(req: LoadStlRequest): void {
   post({ type: "progress", stage: "Reading STL…" });
   const soup = readSTL(req.buffer);
@@ -110,17 +160,21 @@ function loadStl(req: LoadStlRequest): void {
   const nT = soup.triangleCount;
   const faceOfTri = new Uint32Array(nT);
   const solidOfTri = new Uint32Array(nT);
+  const shells = labelShells(mesh.indices, mesh.positions.length / 3, solidOfTri);
+  const bodies = shells === 1
+    ? [{ id: 0, name: req.name }]
+    : Array.from({ length: shells }, (_, i) => ({ id: i, name: `Shell ${i + 1}` }));
   const { openEdges, nonManifoldEdges } = meshDefects(mesh);
   post(
     {
       type: "result",
       kind: "stl",
       mesh: { positions: mesh.positions, indices: mesh.indices, faceOfTri, solidOfTri },
-      stats: { solids: 1, facesTotal: 0, facesTessellated: 0, skipped: {} },
+      stats: { solids: shells, facesTotal: 0, facesTessellated: 0, skipped: {} },
       units: "", // STL carries no units; coordinates are shown as-is (assumed mm)
       bbox: boundingBox(mesh.positions),
       colors: null,
-      structure: { name: req.name, occurrences: 1, bodies: [{ id: 0, name: req.name }], children: [] },
+      structure: { name: req.name, occurrences: 1, bodies, children: [] },
       openSolids: [],
       diagnostics: {
         ok: openEdges === 0 && nonManifoldEdges === 0,

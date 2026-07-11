@@ -86,6 +86,7 @@
             <div><dt>Bodies</dt><dd id="iBodies">—</dd></div>
             <div><dt>Faces</dt><dd id="iFaces">—</dd></div>
             <div><dt>Triangles</dt><dd id="iTris">—</dd></div>
+            <div id="iEdgesRow" hidden><dt>Open edges</dt><dd id="iEdges" class="warn">—</dd></div>
             <div><dt>Exported</dt><dd id="iDate">—</dd></div>
           </dl>
         </section>
@@ -116,30 +117,20 @@
         </section>
 
         <section class="panel">
-          <h2>3 · Display</h2>
-          <label class="toggle"><input type="checkbox" id="tColors" checked disabled /> Model colors (from STEP)</label>
+          <h2>3 · Appearance</h2>
+          <div class="seg" id="styleSeg" role="radiogroup" aria-label="Render style">
+            <button type="button" class="seg-btn active" data-style="shaded" title="Opaque shaded surfaces">Shaded</button>
+            <button type="button" class="seg-btn" data-style="transparent" title="See-through surfaces">Transparent</button>
+            <button type="button" class="seg-btn" data-style="wireframe" title="Show the triangle mesh">Wireframe</button>
+            <button type="button" class="seg-btn" data-style="edges" title="Hide surfaces, show only the CAD edges">Edges</button>
+          </div>
+          <label class="toggle"><input type="checkbox" id="tColors" checked disabled /> <span id="tColorsLabel">Model colors (from STEP)</span></label>
           <label class="toggle"><input type="checkbox" id="tFeature" checked /> <span id="tFeatureLabel">Surface boundaries (CAD faces)</span></label>
           <div class="field crease-field" id="creaseField" hidden>
             <label for="creaseAngle">Edge angle threshold <span class="unit">°</span></label>
             <input type="number" id="creaseAngle" value="30" step="5" min="1" max="179" />
           </div>
-          <label class="toggle"><input type="checkbox" id="tTransparent" /> Transparent surfaces</label>
-          <label class="toggle"><input type="checkbox" id="tEdgesOnly" /> CAD edges only (hide surfaces)</label>
-          <label class="toggle"><input type="checkbox" id="tWire" /> Wireframe (mesh)</label>
           <label class="toggle"><input type="checkbox" id="tEdges" /> Highlight open edges</label>
-          <label class="toggle"><input type="checkbox" id="tSection" disabled /> Section view (cut plane)</label>
-          <div class="section-row" id="sectionRow" hidden>
-            <button type="button" class="parts-btn" id="secX" title="Section perpendicular to X">X</button>
-            <button type="button" class="parts-btn" id="secY" title="Section perpendicular to Y">Y</button>
-            <button type="button" class="parts-btn" id="secZ" title="Section perpendicular to Z">Z</button>
-            <button type="button" class="parts-btn" id="secFlip" title="Keep the other half">Flip</button>
-          </div>
-          <label class="toggle"><input type="checkbox" id="tMeasure" disabled /> Measure (distance, Ø)</label>
-          <div class="section-row" id="measureRow" hidden>
-            <button type="button" class="parts-btn active" id="mDist" title="Point-to-point distance (snaps to vertices, hole centers, edges)">Distance</button>
-            <button type="button" class="parts-btn" id="mEdge" title="Click an edge: length, hole Ø, arc radius">Edge</button>
-            <button type="button" class="parts-btn" id="mClear" title="Remove all measurements">Clear</button>
-          </div>
         </section>
 
         <section class="panel" id="partsPanel" hidden>
@@ -194,24 +185,53 @@
 
       <main id="stage">
         <div id="viewport"></div>
-        <div class="vp-label" id="vpLabel">Tessellated</div>
-        <div class="vp-stats" id="stats"></div>
-        <div class="hint">drag to orbit around cursor · scroll to zoom at cursor · right-drag to pan · right-click part for menu · 1–6 views · F fit</div>
-        <div class="vp-controls">
-          <button id="projBtn" class="vp-btn" title="Toggle perspective / orthographic">Persp</button>
-          <button id="fitBtn" class="vp-btn">Fit view</button>
-        </div>
+        <div class="hint">drag to orbit · scroll to zoom · right-drag to pan · right-click for part menu</div>
 
-        <!-- Store funnel · mirrors bumpmesh (stlTexturizer). Dismissible, persisted per browser. -->
-        <div id="store-cta-wrapper">
-          <span id="store-cta">
-            Free &amp; 100% local — nothing leaves your browser. Support it?
-            <a href="https://geni.us/CNCStoreSTEP" target="_blank" rel="noopener noreferrer">Shop CNCKitchen.STORE</a>
-            or tip via
-            <a href="https://www.paypal.me/CNCKitchen" target="_blank" rel="noopener noreferrer">PayPal</a> /
-            <a href="https://ko-fi.com/cnckitchen" target="_blank" rel="noopener noreferrer">Ko-fi</a>
-            <button id="store-cta-dismiss" aria-label="Dismiss">&times;</button>
-          </span>
+        <!-- Top-center stack: toolbar → contextual tool row → store CTA. Everything that acts on
+             the camera or switches a viewport mode lives here; the sidebar keeps only settings. -->
+        <div class="vp-top">
+          <div class="vp-toolbar">
+            <button id="fitBtn" class="vp-tbtn" title="Frame the visible parts (F)">Fit</button>
+            <div class="vp-menu-wrap">
+              <button id="viewsBtn" class="vp-tbtn" title="Standard views (keys 1–6)">Views ▾</button>
+              <div id="viewsMenu" class="ctx-menu views-menu" hidden>
+                <button type="button" class="ctx-item" data-view="iso">Isometric <span class="kbd">Ctrl 0</span></button>
+                <button type="button" class="ctx-item" data-view="top">Top <span class="kbd">1</span></button>
+                <button type="button" class="ctx-item" data-view="bottom">Bottom <span class="kbd">2</span></button>
+                <button type="button" class="ctx-item" data-view="front">Front <span class="kbd">3</span></button>
+                <button type="button" class="ctx-item" data-view="behind">Back <span class="kbd">4</span></button>
+                <button type="button" class="ctx-item" data-view="left">Left <span class="kbd">5</span></button>
+                <button type="button" class="ctx-item" data-view="right">Right <span class="kbd">6</span></button>
+              </div>
+            </div>
+            <button id="projBtn" class="vp-tbtn" title="Toggle perspective / orthographic">Ortho</button>
+            <span class="vp-sep"></span>
+            <button id="sectionBtn" class="vp-tbtn" disabled title="Cut the model with a plane (load a model first)">Section</button>
+            <button id="measureBtn" class="vp-tbtn" disabled title="Measure distances, hole Ø, edge lengths (load a model first)">Measure</button>
+          </div>
+          <div class="vp-toolrow" id="sectionRow" hidden>
+            <button type="button" class="parts-btn" id="secX" title="Section perpendicular to X">X</button>
+            <button type="button" class="parts-btn" id="secY" title="Section perpendicular to Y">Y</button>
+            <button type="button" class="parts-btn" id="secZ" title="Section perpendicular to Z">Z</button>
+            <button type="button" class="parts-btn" id="secFlip" title="Keep the other half">Flip</button>
+          </div>
+          <div class="vp-toolrow" id="measureRow" hidden>
+            <button type="button" class="parts-btn active" id="mDist" title="Point-to-point distance (snaps to vertices, hole centers, edges)">Distance</button>
+            <button type="button" class="parts-btn" id="mEdge" title="Click an edge: length, hole Ø, arc radius">Edge</button>
+            <button type="button" class="parts-btn" id="mClear" title="Remove all measurements">Clear</button>
+          </div>
+
+          <!-- Store funnel · mirrors bumpmesh (stlTexturizer). Dismissible, persisted per browser. -->
+          <div id="store-cta-wrapper">
+            <span id="store-cta">
+              Free &amp; 100% local — nothing leaves your browser. Support it?
+              <a href="https://geni.us/CNCStoreSTEP" target="_blank" rel="noopener noreferrer">Shop CNCKitchen.STORE</a>
+              or tip via
+              <a href="https://www.paypal.me/CNCKitchen" target="_blank" rel="noopener noreferrer">PayPal</a> /
+              <a href="https://ko-fi.com/cnckitchen" target="_blank" rel="noopener noreferrer">Ko-fi</a>
+              <button id="store-cta-dismiss" aria-label="Dismiss">&times;</button>
+            </span>
+          </div>
         </div>
 
         <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p><div id="progressBar" class="progress" hidden><div id="progressFill"></div></div></div>
