@@ -1,13 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import "./styles.css";
 import * as THREE from "three";
-import { readSTL, writeBinarySTL, parseStepHeader, autoTessellation, type PartNode } from "../../src/index.ts";
+import { readSTL, writeBinarySTL, isBinarySTL, parseStepHeader, autoTessellation, type PartNode } from "../../src/index.ts";
 import { Viewer, BASE_COLOR } from "./viewer.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
   buildIndexedGeometry,
   buildSoupGeometry,
   boundaryEdges,
+  creaseEdges,
   dropSolidSegments,
   featureEdges,
   splitByTriColor,
@@ -41,6 +42,9 @@ const tColors = $<HTMLInputElement>("tColors");
 const tWire = $<HTMLInputElement>("tWire");
 const tEdges = $<HTMLInputElement>("tEdges");
 const tFeature = $<HTMLInputElement>("tFeature");
+const tFeatureLabel = $("tFeatureLabel");
+const creaseField = $("creaseField");
+const creaseAngle = $<HTMLInputElement>("creaseAngle");
 const tTransparent = $<HTMLInputElement>("tTransparent");
 const tEdgesOnly = $<HTMLInputElement>("tEdgesOnly");
 const tSection = $<HTMLInputElement>("tSection");
@@ -61,6 +65,7 @@ const legNeg = $("legNeg");
 const legPos = $("legPos");
 const legMeta = $("legMeta");
 const statsEl = $("stats");
+const vpLabel = $("vpLabel");
 const partsPanel = $("partsPanel");
 const partsTree = $("partsTree");
 const partsShowAll = $<HTMLButtonElement>("partsShowAll");
@@ -124,6 +129,7 @@ let stepBaseName = "mesh";
 let worker: Worker | null = null;
 
 let mesh: RawMesh | null = null;
+let isStlModel = false; // current model came from an STL (no B-rep: crease edges, no CAD faces)
 let geo: THREE.BufferGeometry | null = null;
 let openEdges = 0; // unexpected (defect) open edges — sheet-body boundaries excluded
 let sheetBodies = 0;
@@ -156,19 +162,38 @@ stepFile.addEventListener("change", async () => {
   const f = stepFile.files?.[0];
   if (!f) return;
   stepFile.value = ""; // so re-picking the same file fires change again (the name lives in #stepName)
-  stepText = await f.text();
-  stepBaseName = f.name.replace(/\.(step|stp)$/i, "") || "mesh";
   stepName.textContent = f.name;
-  convertBtn.disabled = false;
   tessEdited = false;
   autoNote.hidden = true;
   setStatus("");
-  showHeaderInfo(stepText);
-  // Measure in the background; Convert terminates this worker, so a click before the estimate
-  // lands simply keeps the current field values.
   worker?.terminate();
   worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
   worker.onmessage = (ev: MessageEvent<WorkerOut>) => onWorkerMessage(ev.data);
+  worker.onerror = (e) => {
+    hideOverlay();
+    setStatus(`Worker error: ${e.message}`, true);
+  };
+
+  if (/\.stl$/i.test(f.name)) {
+    // STL is already a mesh — no Convert step; the worker parses + welds and the result flows
+    // through the same applyResult path as a STEP conversion.
+    stepText = null;
+    convertBtn.disabled = true;
+    stepBaseName = f.name.replace(/\.stl$/i, "") || "mesh";
+    const buf = await f.arrayBuffer();
+    showStlHeaderInfo(new Uint8Array(buf)); // before postMessage — the transfer detaches buf
+    showOverlay("Reading STL…");
+    maybeShowSponsor();
+    worker.postMessage({ type: "loadStl", buffer: buf, name: stepBaseName }, [buf]);
+    return;
+  }
+
+  stepText = await f.text();
+  stepBaseName = f.name.replace(/\.(step|stp)$/i, "") || "mesh";
+  convertBtn.disabled = false;
+  showHeaderInfo(stepText);
+  // Measure in the background; Convert terminates this worker, so a click before the estimate
+  // lands simply keeps the current field values.
   worker.postMessage({ type: "measure", stepText });
 });
 
@@ -236,7 +261,7 @@ function onWorkerMessage(msg: WorkerOut): void {
   }
   if (msg.type === "error") {
     hideOverlay();
-    convertBtn.disabled = false;
+    convertBtn.disabled = !stepText; // an STL load has no Convert step to re-enable
     setStatus(msg.message.split("\n")[0] ?? "Conversion failed", true);
     console.error(msg.message);
     return;
@@ -278,7 +303,14 @@ function applyResult(res: ConvertResult): void {
   sheetBodies = res.openSolids.length;
   openEdges = res.diagnostics.openEdges;
   const b = dropSolidSegments(boundaryEdges(mesh, res.mesh.solidOfTri), openSolidsSet);
-  const feat = featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
+  // An STL has no CAD faces — "surface boundaries" become crease edges above the angle
+  // threshold (dihedral between adjacent triangles), re-detectable live via the angle field.
+  isStlModel = res.kind === "stl";
+  tFeatureLabel.textContent = isStlModel ? "Feature edges (by angle)" : "Surface boundaries (CAD faces)";
+  creaseField.hidden = !isStlModel;
+  const feat = isStlModel
+    ? creaseEdges(mesh, res.mesh.solidOfTri, num("creaseAngle", 30))
+    : featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
   solidOfTri = res.mesh.solidOfTri;
   defectEdges = b;
   closeMenus(); // a stale context menu would act on the previous model's ids
@@ -298,9 +330,10 @@ function applyResult(res: ConvertResult): void {
   refreshStats();
 
   hideOverlay();
-  convertBtn.disabled = false;
+  convertBtn.disabled = !stepText; // stays disabled for a loaded STL (nothing to convert)
   exportBtn.disabled = false;
-  setStatus(`Done · ${triCount(mesh).toLocaleString()} tris`);
+  vpLabel.textContent = res.kind === "stl" ? "STL mesh" : "Tessellated";
+  setStatus(`${res.kind === "stl" ? "Loaded" : "Done"} · ${triCount(mesh).toLocaleString()} tris`);
 }
 
 // ---- parts tree ----
@@ -686,6 +719,17 @@ function updateLegend(clamp: number): void {
 }
 
 // ---- toggles ----
+// Crease-angle re-detection (STL only): O(triangles) per keystroke, so debounce lightly.
+let creaseTimer: ReturnType<typeof setTimeout> | undefined;
+creaseAngle.addEventListener("input", () => {
+  clearTimeout(creaseTimer);
+  creaseTimer = setTimeout(() => {
+    if (!isStlModel || !mesh || !solidOfTri) return;
+    const deg = num("creaseAngle", 30);
+    viewer.setFeatureEdgeSet(creaseEdges(mesh, solidOfTri, Math.min(179, Math.max(1, deg))));
+  }, 150);
+});
+
 tColors.addEventListener("change", () => viewer.setShowColors(tColors.checked));
 tWire.addEventListener("change", () => viewer.setWireframe(tWire.checked));
 tEdges.addEventListener("change", () => viewer.setOpenEdges(tEdges.checked));
@@ -786,6 +830,20 @@ function showHeaderInfo(text: string): void {
   watertight.hidden = true;
 }
 
+/** File-info fields available on STL pick (format only — geometry fills in when the load lands). */
+function showStlHeaderInfo(bytes: Uint8Array): void {
+  infoPanel.hidden = false;
+  iSystem.textContent = "—";
+  iSchema.textContent = isBinarySTL(bytes) ? "STL · binary" : "STL · ASCII";
+  iDate.textContent = "—";
+  iUnits.textContent = "—";
+  iDims.textContent = "—";
+  iBodies.textContent = "—";
+  iFaces.textContent = "—";
+  iTris.textContent = "—";
+  watertight.hidden = true;
+}
+
 function showGeometryInfo(res: ConvertResult, edges: number): void {
   infoPanel.hidden = false;
   iUnits.textContent = res.units || "—";
@@ -794,7 +852,7 @@ function showGeometryInfo(res: ConvertResult, edges: number): void {
   iBodies.textContent = sheets > 0
     ? `${res.stats.solids.toLocaleString()} (${sheets.toLocaleString()} sheet${sheets === 1 ? "" : "s"})`
     : res.stats.solids.toLocaleString();
-  iFaces.textContent = res.stats.facesTotal.toLocaleString();
+  iFaces.textContent = res.kind === "stl" ? "—" : res.stats.facesTotal.toLocaleString(); // an STL has no CAD faces
   iTris.textContent = triCount(res.mesh).toLocaleString();
   watertight.hidden = false;
   if (edges === 0 && sheets === 0) {

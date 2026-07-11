@@ -99,6 +99,28 @@ export function writeBinarySTL(mesh: IndexedMesh, header = "meshStep binary STL"
   return out;
 }
 
+/** Weld a triangle soup's coincident vertices (quantised to eps) into an indexed mesh, so edge
+ * topology — open/non-manifold edge audits — works on it. STL facets repeat shared vertices
+ * bitwise-identically, so the quantisation only ever merges genuinely coincident points. */
+export function indexSoup(soup: TriSoup, eps = 1e-6): IndexedMesh {
+  const p = soup.positions;
+  const map = new Map<string, number>();
+  const pos: number[] = [];
+  const indices = new Uint32Array(soup.triangleCount * 3);
+  for (let i = 0; i < soup.triangleCount * 3; i++) {
+    const x = p[i * 3]!, y = p[i * 3 + 1]!, z = p[i * 3 + 2]!;
+    const key = `${Math.round(x / eps)},${Math.round(y / eps)},${Math.round(z / eps)}`;
+    let idx = map.get(key);
+    if (idx === undefined) {
+      idx = pos.length / 3;
+      pos.push(x, y, z);
+      map.set(key, idx);
+    }
+    indices[i] = idx;
+  }
+  return { positions: Float64Array.from(pos), indices };
+}
+
 export function bboxOfSoup(s: TriSoup): BBox {
   const p = s.positions;
   let minx = Infinity, miny = Infinity, minz = Infinity;

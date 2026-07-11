@@ -69,8 +69,8 @@
         <section class="panel">
           <h2>1 · Input</h2>
           <label class="file">
-            <input type="file" id="stepFile" accept=".step,.stp" />
-            <span class="file-btn">Choose STEP file…</span>
+            <input type="file" id="stepFile" accept=".step,.stp,.stl" />
+            <span class="file-btn">Choose STEP / STL file…</span>
           </label>
           <p class="filename" id="stepName">No file loaded</p>
         </section>
@@ -118,7 +118,11 @@
         <section class="panel">
           <h2>3 · Display</h2>
           <label class="toggle"><input type="checkbox" id="tColors" checked disabled /> Model colors (from STEP)</label>
-          <label class="toggle"><input type="checkbox" id="tFeature" checked /> Surface boundaries (CAD faces)</label>
+          <label class="toggle"><input type="checkbox" id="tFeature" checked /> <span id="tFeatureLabel">Surface boundaries (CAD faces)</span></label>
+          <div class="field crease-field" id="creaseField" hidden>
+            <label for="creaseAngle">Edge angle threshold <span class="unit">°</span></label>
+            <input type="number" id="creaseAngle" value="30" step="5" min="1" max="179" />
+          </div>
           <label class="toggle"><input type="checkbox" id="tTransparent" /> Transparent surfaces</label>
           <label class="toggle"><input type="checkbox" id="tEdgesOnly" /> CAD edges only (hide surfaces)</label>
           <label class="toggle"><input type="checkbox" id="tWire" /> Wireframe (mesh)</label>
@@ -190,7 +194,7 @@
 
       <main id="stage">
         <div id="viewport"></div>
-        <div class="vp-label">Tessellated</div>
+        <div class="vp-label" id="vpLabel">Tessellated</div>
         <div class="vp-stats" id="stats"></div>
         <div class="hint">drag to orbit around cursor · scroll to zoom at cursor · right-drag to pan · right-click part for menu · 1–6 views · F fit</div>
         <div class="vp-controls">

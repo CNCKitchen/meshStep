@@ -124,6 +124,74 @@ export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: 
   return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
 }
 
+/**
+ * Extract crease edges: edges whose two adjacent triangles' normals differ by more than
+ * `angleDeg`, plus open boundary edges — the mesh-only stand-in for CAD face borders when the
+ * model has no B-rep (STL). Degenerate triangles (zero-area) never register a crease, and edges
+ * used by 3+ triangles are always emitted (a non-manifold junction is a feature by any measure).
+ */
+export function creaseEdges(mesh: RawMesh, solidOfTri: Uint32Array, angleDeg: number): EdgeSet {
+  const idx = mesh.indices;
+  const pos = mesh.positions;
+  const tris = idx.length / 3;
+
+  // Per-triangle unit normals; zero-length (degenerate) stays [0,0,0] and can't exceed any
+  // threshold against a real normal (dot 0 < cos only for angles < 90° — so treat it explicitly).
+  const nrm = new Float32Array(tris * 3);
+  const degenerate = new Uint8Array(tris);
+  for (let t = 0; t < tris; t++) {
+    const a = idx[t * 3]! * 3, b = idx[t * 3 + 1]! * 3, c = idx[t * 3 + 2]! * 3;
+    const abx = pos[b]! - pos[a]!, aby = pos[b + 1]! - pos[a + 1]!, abz = pos[b + 2]! - pos[a + 2]!;
+    const acx = pos[c]! - pos[a]!, acy = pos[c + 1]! - pos[a + 1]!, acz = pos[c + 2]! - pos[a + 2]!;
+    const nx = aby * acz - abz * acy, ny = abz * acx - abx * acz, nz = abx * acy - aby * acx;
+    const l = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (l < 1e-30) { degenerate[t] = 1; continue; }
+    nrm[t * 3] = nx / l; nrm[t * 3 + 1] = ny / l; nrm[t * 3 + 2] = nz / l;
+  }
+
+  const KEY = 0x4000000; // matches boundaryEdges/featureEdges: exact for vertex ids below ~67M
+  const key = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
+  const cosThresh = Math.cos((angleDeg * Math.PI) / 180);
+
+  const cnt = new Map<number, number>();
+  const firstTri = new Map<number, number>();
+  const crease = new Set<number>();
+  const consider = (a: number, b: number, t: number): void => {
+    const k = key(a, b);
+    const n = (cnt.get(k) ?? 0) + 1;
+    cnt.set(k, n);
+    if (n === 1) { firstTri.set(k, t); return; }
+    if (n > 2) { crease.add(k); return; } // non-manifold junction
+    const o = firstTri.get(k)!;
+    if (degenerate[o] || degenerate[t]) return;
+    const dot = nrm[o * 3]! * nrm[t * 3]! + nrm[o * 3 + 1]! * nrm[t * 3 + 1]! + nrm[o * 3 + 2]! * nrm[t * 3 + 2]!;
+    if (dot < cosThresh) crease.add(k);
+  };
+  for (let t = 0; t < tris; t++) {
+    const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
+    consider(a, b, t); consider(b, c, t); consider(c, a, t);
+  }
+
+  const out: number[] = [];
+  const segSolid: number[] = [];
+  const seen = new Set<number>();
+  const emit = (u: number, v: number, s: number): void => {
+    const k = key(u, v);
+    if (seen.has(k)) return;
+    if (cnt.get(k) !== 1 && !crease.has(k)) return; // smooth interior edge: skip
+    seen.add(k);
+    out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
+    out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
+    segSolid.push(s);
+  };
+  for (let t = 0; t < tris; t++) {
+    const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
+    const s = solidOfTri[t] ?? 0;
+    emit(a, b, s); emit(b, c, s); emit(c, a, s);
+  }
+  return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
+}
+
 /** Triangle index buffer with every triangle of a hidden solid removed. */
 export function filterTriangles(fullIndex: Uint32Array, solidOfTri: Uint32Array, hidden: ReadonlySet<number>): Uint32Array {
   const out = new Uint32Array(fullIndex.length);

@@ -125,6 +125,10 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .toggle input { accent-color: var(--accent); width: 15px; height: 15px; }
 .toggle input:disabled { opacity: 0.4; }
 
+/* STL crease-angle field, indented under its toggle like .section-row */
+.crease-field { margin: 2px 0 6px 23px; }
+.crease-field[hidden] { display: none; }
+
 .mini {
   background: var(--bg); border: 1px solid var(--line); color: var(--muted);
   font-size: 10px; border-radius: 4px; padding: 1px 6px; cursor: pointer; margin-left: 6px;

@@ -51,6 +51,8 @@ export class Viewer {
   private persp: THREE.PerspectiveCamera;
   private ortho: THREE.OrthographicCamera;
   private camera: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  private keyLight!: THREE.DirectionalLight;
+  private fillLight!: THREE.DirectionalLight;
   private controls: OrbitControls;
   private content: Content;
   private container: HTMLElement;
@@ -150,16 +152,17 @@ export class Viewer {
     this.controls = this.makeControls(new THREE.Vector3());
     this.viewHelper = this.makeViewHelper();
 
-    // Lights (Z-up: key from above-front, fill from behind-below).
-    const hemi = new THREE.HemisphereLight(0xffffff, 0x404048, 1.0);
+    // Lights: soft world-fixed ambient dome + a camera-following key/fill pair
+    // ("headlight" rig, like CAD viewers) so the part is lit from wherever you look —
+    // no permanently dark underside. Directions are re-derived from the camera each frame.
+    const hemi = new THREE.HemisphereLight(0xffffff, 0x606068, 0.9);
     hemi.position.set(0, 0, 1);
     this.scene.add(hemi);
-    const key = new THREE.DirectionalLight(0xffffff, 1.6);
-    key.position.set(1, -1.2, 1.8);
-    this.scene.add(key);
-    const fill = new THREE.DirectionalLight(0xffffff, 0.7);
-    fill.position.set(-1.5, 1, -0.5);
-    this.scene.add(fill);
+    this.keyLight = new THREE.DirectionalLight(0xffffff, 1.6);
+    this.scene.add(this.keyLight);
+    this.fillLight = new THREE.DirectionalLight(0xffffff, 0.7);
+    this.scene.add(this.fillLight);
+    this.updateLights();
 
     // Small red sphere marking the live orbit centre (drawn over the part).
     this.pivotMarker = new THREE.Mesh(
@@ -606,9 +609,18 @@ export class Viewer {
     this.lastOrbitPivot = center.clone();
   }
 
+  /** Re-aim the key/fill lights from the current camera orientation (headlight rig).
+   *  Offsets are in camera space (+X right, +Y up, +Z toward the viewer); only the
+   *  direction matters for DirectionalLight, so magnitudes are arbitrary. */
+  private updateLights(): void {
+    this.keyLight.position.set(0.5, 0.7, 1.5).applyQuaternion(this.camera.quaternion);
+    this.fillLight.position.set(-1, -0.6, 0.4).applyQuaternion(this.camera.quaternion);
+  }
+
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.controls.update();
+    this.updateLights();
     this.measure.update(); // process queued hover + keep markers a constant apparent size
     this.renderer.clear(); // autoClear is off for the axes-triad second pass
     this.renderer.render(this.scene, this.camera);
@@ -644,7 +656,7 @@ export class Viewer {
     if (c.reference) c.reference.visible = this.showReference;
     if (c.solid) {
       c.solid.visible = this.solidVisible;
-      const m = c.solid.material as THREE.MeshStandardMaterial;
+      const m = c.solid.material as THREE.MeshPhongMaterial;
       const active = this.deviationOn && this.devColors ? this.devColors
         : this.showColors ? this.faceColors : null;
       const geo = c.solid.geometry;
@@ -682,10 +694,12 @@ export class Viewer {
     this.hiddenSolids.clear();
     this.wireDirty = false;
 
-    const mat = new THREE.MeshStandardMaterial({
+    // Blinn-Phong, not PBR: cheaper per fragment AND gives the glossy CAD-style
+    // specular highlight (Onshape look) that makes curvature readable.
+    const mat = new THREE.MeshPhongMaterial({
       color: BASE_COLOR,
-      metalness: 0.0,
-      roughness: 0.85,
+      specular: 0x777777,
+      shininess: 40,
       side: THREE.DoubleSide,
       flatShading: true,
       // Push faces slightly back so coplanar feature lines win the depth test (crisp hidden-line look).
@@ -844,6 +858,16 @@ export class Viewer {
     c.wire.geometry.dispose();
     c.wire.geometry = new THREE.WireframeGeometry(c.solid.geometry);
     this.wireDirty = false;
+  }
+
+  /** Replace the surface-boundary line set without touching the rest of the model — used when
+   * the STL crease-angle threshold changes. Honors the current per-part hiding. */
+  setFeatureEdgeSet(feature: EdgeSet): void {
+    this.featureSet = feature;
+    const c = this.content;
+    if (!c.feature) return;
+    const p = this.hiddenSolids.size ? filterSegments(feature, this.hiddenSolids) : feature.positions;
+    c.feature.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
   }
 
   setWireframe(v: boolean): void {

@@ -42,6 +42,12 @@ freezes.
   surface deviation, normal deviation, max edge length. Surface deviation and
   max edge auto-scale to the model's size on load (a fast pre-pass estimates
   the bounding box before converting); edit either field and your values win.
+- **Upload an STL** (binary or ASCII) through the same picker — no Convert step;
+  the mesh is welded and displayed directly with the full toolset (section view,
+  measuring, open-edge highlighting, watertight check, deviation vs. a reference
+  STL). STL carries no CAD faces, so the boundary overlay becomes **feature
+  edges by crease angle**: edges whose adjacent triangles' normals differ by
+  more than an adjustable threshold (default 30°). The parts tree doesn't apply.
 - **Tessellated view** — orbit/zoom the generated mesh.
 - **Model colors** — the STEP file's face/body colors (`STYLED_ITEM`), rendered
   by default when present, with a show/hide toggle. Colors stay crisp across

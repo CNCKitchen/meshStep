@@ -80,7 +80,7 @@ function buildDiagnostics(result: MeshResult, mesh: IndexedMesh, solidOfTri: Uin
   return { ok, openEdges, nonManifoldEdges, facesDropped, facesSkipped, warnings: result.warnings };
 }
 
-export { writeBinarySTL, readSTL, type IndexedMesh, type TriSoup } from "./io/stl.ts";
+export { writeBinarySTL, readSTL, isBinarySTL, indexSoup, type IndexedMesh, type TriSoup } from "./io/stl.ts";
 export { parseStepHeader, type StepHeader } from "./step/header.ts";
 export type { MeshResult, TessOptions } from "./mesh/tessellate.ts";
 export type { BrepModel } from "./brep/build.ts";

@@ -2,12 +2,21 @@
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
-import { importStep, estimateStepSize, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
+import { importStep, estimateStepSize, readSTL, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
 
 export interface ConvertRequest {
   type: "convert";
   stepText: string;
   opts: ImportOptions;
+}
+
+/** Read an STL (binary or ASCII) and index it into the same result shape as a STEP conversion,
+ * so the viewer's whole display path (edges, section, measure, part info) applies unchanged. */
+export interface LoadStlRequest {
+  type: "loadStl";
+  buffer: ArrayBuffer;
+  /** Display name for the single fabricated body (the file's base name). */
+  name: string;
 }
 
 /** Fast size pre-pass (parse + point scan, no tessellation) — runs on file load so the UI can
@@ -31,6 +40,8 @@ export interface MeshPayload {
 
 export interface ConvertResult {
   type: "result";
+  /** "stl" = loaded mesh passed through as-is (no tessellation, no CAD faces/colors/structure). */
+  kind: "step" | "stl";
   mesh: MeshPayload;
   stats: MeshResult["stats"];
   /** Length-unit label detected in the STEP file (mesh coords are always mm). */
@@ -65,7 +76,7 @@ export interface ErrorMessage {
   message: string;
 }
 
-export type WorkerIn = ConvertRequest | MeasureRequest;
+export type WorkerIn = ConvertRequest | MeasureRequest | LoadStlRequest;
 export type WorkerOut = ConvertResult | ProgressMessage | ErrorMessage | SizeMessage;
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -87,10 +98,52 @@ function post(msg: WorkerOut, transfer?: Transferable[]): void {
   ctx.postMessage(msg, transfer ?? []);
 }
 
+/** STL path: parse + weld into an indexed mesh — no tessellation. The single body gets id 0 and
+ * every triangle "face" 0, so feature-edge extraction degrades to open edges only (an STL has no
+ * CAD faces) and the part-info popup / watertight audit work exactly as for a converted STEP. */
+function loadStl(req: LoadStlRequest): void {
+  post({ type: "progress", stage: "Reading STL…" });
+  const soup = readSTL(req.buffer);
+  if (soup.triangleCount === 0) throw new Error("No triangles found — not a valid STL file?");
+  post({ type: "progress", stage: "Indexing mesh…" });
+  const mesh = indexSoup(soup);
+  const nT = soup.triangleCount;
+  const faceOfTri = new Uint32Array(nT);
+  const solidOfTri = new Uint32Array(nT);
+  const { openEdges, nonManifoldEdges } = meshDefects(mesh);
+  post(
+    {
+      type: "result",
+      kind: "stl",
+      mesh: { positions: mesh.positions, indices: mesh.indices, faceOfTri, solidOfTri },
+      stats: { solids: 1, facesTotal: 0, facesTessellated: 0, skipped: {} },
+      units: "", // STL carries no units; coordinates are shown as-is (assumed mm)
+      bbox: boundingBox(mesh.positions),
+      colors: null,
+      structure: { name: req.name, occurrences: 1, bodies: [{ id: 0, name: req.name }], children: [] },
+      openSolids: [],
+      diagnostics: {
+        ok: openEdges === 0 && nonManifoldEdges === 0,
+        openEdges, nonManifoldEdges, facesDropped: 0, facesSkipped: 0, warnings: [],
+      },
+      measure: null,
+    },
+    [mesh.positions.buffer, mesh.indices.buffer, faceOfTri.buffer, solidOfTri.buffer],
+  );
+}
+
 ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
   const req = ev.data;
   if (req.type === "measure") {
     post({ type: "size", estimate: estimateStepSize(req.stepText) });
+    return;
+  }
+  if (req.type === "loadStl") {
+    try {
+      loadStl(req);
+    } catch (err) {
+      post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
+    }
     return;
   }
   if (req.type !== "convert") return;
@@ -124,6 +177,7 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
     post(
       {
         type: "result",
+        kind: "step",
         mesh: { positions: pos, indices: idx, faceOfTri: fot, solidOfTri: sot },
         stats: tess.stats,
         units: tess.units,
