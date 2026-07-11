@@ -2,7 +2,7 @@
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
-import { importStep, estimateStepSize, readSTL, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
+import { importStep, estimateStepSize, readSTL, read3MF, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
 
 export interface ConvertRequest {
   type: "convert";
@@ -16,6 +16,15 @@ export interface LoadStlRequest {
   type: "loadStl";
   buffer: ArrayBuffer;
   /** Display name for the single fabricated body (the file's base name). */
+  name: string;
+}
+
+/** Read a 3MF (ZIP + model XML) into the same result shape: per-build-item bodies, base-material /
+ * color-group colors, transforms and units applied by the library reader. */
+export interface Load3mfRequest {
+  type: "load3mf";
+  buffer: ArrayBuffer;
+  /** Display name for the structure root (the file's base name). */
   name: string;
 }
 
@@ -40,8 +49,8 @@ export interface MeshPayload {
 
 export interface ConvertResult {
   type: "result";
-  /** "stl" = loaded mesh passed through as-is (no tessellation, no CAD faces/colors/structure). */
-  kind: "step" | "stl";
+  /** "stl" / "3mf" = loaded mesh passed through as-is (no tessellation, no CAD faces). */
+  kind: "step" | "stl" | "3mf";
   mesh: MeshPayload;
   stats: MeshResult["stats"];
   /** Length-unit label detected in the STEP file (mesh coords are always mm). */
@@ -76,7 +85,7 @@ export interface ErrorMessage {
   message: string;
 }
 
-export type WorkerIn = ConvertRequest | MeasureRequest | LoadStlRequest;
+export type WorkerIn = ConvertRequest | MeasureRequest | LoadStlRequest | Load3mfRequest;
 export type WorkerOut = ConvertResult | ProgressMessage | ErrorMessage | SizeMessage;
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
@@ -186,6 +195,104 @@ function loadStl(req: LoadStlRequest): void {
   );
 }
 
+/** Weld coincident vertices (quantised to eps) of one indexed mesh. 3MF meshes are indexed by
+ * the spec, but some exporters still duplicate vertices per face — which would fake open edges
+ * in the watertight audit exactly like an unwelded STL. No-op (same arrays) when already welded. */
+function weldIndexed(positions: Float64Array, indices: Uint32Array, eps = 1e-6): { positions: Float64Array; indices: Uint32Array } {
+  const nV = positions.length / 3;
+  const map = new Map<string, number>();
+  const remap = new Uint32Array(nV);
+  const out = new Float64Array(positions.length);
+  let kept = 0;
+  for (let v = 0; v < nV; v++) {
+    const x = positions[v * 3]!, y = positions[v * 3 + 1]!, z = positions[v * 3 + 2]!;
+    const key = `${Math.round(x / eps)},${Math.round(y / eps)},${Math.round(z / eps)}`;
+    let idx = map.get(key);
+    if (idx === undefined) {
+      idx = kept++;
+      map.set(key, idx);
+      out[idx * 3] = x; out[idx * 3 + 1] = y; out[idx * 3 + 2] = z;
+    }
+    remap[v] = idx;
+  }
+  if (kept === nV) return { positions, indices };
+  const newIndices = new Uint32Array(indices.length);
+  for (let i = 0; i < indices.length; i++) newIndices[i] = remap[indices[i]!]!;
+  return { positions: out.slice(0, kept * 3), indices: newIndices };
+}
+
+/** 3MF path: unzip + parse (library) — no tessellation. Each build item becomes a body; colors
+ * from base materials / color groups ride the same ModelColors path as STEP face colors by
+ * keying faceOfTri with palette-index+1 (0 = unstyled). Feature edges degrade to crease edges
+ * like an STL (a 3MF mesh has no CAD faces). */
+async function load3mf(req: Load3mfRequest): Promise<void> {
+  post({ type: "progress", stage: "Reading 3MF…" });
+  const model = await read3MF(req.buffer);
+  if (model.items.length === 0) throw new Error("No mesh objects found — not a valid 3MF file?");
+  post({ type: "progress", stage: "Indexing mesh…" });
+  const welded = model.items.map((it) => weldIndexed(it.positions, it.indices));
+  let nV = 0, nT = 0;
+  for (const w of welded) { nV += w.positions.length / 3; nT += w.indices.length / 3; }
+  const positions = new Float64Array(nV * 3);
+  const indices = new Uint32Array(nT * 3);
+  const faceOfTri = new Uint32Array(nT);
+  const solidOfTri = new Uint32Array(nT);
+  let anyColor = false;
+  let vo = 0, to = 0;
+  model.items.forEach((it, s) => {
+    const w = welded[s]!;
+    positions.set(w.positions, vo * 3);
+    const pt = w.indices.length / 3;
+    for (let t = 0; t < pt; t++) {
+      indices[(to + t) * 3] = w.indices[t * 3]! + vo;
+      indices[(to + t) * 3 + 1] = w.indices[t * 3 + 1]! + vo;
+      indices[(to + t) * 3 + 2] = w.indices[t * 3 + 2]! + vo;
+      const c = it.colorOfTri ? it.colorOfTri[t]! : -1;
+      faceOfTri[to + t] = c + 1;
+      if (c >= 0) anyColor = true;
+      solidOfTri[to + t] = s;
+    }
+    vo += w.positions.length / 3;
+    to += pt;
+  });
+  const mesh = { positions, indices };
+  const colors: ModelColors | null = anyColor
+    ? {
+        palette: model.palette,
+        faceColor: new Map(model.palette.map((_, k) => [k + 1, k])),
+        solidColor: new Map(),
+      }
+    : null;
+  // "surface" / "support" objects are open BY DESIGN — exclude them from the watertight audit.
+  const openSolids = model.items.flatMap((it, s) => (it.type === "surface" || it.type === "support" ? [s] : []));
+  const { openEdges, nonManifoldEdges } = meshDefects(mesh, solidOfTri, openSolids);
+  // Slicer exports usually carry no object names — a single body borrows the file's name (like
+  // the STL path); multiple anonymous bodies get numbered.
+  const bodies = model.items.map((it, s) => ({
+    id: s,
+    name: it.name ?? (model.items.length === 1 ? req.name : `Object ${s + 1}`),
+  }));
+  post(
+    {
+      type: "result",
+      kind: "3mf",
+      mesh: { positions, indices, faceOfTri, solidOfTri },
+      stats: { solids: model.items.length, facesTotal: 0, facesTessellated: 0, skipped: {} },
+      units: model.unit,
+      bbox: boundingBox(positions),
+      colors,
+      structure: { name: req.name, occurrences: 1, bodies, children: [] },
+      openSolids,
+      diagnostics: {
+        ok: openEdges === 0 && nonManifoldEdges === 0,
+        openEdges, nonManifoldEdges, facesDropped: 0, facesSkipped: 0, warnings: [],
+      },
+      measure: null,
+    },
+    [positions.buffer, indices.buffer, faceOfTri.buffer, solidOfTri.buffer],
+  );
+}
+
 ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
   const req = ev.data;
   if (req.type === "measure") {
@@ -198,6 +305,12 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
     } catch (err) {
       post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
     }
+    return;
+  }
+  if (req.type === "load3mf") {
+    load3mf(req).catch((err: unknown) => {
+      post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
+    });
     return;
   }
   if (req.type !== "convert") return;

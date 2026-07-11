@@ -32,6 +32,7 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "node test/convert.ts",
     "test:stl": "node test/stl-roundtrip.ts",
+    "test:3mf": "node test/threemf.ts",
     "char": "node --max-old-space-size=16384 test/char.ts",
     "inspect": "node test/inspect.ts",
     "entities": "node test/step-inspect.ts",

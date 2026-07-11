@@ -130,7 +130,7 @@ let stepBaseName = "mesh";
 let worker: Worker | null = null;
 
 let mesh: RawMesh | null = null;
-let isStlModel = false; // current model came from an STL (no B-rep: crease edges, no CAD faces)
+let isMeshModel = false; // model came from an STL/3MF (no B-rep: crease edges, no CAD faces)
 let geo: THREE.BufferGeometry | null = null;
 let openSolidsSet = new Set<number>();
 let solidOfTri: Uint32Array | null = null; // per-triangle body id (context-menu part info)
@@ -174,17 +174,21 @@ stepFile.addEventListener("change", async () => {
     setStatus(`Worker error: ${e.message}`, true);
   };
 
-  if (/\.stl$/i.test(f.name)) {
-    // STL is already a mesh — no Convert step; the worker parses + welds and the result flows
-    // through the same applyResult path as a STEP conversion.
+  const meshExt = /\.stl$/i.test(f.name) ? "stl" : /\.3mf$/i.test(f.name) ? "3mf" : null;
+  if (meshExt) {
+    // STL / 3MF is already a mesh — no Convert step; the worker parses + welds and the result
+    // flows through the same applyResult path as a STEP conversion.
     stepText = null;
     convertBtn.disabled = true;
-    stepBaseName = f.name.replace(/\.stl$/i, "") || "mesh";
+    stepBaseName = f.name.replace(/\.(stl|3mf)$/i, "") || "mesh";
     const buf = await f.arrayBuffer();
-    showStlHeaderInfo(new Uint8Array(buf)); // before postMessage — the transfer detaches buf
-    showOverlay("Reading STL…");
+    // Before postMessage — the transfer detaches buf.
+    showMeshHeaderInfo(meshExt === "3mf"
+      ? "3MF"
+      : isBinarySTL(new Uint8Array(buf)) ? "STL · binary" : "STL · ASCII");
+    showOverlay(meshExt === "3mf" ? "Reading 3MF…" : "Reading STL…");
     maybeShowSponsor();
-    worker.postMessage({ type: "loadStl", buffer: buf, name: stepBaseName }, [buf]);
+    worker.postMessage({ type: meshExt === "3mf" ? "load3mf" : "loadStl", buffer: buf, name: stepBaseName }, [buf]);
     return;
   }
 
@@ -276,7 +280,7 @@ function applyResult(res: ConvertResult): void {
   // for export and edge extraction; only the display geometry gets the extra border vertices.
   let faceColors: Float32Array | null = null;
   let displayMesh: RawMesh = mesh;
-  const hasStepColors = !!res.colors;
+  const hasFileColors = !!res.colors;
   if (res.colors) {
     const { palette, faceColor } = res.colors;
     const colorOfTri = new Int32Array(res.mesh.faceOfTri.length);
@@ -314,9 +318,11 @@ function applyResult(res: ConvertResult): void {
       faceColors = split.colors;
     }
   }
-  tColorsLabel.textContent = hasStepColors ? "Model colors (from STEP)" : "Random colors (per part)";
+  tColorsLabel.textContent = hasFileColors
+    ? `Model colors (from ${res.kind === "3mf" ? "3MF" : "STEP"})`
+    : "Random colors (per part)";
   tColors.disabled = !faceColors;
-  tColors.checked = hasStepColors && !!faceColors; // file colors show by default; random is opt-in
+  tColors.checked = hasFileColors && !!faceColors; // file colors show by default; random is opt-in
   sectionBtn.disabled = false; // there is a solid to cut now
   geo = buildIndexedGeometry(displayMesh);
 
@@ -329,12 +335,12 @@ function applyResult(res: ConvertResult): void {
   // Bodies with defect segments get flagged in the parts tree (sheet bodies already dropped).
   defectSolids = new Set();
   for (let s = 0; s < b.count; s++) defectSolids.add(b.solidOfSeg[s]!);
-  // An STL has no CAD faces — "surface boundaries" become crease edges above the angle
+  // An STL/3MF has no CAD faces — "surface boundaries" become crease edges above the angle
   // threshold (dihedral between adjacent triangles), re-detectable live via the angle field.
-  isStlModel = res.kind === "stl";
-  tFeatureLabel.textContent = isStlModel ? "Feature edges (by angle)" : "Surface boundaries (CAD faces)";
-  creaseField.hidden = !isStlModel;
-  const feat = isStlModel
+  isMeshModel = res.kind !== "step";
+  tFeatureLabel.textContent = isMeshModel ? "Feature edges (by angle)" : "Surface boundaries (CAD faces)";
+  creaseField.hidden = !isMeshModel;
+  const feat = isMeshModel
     ? creaseEdges(mesh, res.mesh.solidOfTri, num("creaseAngle", 30))
     : featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
   solidOfTri = res.mesh.solidOfTri;
@@ -358,7 +364,7 @@ function applyResult(res: ConvertResult): void {
   hideOverlay();
   convertBtn.disabled = !stepText; // stays disabled for a loaded STL (nothing to convert)
   exportBtn.disabled = false;
-  setStatus(`${res.kind === "stl" ? "Loaded" : "Done"} · ${triCount(mesh).toLocaleString()} tris`);
+  setStatus(`${res.kind === "step" ? "Done" : "Loaded"} · ${triCount(mesh).toLocaleString()} tris`);
 }
 
 // ---- parts tree ----
@@ -796,12 +802,12 @@ function updateLegend(clamp: number): void {
 }
 
 // ---- toggles ----
-// Crease-angle re-detection (STL only): O(triangles) per keystroke, so debounce lightly.
+// Crease-angle re-detection (STL/3MF only): O(triangles) per keystroke, so debounce lightly.
 let creaseTimer: ReturnType<typeof setTimeout> | undefined;
 creaseAngle.addEventListener("input", () => {
   clearTimeout(creaseTimer);
   creaseTimer = setTimeout(() => {
-    if (!isStlModel || !mesh || !solidOfTri) return;
+    if (!isMeshModel || !mesh || !solidOfTri) return;
     const deg = num("creaseAngle", 30);
     viewer.setFeatureEdgeSet(creaseEdges(mesh, solidOfTri, Math.min(179, Math.max(1, deg))));
   }, 150);
@@ -924,11 +930,11 @@ function showHeaderInfo(text: string): void {
   watertight.hidden = true;
 }
 
-/** File-info fields available on STL pick (format only — geometry fills in when the load lands). */
-function showStlHeaderInfo(bytes: Uint8Array): void {
+/** File-info fields available on an STL/3MF pick (format only — geometry fills in on load). */
+function showMeshHeaderInfo(format: string): void {
   infoPanel.hidden = false;
   iSystem.textContent = "—";
-  iSchema.textContent = isBinarySTL(bytes) ? "STL · binary" : "STL · ASCII";
+  iSchema.textContent = format;
   iDate.textContent = "—";
   iUnits.textContent = "—";
   iDims.textContent = "—";
@@ -947,7 +953,7 @@ function showGeometryInfo(res: ConvertResult, edges: number): void {
   iBodies.textContent = sheets > 0
     ? `${res.stats.solids.toLocaleString()} (${sheets.toLocaleString()} sheet${sheets === 1 ? "" : "s"})`
     : res.stats.solids.toLocaleString();
-  iFaces.textContent = res.kind === "stl" ? "—" : res.stats.facesTotal.toLocaleString(); // an STL has no CAD faces
+  iFaces.textContent = res.kind === "step" ? res.stats.facesTotal.toLocaleString() : "—"; // an STL/3MF has no CAD faces
   iTris.textContent = triCount(res.mesh).toLocaleString();
   iEdgesRow.hidden = edges === 0;
   iEdges.textContent = edges.toLocaleString();

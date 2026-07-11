@@ -81,6 +81,7 @@ function buildDiagnostics(result: MeshResult, mesh: IndexedMesh, solidOfTri: Uin
 }
 
 export { writeBinarySTL, readSTL, isBinarySTL, indexSoup, type IndexedMesh, type TriSoup } from "./io/stl.ts";
+export { read3MF, type ThreeMFModel, type ThreeMFItem, type RGB3MF } from "./io/threemf.ts";
 export { parseStepHeader, type StepHeader } from "./step/header.ts";
 export type { MeshResult, TessOptions } from "./mesh/tessellate.ts";
 export type { BrepModel } from "./brep/build.ts";
