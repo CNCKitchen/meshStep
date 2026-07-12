@@ -47,8 +47,20 @@ freezes.
   measuring, open-edge highlighting, watertight check, deviation vs. a reference
   STL). STL carries no CAD faces, so the boundary overlay becomes **feature
   edges by crease angle**: edges whose adjacent triangles' normals differ by
-  more than an adjustable threshold (default 30°). The parts tree doesn't apply.
-- **Tessellated view** — orbit/zoom the generated mesh.
+  more than an adjustable threshold (default 30°). Disconnected shells are
+  detected and listed as parts (Shell 1, Shell 2, …), so per-shell hiding and
+  defect attribution still work.
+- **Upload a 3MF** — objects are welded per shell and displayed with their 3MF
+  colors (per-triangle color groups) and a per-object parts list. "Surface" and
+  "support" objects are open by design and excluded from the watertight audit.
+- **Tessellated view** — orbit/zoom the generated mesh, with a views menu for
+  standard camera angles (top/front/…, Ctrl+0 = isometric) and a segmented
+  render-style control: shaded, transparent, wireframe, edges.
+- **Section view** — cut the model with a clipping plane: X/Y/Z axis buttons
+  plus a draggable gizmo to position it interactively.
+- **Measure mode** — click vertices/edges/faces to measure. STEP imports carry
+  exact analytic identity from the B-rep (true circle centers/radii/axes, not
+  values fitted from triangles); point-to-point distance works on every format.
 - **Model colors** — the STEP file's face/body colors (`STYLED_ITEM`), rendered
   by default when present, with a show/hide toggle. Colors stay crisp across
   face borders (shared border vertices are split per color). While **Color by
@@ -57,7 +69,8 @@ freezes.
   from the STEP product structure (product names, ×N occurrence counts, body
   counts). Hover a row to highlight the part in orange; uncheck to hide it
   (triangles and edge lines both). A part used N times in the assembly is one
-  row — hiding it hides all instances.
+  row — hiding it hides all instances. Right-clicking a part in the viewport
+  opens a context menu with the same actions.
 - **Reference STL** upload (e.g. the matching `*.stl` next to each `*.step` in
   the repo root) with a toggleable translucent **overlay**.
 - **Deviation analysis** — colors the generated mesh by signed distance to the
@@ -65,7 +78,6 @@ freezes.
   deviation report. Computed with a BVH (`three-mesh-bvh`) for true
   point-to-surface distance. Color range auto-scales or can be set manually.
   Max/RMS deviation is shown in the corner.
-- **Wireframe** overlay to inspect the mesh.
 - **Open-edge highlighting** — boundary edges (used by a single triangle) drawn
   in red. A watertight mesh shows none; the corner readout reports the count.
   Sheet (surface) bodies are open **by design** — their boundary edges are

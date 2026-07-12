@@ -4,9 +4,12 @@ Pure-TypeScript **STEP → mesh** importer. Reads ISO-10303-21 B-rep geometry (A
 AP242) and produces **watertight, low-sliver, process-grade triangle meshes** — meshes you can
 displace, voxelize, offset, slice, or simulate, not just look at.
 
-Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~9,500
-lines of TypeScript (~159 KB minified, ~60 KB gzipped) that run as-is in the browser, in a Web
-Worker, and in Node ≥ 22. Built to feed
+**Try it live: [cnckitchen.github.io/meshStep](https://cnckitchen.github.io/meshStep/)** — the
+web viewer runs the importer entirely in your browser (files never leave your machine).
+
+Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~11,000
+lines of TypeScript (~182 KB minified, ~68 KB gzipped) that run as-is in the browser, in a Web
+Worker, and in Node ≥ 22.18. Built to feed
 [bumpmesh](https://github.com/CNCKitchen/stlTexturizer) (displacement texturing) and
 [infeall](https://github.com/CNCKitchen/smartInfillGenerator) (smart infill), where mesh defects
 aren't cosmetic — they break the algorithm.
@@ -58,7 +61,7 @@ meshStep starts from the opposite end: **the mesh is the product.**
 
 | Route | In browser | Footprint | Mesh output | Watertight welded | Face→tri topology | License |
 |---|---|---|---|---|---|---|
-| **meshStep** | ✅ pure TS | ~60 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
+| **meshStep** | ✅ pure TS | ~68 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
 | [occt-import-js](https://github.com/kovacsv/occt-import-js) | ✅ WASM | ~8 MB WASM | curvature-adaptive, per face | ❌ | ✅ face ranges | LGPL-2.1 (OCCT) |
 | [opencascade.js](https://github.com/donalffons/opencascade.js) | ✅ WASM | larger (custom builds) | same OCCT mesher | ❌ | manual | LGPL-2.1 (OCCT) |
 | [cascadio](https://github.com/trimesh/cascadio) / pythonOCC / FreeCAD | ❌ Python/desktop | native wheels/app | same OCCT mesher | ❌ | varies | LGPL (bundles OCCT) |
@@ -114,6 +117,10 @@ Coverage:
   per-representation units, `BREP_WITH_VOIDS`; AP242 tessellated-geometry bodies pass through
   as-is. Face/body presentation colors (`STYLED_ITEM` / `OVER_RIDING_STYLED_ITEM`, AP214/AP242)
   are extracted palette-indexed.
+- **Mesh I/O:** binary STL out (`writeBinarySTL`), plus standalone zero-dependency readers so
+  tools can ingest existing meshes through the same library — STL in (`readSTL`, binary + ASCII,
+  with soup→indexed welding) and 3MF in (`read3MF`: ZIP + XML parsing, component/build
+  transforms, per-triangle colors, object types).
 
 Robustness is tracked over four corpora of increasing wildness, cross-validated against
 OpenCASCADE output with the `gapcheck` harness (per-face deviation + watertightness). Where it
@@ -142,12 +149,12 @@ actually 3D-print, and the numbers above are deliberately honest about the rest:
   tolerances — native OCCT is faster on huge or degenerate inputs.
 - **No geometry healing.** meshStep trusts the STEP file: gaps, self-intersections, or broken
   topology in the source B-rep are not repaired, only reported.
-- Remaining features: 3MF export, the controls/preset UI, and seam routing for multi-turn
-  thread/spiral faces. Pipeline details in [DESIGN.md](DESIGN.md).
+- Remaining features: 3MF export (a 3MF *reader* is in), the Low/Med/High refinement-preset UI,
+  and seam routing for multi-turn thread/spiral faces. Pipeline details in [DESIGN.md](DESIGN.md).
 
 ## Quick start (dev)
 
-Requires Node ≥ 22 (native TypeScript type-stripping — no build step, no dependencies).
+Requires Node ≥ 22.18 (native TypeScript type-stripping — no build step, no dependencies).
 
 ```bash
 node test/convert.ts        # import every test STEP, export STL to out/, report quality vs reference
@@ -179,7 +186,10 @@ walk(result.structure);
 
 Options mirror Fusion's mesh-export dialog: `surfaceDeviation` (mm), `normalDeviation` (deg),
 `maxEdge` (mm), plus `remesh: true` for uniform-isotropic output (default off — the raw
-tessellation is watertight and shades cleaner).
+tessellation is watertight and shades cleaner). `onProgress` reports parse / tessellate /
+finalize progress for long imports, and `measureGeometry: true` additionally collects exact
+per-edge curve identity (circle centers/radii/axes, boundary polylines coincident with the mesh)
+into `result.measure`, so a viewer can offer CAD-style measuring on the tessellation.
 
 The tolerances are absolute, so one default can't fit both a 5 mm clip and a 3 m assembly.
 `estimateStepSize(src)` measures the model without tessellating (parse + point scan, sub-second
@@ -228,10 +238,14 @@ downstream processing.
 
 ## Web verification studio
 
-A browser UI for visually checking output lives in [web/](web/README.md): upload a STEP, tune
-the settings, and inspect the result with the model's STEP colors (on by default, toggleable),
-deviation coloring against a reference STL (3D-scan style), wireframe, and open-edge
-highlighting. `cd web && npm install && npm run dev`.
+A browser UI for visually checking output lives in [web/](web/README.md) — hosted at
+[cnckitchen.github.io/meshStep](https://cnckitchen.github.io/meshStep/): upload a STEP (or an
+existing STL/3MF — same toolset, no conversion), tune the settings (auto-scaled to the model's
+size), and inspect the result: the model's STEP/3MF colors (on by default, toggleable), a parts
+tree with per-part show/hide, shaded / transparent / wireframe / edges render styles, a section
+view with a draggable clipping plane, CAD-style measuring (exact circle centers/radii from the
+B-rep), deviation coloring against a reference STL (3D-scan style), and open-edge highlighting.
+`cd web && npm install && npm run dev`.
 
 ## License
 
