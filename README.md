@@ -1,5 +1,9 @@
 # meshStep
 
+### [https://cnckitchen.github.io/meshStep/](https://cnckitchen.github.io/meshStep/)
+
+---
+
 Pure-TypeScript **STEP → mesh** importer. Reads ISO-10303-21 B-rep geometry (AP203 / AP214 /
 AP242) and produces **watertight, low-sliver, process-grade triangle meshes** — meshes you can
 displace, voxelize, offset, slice, or simulate, not just look at.
