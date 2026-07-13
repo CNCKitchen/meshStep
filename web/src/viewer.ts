@@ -110,6 +110,11 @@ export class Viewer {
   /** Right-click (no drag) hook: body id under the cursor (null over empty space) + client x/y. */
   onContextMenu: ((solidId: number | null, x: number, y: number) => void) | null = null;
 
+  // Content bounding sphere for the per-frame near/far update (updateClipPlanes);
+  // recomputed lazily after the model or reference overlay changes.
+  private clipSphere = new THREE.Sphere();
+  private clipSphereDirty = true;
+
   // Section view: one clipping plane + stencil caps + plane gizmo (section.ts).
   private section: SectionController;
   // Axes triad in the lower-right corner showing the world orientation.
@@ -548,8 +553,12 @@ export class Viewer {
       if (denom < 1e-6 || planeDist < 1e-9) return;
       const p = this._oTmp.multiplyScalar(planeDist / denom).add(cam.position);
       const s = 1 / factor;
-      // Don't dolly into the near plane.
-      if (factor > 1 && cam.position.distanceTo(p) * s < cam.near * 2) return;
+      // Don't dolly below the dynamic near-plane floor (r/1000, see
+      // updateClipPlanes). Checking against cam.near itself would deadlock:
+      // far from the part, near tracks the camera distance (0.8x), so every
+      // zoom-in would be swallowed.
+      const rClip = Math.max(this.clipSphere.radius, 1e-3);
+      if (factor > 1 && cam.position.distanceTo(p) * s < rClip / 500) return;
       cam.position.sub(p).multiplyScalar(s).add(p);
       this.controls.target.sub(p).multiplyScalar(s).add(p);
     }
@@ -622,14 +631,10 @@ export class Viewer {
 
     this.persp.up.copy(up);
     this.persp.position.copy(pos);
-    this.persp.near = dist / 100;
-    this.persp.far = dist * 100;
     this.persp.updateProjectionMatrix();
 
     this.ortho.up.copy(up);
     this.ortho.position.copy(pos);
-    this.ortho.near = 0.01;
-    this.ortho.far = dist * 100;
     this.ortho.zoom = 1;
     this.setOrthoFrustum(radius * 2.4);
     this.ortho.updateProjectionMatrix();
@@ -648,9 +653,41 @@ export class Viewer {
     this.fillLight.position.set(-1, -0.6, 0.4).applyQuaternion(this.camera.quaternion);
   }
 
+  /** Re-derive near/far from the camera's distance to the model every frame.
+   *  The pivot-on-cursor orbit and cursor-centric zoom move the camera freely,
+   *  so planes frozen at fit() time end up slicing the part once the camera
+   *  gets close (near-plane clipping while orbiting). */
+  private updateClipPlanes(): void {
+    if (this.clipSphereDirty) {
+      const box = new THREE.Box3().expandByObject(this.content.group);
+      if (box.isEmpty()) return; // pre-model: keep the constructor defaults
+      box.getBoundingSphere(this.clipSphere);
+      this.clipSphereDirty = false;
+    }
+    const r = Math.max(this.clipSphere.radius, 1e-3);
+    const dist = this.camera.position.distanceTo(this.clipSphere.center);
+    // 4r of headroom past the sphere keeps helpers (section quad, pivot marker)
+    // inside the frustum; far-plane slack costs no depth precision — near does.
+    if (this.orthoOn) {
+      // Ortho projections allow near < 0: bracket the whole model regardless
+      // of where pan/zoom left the camera (it may sit inside the part).
+      this.ortho.near = dist - 4 * r;
+      this.ortho.far = dist + 4 * r;
+      this.ortho.updateProjectionMatrix();
+    } else {
+      // The camera can't be closer to geometry than dist - r, so 0.8x that is a
+      // safe near plane; inside the sphere fall back to r/1000 (~0.1mm on a
+      // 100mm part) so close-up detail still renders without z-fighting.
+      this.persp.near = Math.max((dist - r) * 0.8, r / 1000);
+      this.persp.far = dist + 4 * r;
+      this.persp.updateProjectionMatrix();
+    }
+  }
+
   private animate = (): void => {
     requestAnimationFrame(this.animate);
     this.controls.update();
+    this.updateClipPlanes();
     this.updateLights();
     this.measure.update(); // process queued hover + keep markers a constant apparent size
     this.renderer.clear(); // autoClear is off for the axes-triad second pass
@@ -719,6 +756,7 @@ export class Viewer {
     this.measure.setData(null); // old measurements/labels would float over the new model
     this.solidOfTri = solidOfTri;
     this.drawnSolidOfTri = solidOfTri;
+    this.clipSphereDirty = true;
     this.fullIndex = (geometry.getIndex()?.array as Uint32Array) ?? null;
     this.boundarySet = boundary;
     this.featureSet = feature;
@@ -814,6 +852,7 @@ export class Viewer {
       c.reference.visible = this.showReference;
       c.group.add(c.reference);
     }
+    this.clipSphereDirty = true; // the overlay may extend past the model's bounds
     this.refreshClipping(); // the fresh reference material needs the section plane too
   }
 
@@ -952,16 +991,13 @@ export class Viewer {
     const pos = center.clone().addScaledVector(dir, dist);
 
     // Fit re-frames from the iso direction — also re-level a free-orbit roll.
+    // (near/far are owned by updateClipPlanes, re-derived every frame.)
     this.persp.up.set(0, 0, 1);
     this.ortho.up.set(0, 0, 1);
     this.persp.position.copy(pos);
-    this.persp.near = dist / 100;
-    this.persp.far = dist * 100;
     this.persp.updateProjectionMatrix();
 
     this.ortho.position.copy(pos);
-    this.ortho.near = 0.01;
-    this.ortho.far = dist * 100;
     this.ortho.zoom = 1;
     this.setOrthoFrustum(radius * 2.4); // enclose the model with a small margin
     this.ortho.updateProjectionMatrix();
@@ -999,13 +1035,9 @@ export class Viewer {
     const p = center.clone().addScaledVector(dir, dist);
 
     this.persp.position.copy(p);
-    this.persp.near = dist / 100;
-    this.persp.far = dist * 100;
     this.persp.updateProjectionMatrix();
 
     this.ortho.position.copy(p);
-    this.ortho.near = 0.01;
-    this.ortho.far = dist * 100;
     this.ortho.zoom = 1;
     this.setOrthoFrustum(radius * 2.4);
     this.ortho.updateProjectionMatrix();
