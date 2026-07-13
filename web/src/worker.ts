@@ -3,6 +3,7 @@
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
 import { importStep, estimateStepSize, readSTL, read3MF, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
+import { EdgeTable } from "../../src/mesh/edge-table.ts";
 
 export interface ConvertRequest {
   type: "convert";
@@ -113,37 +114,28 @@ function post(msg: WorkerOut, transfer?: Transferable[]): void {
  * edges at their contact faces, and those carry 4 triangles — treating them as boundaries splits
  * the shells the same way slicers (admesh / BambuStudio) do. Vertex- or plain edge-connectivity
  * would fuse them (verified on a real two-body export). */
-function labelShells(indices: Uint32Array, vertexCount: number, solidOfTri: Uint32Array): number {
+function labelShells(indices: Uint32Array, solidOfTri: Uint32Array): number {
   const nT = solidOfTri.length;
-  const edgeKey = (t: number, e: number): number => {
-    const u = indices[t * 3 + e]!, v = indices[t * 3 + ((e + 1) % 3)]!;
-    return (u < v ? u : v) * vertexCount + (u < v ? v : u); // < 2^53 for any real mesh
-  };
-  // Pass 1: incident-triangle count per undirected edge (capped at 3 — only "exactly 2" matters).
-  const edgeCount = new Map<number, number>();
+  // Pass 1: incident-triangle count per undirected edge (EdgeTable — a Map caps at 2^24 edges).
+  const et = new EdgeTable(nT * 1.6, 1);
   for (let t = 0; t < nT; t++) {
     for (let e = 0; e < 3; e++) {
-      const k = edgeKey(t, e);
-      const c = edgeCount.get(k);
-      if (c === undefined) edgeCount.set(k, 1);
-      else if (c < 3) edgeCount.set(k, c + 1);
+      et.bump(indices[t * 3 + e]!, indices[t * 3 + ((e + 1) % 3)]!);
     }
   }
-  // Pass 2: union the two triangles of every manifold edge.
+  // Pass 2: union the two triangles of every manifold edge (v0 = the edge's first triangle).
   const parent = new Uint32Array(nT);
   for (let i = 0; i < nT; i++) parent[i] = i;
   const find = (x: number): number => {
     while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; }
     return x;
   };
-  const firstTri = new Map<number, number>();
   for (let t = 0; t < nT; t++) {
     for (let e = 0; e < 3; e++) {
-      const k = edgeKey(t, e);
-      if (edgeCount.get(k) !== 2) continue;
-      const first = firstTri.get(k);
-      if (first === undefined) firstTri.set(k, t);
-      else parent[find(t)] = find(first);
+      const s = et.find(indices[t * 3 + e]!, indices[t * 3 + ((e + 1) % 3)]!);
+      if (et.cnt[s]! !== 2) continue;
+      if (et.v0[s] === -1) et.v0[s] = t;
+      else if (et.v0[s] !== t) parent[find(t)] = find(et.v0[s]!);
     }
   }
   const shellOfRoot = new Map<number, number>();
@@ -169,7 +161,7 @@ function loadStl(req: LoadStlRequest): void {
   const nT = soup.triangleCount;
   const faceOfTri = new Uint32Array(nT);
   const solidOfTri = new Uint32Array(nT);
-  const shells = labelShells(mesh.indices, mesh.positions.length / 3, solidOfTri);
+  const shells = labelShells(mesh.indices, solidOfTri);
   const bodies = shells === 1
     ? [{ id: 0, name: req.name }]
     : Array.from({ length: shells }, (_, i) => ({ id: i, name: `Shell ${i + 1}` }));

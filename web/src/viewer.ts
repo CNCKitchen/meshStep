@@ -4,7 +4,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { ViewHelper } from "three/addons/helpers/ViewHelper.js";
 import { CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { MeshBVH } from "three-mesh-bvh";
-import { filterTriangles, filterSegments, type EdgeSet } from "./mesh-utils.ts";
+import { filterTriangles, filterSegments, wireframeIndex, type EdgeSet } from "./mesh-utils.ts";
 import { SectionController } from "./section.ts";
 import { MeasureController, type MeasureMode } from "./measure.ts";
 import type { MeasureGeometry } from "../../src/index.ts";
@@ -88,6 +88,7 @@ export class Viewer {
   private showColors = true; // STEP face colors, on by default when the file has them
   private transparentOn = false;
   private solidVisible = true; // false => CAD-edges-only view
+  private smoothOn = false; // smooth (baked crease-aware normals) vs flat facet shading
 
   // Per-vertex color sources for the solid mesh; applyVisibility picks which one is active
   // (deviation analysis wins over the model's own face colors while its toggle is on).
@@ -736,6 +737,7 @@ export class Viewer {
       }
       m.vertexColors = !!active;
       m.color.set(m.vertexColors ? 0xffffff : BASE_COLOR);
+      m.flatShading = !this.smoothOn;
       m.transparent = this.transparentOn;
       m.opacity = this.transparentOn ? 0.4 : 1;
       m.depthWrite = !this.transparentOn; // let edges/back faces show through when translucent
@@ -761,7 +763,6 @@ export class Viewer {
     this.boundarySet = boundary;
     this.featureSet = feature;
     this.hiddenSolids.clear();
-    this.wireDirty = false;
 
     // Blinn-Phong, not PBR: cheaper per fragment AND gives the glossy CAD-style
     // specular highlight (Onshape look) that makes curvature readable.
@@ -770,7 +771,7 @@ export class Viewer {
       specular: 0x777777,
       shininess: 40,
       side: THREE.DoubleSide,
-      flatShading: true,
+      flatShading: !this.smoothOn,
       // Push faces slightly back so coplanar feature lines win the depth test (crisp hidden-line look).
       polygonOffset: true,
       polygonOffsetFactor: 1,
@@ -779,10 +780,19 @@ export class Viewer {
     c.solid = new THREE.Mesh(geometry, mat);
     c.group.add(c.solid);
 
+    // Wireframe as an index buffer over the mesh's own positions — THREE.WireframeGeometry
+    // dies on V8's 2^24 Set cap past ~8M unique edges and duplicates every vertex. Built
+    // lazily: it starts hidden, and a ~25M-edge index is real time and memory.
     const wireMat = new THREE.LineBasicMaterial({ color: 0x0c0f12, transparent: true, opacity: 0.55 });
-    c.wire = new THREE.LineSegments(new THREE.WireframeGeometry(geometry), wireMat);
+    const wireGeo = new THREE.BufferGeometry();
+    wireGeo.setAttribute("position", geometry.getAttribute("position"));
+    wireGeo.setIndex(new THREE.BufferAttribute(new Uint32Array(0), 1));
+    wireGeo.boundingSphere = geometry.boundingSphere;
+    c.wire = new THREE.LineSegments(wireGeo, wireMat);
     c.wire.visible = this.showWire;
     c.group.add(c.wire);
+    this.wireDirty = true;
+    if (this.showWire) this.rebuildWire(); // the toggle persists across loads
 
     // Surface boundaries (CAD face borders): depth-tested so hidden edges stay hidden.
     const featGeo = new THREE.BufferGeometry();
@@ -925,8 +935,11 @@ export class Viewer {
   private rebuildWire(): void {
     const c = this.content;
     if (!c.wire || !c.solid) return;
-    c.wire.geometry.dispose();
-    c.wire.geometry = new THREE.WireframeGeometry(c.solid.geometry);
+    // Swap only the index (positions are shared with the solid mesh — disposing the geometry
+    // would tear down the shared GPU buffer). Derives from the solid's CURRENT index, so
+    // per-part hiding is honored.
+    const idx = c.solid.geometry.getIndex()!.array as Uint32Array;
+    c.wire.geometry.setIndex(new THREE.BufferAttribute(wireframeIndex(idx), 1));
     this.wireDirty = false;
   }
 
@@ -947,6 +960,9 @@ export class Viewer {
   }
   /** Show/hide the model's own STEP face colors. */
   setShowColors(v: boolean): void { this.showColors = v; this.applyVisibility(); }
+  /** Smooth vs flat shading. The crease-aware normals are baked into the geometry by the
+   * loader (autoSmooth), so this only flips the material flag — no geometry work. */
+  setSmoothShading(v: boolean): void { this.smoothOn = v; this.applyVisibility(); }
   setOpenEdges(v: boolean): void { this.showEdges = v; this.applyVisibility(); }
   setFeatureEdges(v: boolean): void { this.showFeature = v; this.applyVisibility(); }
   setTransparent(v: boolean): void { this.transparentOn = v; this.applyVisibility(); }

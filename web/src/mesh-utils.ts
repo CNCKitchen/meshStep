@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 import * as THREE from "three";
+import { EdgeTable } from "../../src/mesh/edge-table.ts";
 
 export interface RawMesh {
   positions: Float64Array; // 3 per vertex
   indices: Uint32Array; // 3 per triangle
 }
 
-/** Build an indexed BufferGeometry (Float32 positions) from a meshStep IndexedMesh. */
-export function buildIndexedGeometry(mesh: RawMesh): THREE.BufferGeometry {
+/** Build an indexed BufferGeometry (Float32 positions) from a meshStep IndexedMesh.
+ * `normals` (e.g. from autoSmooth) is used verbatim when given, else averaged vertex normals. */
+export function buildIndexedGeometry(mesh: RawMesh, normals?: Float32Array): THREE.BufferGeometry {
   const g = new THREE.BufferGeometry();
   g.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(mesh.positions), 3));
   g.setIndex(new THREE.Uint32BufferAttribute(mesh.indices.slice(), 1));
-  g.computeVertexNormals();
+  if (normals) g.setAttribute("normal", new THREE.Float32BufferAttribute(normals, 3));
+  else g.computeVertexNormals();
   g.computeBoundingBox();
   g.computeBoundingSphere();
   return g;
@@ -42,25 +45,20 @@ export interface EdgeSet {
 export function boundaryEdges(mesh: RawMesh, solidOfTri: Uint32Array): EdgeSet {
   const idx = mesh.indices;
   const pos = mesh.positions;
-  const useCount = new Map<number, number>();
-  // Same packing as src/mesh/orient.ts: exact for vertex ids below 2^26 (~67M). The old
-  // a*2^32+b key exceeded 2^53 from ~2M vertices up and silently collided.
-  const KEY = 0x4000000;
-  const key = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
+  // EdgeTable, not a Map: a large assembly mesh carries more unique edges than a Map's 2^24 cap
+  // ("RangeError: Map maximum size exceeded" on a ~20M-triangle conversion).
+  const useCount = new EdgeTable(idx.length / 2);
 
   for (let t = 0; t < idx.length; t += 3) {
     const a = idx[t]!, b = idx[t + 1]!, c = idx[t + 2]!;
-    const k0 = key(a, b), k1 = key(b, c), k2 = key(c, a);
-    useCount.set(k0, (useCount.get(k0) ?? 0) + 1);
-    useCount.set(k1, (useCount.get(k1) ?? 0) + 1);
-    useCount.set(k2, (useCount.get(k2) ?? 0) + 1);
+    useCount.bump(a, b); useCount.bump(b, c); useCount.bump(c, a);
   }
 
   // Second pass: collect the actual vertex pairs for edges used once.
   const out: number[] = [];
   const segSolid: number[] = [];
   const emit = (u: number, v: number, s: number): void => {
-    if (useCount.get(key(u, v)) !== 1) return;
+    if (useCount.cnt[useCount.find(u, v)]! !== 1) return;
     out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
     out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
     segSolid.push(s);
@@ -84,18 +82,13 @@ export function boundaryEdges(mesh: RawMesh, solidOfTri: Uint32Array): EdgeSet {
 export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: Uint32Array): EdgeSet {
   const idx = mesh.indices;
   const pos = mesh.positions;
-  const KEY = 0x4000000; // matches boundaryEdges: exact for vertex ids below ~67M
-  const key = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
-
-  const cnt = new Map<number, number>();
-  const firstFace = new Map<number, number>();
-  const feature = new Set<number>();
+  // EdgeTable (no 2^24 Map cap): cnt = use-count, v0 = first face id, v1 = flag bits.
+  const FEATURE = 1, SEEN = 2;
+  const et = new EdgeTable(idx.length / 2, 2);
   const consider = (a: number, b: number, f: number): void => {
-    const k = key(a, b);
-    const n = (cnt.get(k) ?? 0) + 1;
-    cnt.set(k, n);
-    if (n === 1) firstFace.set(k, f);
-    else if (firstFace.get(k) !== f) feature.add(k); // edge straddles two distinct faces
+    const s = et.bump(a, b);
+    if (et.cnt[s]! === 1) { et.v0[s] = f; et.v1[s] = 0; } // v1 lane initialises to -1, not 0
+    else if (et.v0[s] !== f) et.v1[s] = et.v1[s]! | FEATURE; // edge straddles two distinct faces
   };
   const tris = idx.length / 3;
   for (let t = 0; t < tris; t++) {
@@ -106,12 +99,11 @@ export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: 
 
   const out: number[] = [];
   const segSolid: number[] = [];
-  const seen = new Set<number>();
   const emit = (u: number, v: number, s: number): void => {
-    const k = key(u, v);
-    if (seen.has(k)) return;
-    if (cnt.get(k) !== 1 && !feature.has(k)) return; // interior-to-a-face edge: skip
-    seen.add(k);
+    const k = et.find(u, v);
+    if (et.v1[k]! & SEEN) return;
+    if (et.cnt[k]! !== 1 && !(et.v1[k]! & FEATURE)) return; // interior-to-a-face edge: skip
+    et.v1[k] = et.v1[k]! | SEEN;
     out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
     out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
     segSolid.push(s);
@@ -149,23 +141,20 @@ export function creaseEdges(mesh: RawMesh, solidOfTri: Uint32Array, angleDeg: nu
     nrm[t * 3] = nx / l; nrm[t * 3 + 1] = ny / l; nrm[t * 3 + 2] = nz / l;
   }
 
-  const KEY = 0x4000000; // matches boundaryEdges/featureEdges: exact for vertex ids below ~67M
-  const key = (a: number, b: number) => (a < b ? a * KEY + b : b * KEY + a);
   const cosThresh = Math.cos((angleDeg * Math.PI) / 180);
 
-  const cnt = new Map<number, number>();
-  const firstTri = new Map<number, number>();
-  const crease = new Set<number>();
+  // EdgeTable (no 2^24 Map cap): cnt = use-count, v0 = first incident triangle, v1 = flag bits.
+  const CREASE = 1, SEEN = 2;
+  const et = new EdgeTable(idx.length / 2, 2);
   const consider = (a: number, b: number, t: number): void => {
-    const k = key(a, b);
-    const n = (cnt.get(k) ?? 0) + 1;
-    cnt.set(k, n);
-    if (n === 1) { firstTri.set(k, t); return; }
-    if (n > 2) { crease.add(k); return; } // non-manifold junction
-    const o = firstTri.get(k)!;
+    const s = et.bump(a, b);
+    const n = et.cnt[s]!;
+    if (n === 1) { et.v0[s] = t; et.v1[s] = 0; return; } // v1 lane initialises to -1, not 0
+    if (n > 2) { et.v1[s] = et.v1[s]! | CREASE; return; } // non-manifold junction
+    const o = et.v0[s]!;
     if (degenerate[o] || degenerate[t]) return;
     const dot = nrm[o * 3]! * nrm[t * 3]! + nrm[o * 3 + 1]! * nrm[t * 3 + 1]! + nrm[o * 3 + 2]! * nrm[t * 3 + 2]!;
-    if (dot < cosThresh) crease.add(k);
+    if (dot < cosThresh) et.v1[s] = et.v1[s]! | CREASE;
   };
   for (let t = 0; t < tris; t++) {
     const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
@@ -174,12 +163,11 @@ export function creaseEdges(mesh: RawMesh, solidOfTri: Uint32Array, angleDeg: nu
 
   const out: number[] = [];
   const segSolid: number[] = [];
-  const seen = new Set<number>();
   const emit = (u: number, v: number, s: number): void => {
-    const k = key(u, v);
-    if (seen.has(k)) return;
-    if (cnt.get(k) !== 1 && !crease.has(k)) return; // smooth interior edge: skip
-    seen.add(k);
+    const k = et.find(u, v);
+    if (et.v1[k]! & SEEN) return;
+    if (et.cnt[k]! !== 1 && !(et.v1[k]! & CREASE)) return; // smooth interior edge: skip
+    et.v1[k] = et.v1[k]! | SEEN;
     out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
     out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
     segSolid.push(s);
@@ -190,6 +178,131 @@ export function creaseEdges(mesh: RawMesh, solidOfTri: Uint32Array, angleDeg: nu
     emit(a, b, s); emit(b, c, s); emit(c, a, s);
   }
   return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
+}
+
+/**
+ * Auto-smooth: split welded vertices along crease edges and compute crease-aware vertex
+ * normals, so the mesh shades smooth across curvature but keeps sharp edges sharp.
+ *
+ * A feature (crease) edge uses the same rule as creaseEdges: an interior manifold edge is a
+ * crease when its two triangles' normals differ by more than `angleDeg`; boundary edges and
+ * non-manifold junctions (3+ triangles) always are. CAD face borders are deliberately NOT a
+ * criterion — tangent-continuous borders (fillet blends) must stay smooth, and genuinely sharp
+ * borders exceed the angle anyway.
+ *
+ * Around each vertex, incident triangle corners connected through smooth edges form one
+ * smoothing group (union-find); each group becomes one output vertex whose normal is the
+ * area-weighted average of its triangles. Triangle order and count are unchanged, so
+ * per-triangle attributes (solidOfTri, faceOfTri) stay valid. `src` maps each output vertex
+ * to its input vertex for remapping per-vertex attributes (face colors).
+ */
+export function autoSmooth(mesh: RawMesh, angleDeg: number): { mesh: RawMesh; normals: Float32Array; src: Uint32Array } {
+  const idx = mesh.indices;
+  const pos = mesh.positions;
+  const tris = idx.length / 3;
+
+  // Raw cross products (length = 2·area) for area-weighted averaging; unit normals for the
+  // angle test. A degenerate triangle's unit normal stays [0,0,0] and can never pass the
+  // cos test, so nothing smooths across it.
+  const raw = new Float64Array(tris * 3);
+  const unit = new Float64Array(tris * 3);
+  for (let t = 0; t < tris; t++) {
+    const a = idx[t * 3]! * 3, b = idx[t * 3 + 1]! * 3, c = idx[t * 3 + 2]! * 3;
+    const abx = pos[b]! - pos[a]!, aby = pos[b + 1]! - pos[a + 1]!, abz = pos[b + 2]! - pos[a + 2]!;
+    const acx = pos[c]! - pos[a]!, acy = pos[c + 1]! - pos[a + 1]!, acz = pos[c + 2]! - pos[a + 2]!;
+    const nx = aby * acz - abz * acy, ny = abz * acx - abx * acz, nz = abx * acy - aby * acx;
+    raw[t * 3] = nx; raw[t * 3 + 1] = ny; raw[t * 3 + 2] = nz;
+    const l = Math.sqrt(nx * nx + ny * ny + nz * nz);
+    if (l < 1e-30) continue;
+    unit[t * 3] = nx / l; unit[t * 3 + 1] = ny / l; unit[t * 3 + 2] = nz / l;
+  }
+
+  const cosThresh = Math.cos((angleDeg * Math.PI) / 180);
+
+  // Pass 1: edge use-counts + first incident triangle, so only exactly-two-triangle edges
+  // can smooth (a 3rd triangle arriving later must not have already merged the first pair).
+  // EdgeTable (no 2^24 Map cap): cnt = use-count, v0 = first incident triangle.
+  const et = new EdgeTable(idx.length / 2, 1);
+  for (let t = 0; t < tris; t++) {
+    const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
+    for (const [u, v] of [[a, b], [b, c], [c, a]] as const) {
+      const s = et.bump(u, v);
+      if (et.cnt[s]! === 1) et.v0[s] = t;
+    }
+  }
+
+  // Union-find over triangle corners (a corner = one triangle's use of one vertex).
+  const parent = new Int32Array(idx.length);
+  for (let i = 0; i < parent.length; i++) parent[i] = i;
+  const find = (x: number): number => {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]!]!; x = parent[x]!; }
+    return x;
+  };
+  const cornerOf = (t: number, v: number): number =>
+    idx[t * 3] === v ? t * 3 : idx[t * 3 + 1] === v ? t * 3 + 1 : t * 3 + 2;
+
+  // Pass 2: merge corners across smooth manifold edges.
+  for (let t = 0; t < tris; t++) {
+    const va = idx[t * 3]!, vb = idx[t * 3 + 1]!, vc = idx[t * 3 + 2]!;
+    for (const [a, b] of [[va, vb], [vb, vc], [vc, va]] as const) {
+      const s = et.find(a, b);
+      if (et.cnt[s]! !== 2) continue;
+      const o = et.v0[s]!;
+      if (o === t) continue; // this is the edge's first triangle; its partner does the merge
+      const dot = unit[o * 3]! * unit[t * 3]! + unit[o * 3 + 1]! * unit[t * 3 + 1]! + unit[o * 3 + 2]! * unit[t * 3 + 2]!;
+      if (dot < cosThresh) continue; // crease: keep the corners split
+      parent[find(cornerOf(t, a))] = find(cornerOf(o, a));
+      parent[find(cornerOf(t, b))] = find(cornerOf(o, b));
+    }
+  }
+
+  // Pass 3: one output vertex per corner group; accumulate area-weighted normals.
+  const outIdx = new Uint32Array(idx.length);
+  const groupOfRoot = new Int32Array(idx.length).fill(-1);
+  let nOut = 0;
+  for (let c = 0; c < idx.length; c++) {
+    const r = find(c);
+    if (groupOfRoot[r] === -1) groupOfRoot[r] = nOut++;
+    outIdx[c] = groupOfRoot[r]!;
+  }
+  const positions = new Float64Array(nOut * 3);
+  const acc = new Float64Array(nOut * 3);
+  const src = new Uint32Array(nOut);
+  for (let c = 0; c < idx.length; c++) {
+    const g = outIdx[c]!, v = idx[c]!, t = (c - (c % 3)) / 3;
+    src[g] = v;
+    positions[g * 3] = pos[v * 3]!; positions[g * 3 + 1] = pos[v * 3 + 1]!; positions[g * 3 + 2] = pos[v * 3 + 2]!;
+    acc[g * 3] += raw[t * 3]!; acc[g * 3 + 1] += raw[t * 3 + 1]!; acc[g * 3 + 2] += raw[t * 3 + 2]!;
+  }
+  const normals = new Float32Array(nOut * 3);
+  for (let g = 0; g < nOut; g++) {
+    const x = acc[g * 3]!, y = acc[g * 3 + 1]!, z = acc[g * 3 + 2]!;
+    const l = Math.sqrt(x * x + y * y + z * z);
+    if (l > 1e-30) { normals[g * 3] = x / l; normals[g * 3 + 1] = y / l; normals[g * 3 + 2] = z / l; }
+    else normals[g * 3 + 2] = 1; // group of degenerate triangles only: any unit vector beats NaN
+  }
+  return { mesh: { positions, indices: outIdx }, normals, src };
+}
+
+/**
+ * Indexed wireframe: two indices per unique undirected edge of the given triangle index buffer.
+ * Replaces THREE.WireframeGeometry, which dedups edges through a Set of STRING hashes (two per
+ * edge) — it hits V8's 2^24 Set cap around 8M unique edges ("RangeError: Set maximum size
+ * exceeded" on a ~17M-triangle assembly) and duplicates every position. The returned buffer is
+ * meant for a LineSegments geometry that SHARES the mesh's position attribute.
+ */
+export function wireframeIndex(indices: ArrayLike<number>): Uint32Array {
+  const et = new EdgeTable(indices.length / 2);
+  const out = new Uint32Array(indices.length * 2); // upper bound: 3 unique edges per triangle
+  let n = 0;
+  for (let t = 0; t + 2 < indices.length; t += 3) {
+    for (let e = 0; e < 3; e++) {
+      const a = indices[t + e]!, b = indices[t + ((e + 1) % 3)]!;
+      const s = et.bump(a, b);
+      if (et.cnt[s]! === 1) { out[n] = a; out[n + 1] = b; n += 2; }
+    }
+  }
+  return out.slice(0, n);
 }
 
 /** Triangle index buffer with every triangle of a hidden solid removed. */

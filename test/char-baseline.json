@@ -1,22 +1,22 @@
 {
   "chamferFillet": {
-    "hash": "709d5fbdf2f91fff6ad4a3cca4e4aacd3f22b8aa673d227e70bc6536db297069",
-    "verts": 28390,
-    "tris": 56776,
+    "hash": "f6944256eafa92d618d056e8fe916a61837a01379a41fa3d75974b7969f522ec",
+    "verts": 28761,
+    "tris": 57518,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 103225.687,
+    "volume": 103225.844,
     "dispatch": {
       "grid": 27
     },
     "skipped": {},
     "remesh": {
-      "hash": "cc84f8f5e0ab434787cc49ca169b11285923e20eab581b030d0cad1630601cd2",
-      "verts": 21950,
-      "tris": 43896,
+      "hash": "5dbce7fb13ae2506129d4eb82c631a6508cebb9e31cf9468b5180f635f293906",
+      "verts": 22191,
+      "tris": 44378,
       "openEdges": 0,
       "nonManifoldEdges": 0,
-      "volume": 103224.126
+      "volume": 103224.262
     }
   },
   "cone": {
@@ -100,6 +100,21 @@
       "volume": 4758.888
     }
   },
+  "ETA 6497-1 Movement Corrected": {
+    "hash": "3562c62a122b0251aa8c08408bcc7818819a8f86a22d7942e425065ce8c3585c",
+    "verts": 583815,
+    "tris": 1167806,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 2735.668,
+    "dispatch": {
+      "coneSlice": 21,
+      "grid": 4670,
+      "thinFace": 6,
+      "thinRing": 3
+    },
+    "skipped": {}
+  },
   "everything": {
     "hash": "c4a2c6165d948008700aa445b106c9d57cc9d254169c4cf9992be80f83cc517c",
     "verts": 68356,
@@ -128,44 +143,44 @@
     "skipped": {}
   },
   "Insta360GO3_case": {
-    "hash": "2b51a10ee371aec78419e44513af84b64eecb9c8914b2386854aad5513fe267a",
-    "verts": 28214,
-    "tris": 56448,
+    "hash": "00e5a6833e77c83b5726166da104097dad04f30bca19b7f7c426e3116959402c",
+    "verts": 30999,
+    "tris": 62018,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 5324.159,
+    "volume": 5324.119,
     "dispatch": {
       "grid": 151
     },
     "skipped": {}
   },
   "LampenHalter": {
-    "hash": "2a12c79576d554af9a38bbf637c741df30af458860fcdf7ac8eb96b67343c7b7",
-    "verts": 9794,
-    "tris": 19596,
+    "hash": "c2064c34b6c047eee2a061142ac0ace5fad8866a52800208d727a53f391f0728",
+    "verts": 9983,
+    "tris": 19974,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 5614.633,
+    "volume": 5614.627,
     "dispatch": {
       "grid": 95
     },
     "skipped": {},
     "remesh": {
-      "hash": "5f5d640846e9ad9a126984384d68c250dc9d2b1857574f7a50087fcc5e3e59b4",
-      "verts": 9654,
-      "tris": 19316,
+      "hash": "0b2790722ddc410b38741ba3a45c5a38fadf6767ebabea33c915fd500d5e5a0a",
+      "verts": 9676,
+      "tris": 19360,
       "openEdges": 0,
       "nonManifoldEdges": 0,
-      "volume": 5615.486
+      "volume": 5615.465
     }
   },
   "MicHolder_Inserts": {
-    "hash": "b534b28a29d323cc78b20cecbd5069cf9c8ccb80ef16e59233e36ef34504125a",
-    "verts": 76261,
-    "tris": 152522,
+    "hash": "506e134552c9eed1dd62e4a6416f02e3255c9e9bc8e122f7889caf0253948a64",
+    "verts": 76990,
+    "tris": 153980,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 82619.741,
+    "volume": 82619.695,
     "dispatch": {
       "grid": 112
     },
@@ -209,12 +224,12 @@
     "skipped": {}
   },
   "newtestmodels/cat-napkin-holder": {
-    "hash": "147654f3c2035bd4dd787bb07d7e67b423ff263018e07b43c508bfec22865ca5",
-    "verts": 165750,
-    "tris": 331496,
+    "hash": "f3766f560117ebd9165958b751cb0e11ca4ca7b60d15146e5ef9d1c182e512a7",
+    "verts": 204304,
+    "tris": 408604,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 212821.195,
+    "volume": 212827.542,
     "dispatch": {
       "grid": 238
     },
@@ -245,12 +260,12 @@
     "skipped": {}
   },
   "newtestmodels/core-one-replicator-base": {
-    "hash": "2c1d8bbc74a42f807c038d4090ac1eb87cb483c053068d62f15e81daeda472e1",
-    "verts": 90801,
-    "tris": 181838,
+    "hash": "b1fcebb844829486139d3b13aea0ff8b635129b0c331b0e0655b900118d6cedb",
+    "verts": 91780,
+    "tris": 183796,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 31398.36,
+    "volume": 31398.2,
     "dispatch": {
       "grid": 377
     },
@@ -269,12 +284,12 @@
     "skipped": {}
   },
   "newtestmodels/core-one-replicator-letters": {
-    "hash": "10c9c6d8cfe44186f908abf1413b16c57002942402c223e4f9ca18514d6b0b33",
-    "verts": 9773,
-    "tris": 19562,
+    "hash": "0999deb553b0c5510da0cb39a6f2c76c1f042d872b14ee5a945e84f5df3e5558",
+    "verts": 14829,
+    "tris": 29674,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 361.298,
+    "volume": 361.366,
     "dispatch": {
       "grid": 344
     },
@@ -305,24 +320,24 @@
     "skipped": {}
   },
   "newtestmodels/fidgetclicker_v30": {
-    "hash": "985d83ac3d842e423c96ba0f0e1d6d5bcac04ace26d4fdd22332046cbdfe953e",
-    "verts": 46258,
-    "tris": 92520,
+    "hash": "581d46d66c14f8628b10f99bc77257f8581cfe53af753852abe72835107b14c8",
+    "verts": 46450,
+    "tris": 92904,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 10279.004,
+    "volume": 10278.995,
     "dispatch": {
       "grid": 1375
     },
     "skipped": {}
   },
   "newtestmodels/furniture-leg": {
-    "hash": "a4b13fc2049779da2d6a140c6d37f6e3d19bd4a777ebafddd65a47c60f575a3a",
-    "verts": 36888,
-    "tris": 73796,
+    "hash": "6a2c4c9271dabfbc56629eb0f23da004d25a3cac2cd3e43f4cc089e8cedc1482",
+    "verts": 82879,
+    "tris": 165778,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 21039.813,
+    "volume": 21038.97,
     "dispatch": {
       "grid": 257
     },
@@ -355,24 +370,24 @@
     "skipped": {}
   },
   "newtestmodels/handle_v4_two-tooth": {
-    "hash": "08eb285ec4d495ac4123409bd5f950d75ba2e0a3492df1920e5151439f501321",
-    "verts": 43946,
-    "tris": 87888,
+    "hash": "8145c3be24f72e3655a9b358072833d81870cde990a2eb5f77a25037e2c5d1b3",
+    "verts": 66629,
+    "tris": 133254,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 35048.689,
+    "volume": 35050.653,
     "dispatch": {
       "grid": 206
     },
     "skipped": {}
   },
   "newtestmodels/holder-w50-h150-c20-m6": {
-    "hash": "ba21f8011d555005b9d953b130db194b52f06d71e7dfc8a4daaf671c808d7f89",
-    "verts": 74666,
-    "tris": 149344,
+    "hash": "4290f870029f42a65825e931495a6c8df0c7435c27beb7132bedbeb3cc5cd349",
+    "verts": 75404,
+    "tris": 150820,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 97038.482,
+    "volume": 97038.401,
     "dispatch": {
       "band": 7,
       "grid": 124
@@ -380,12 +395,12 @@
     "skipped": {}
   },
   "newtestmodels/holder-w50-h150-c20-m6_2": {
-    "hash": "1808c64f4894e2a7e6c6cfaff20c12ba41a2ab6726b05852fa2265deb51b0076",
-    "verts": 74589,
-    "tris": 149190,
+    "hash": "429a242b8090a697de5e01f1aab9fcc954e326adabab0201c890c7d6c729b2f4",
+    "verts": 76224,
+    "tris": 152460,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 97037.197,
+    "volume": 97037.161,
     "dispatch": {
       "grid": 131
     },
@@ -416,9 +431,9 @@
     "skipped": {}
   },
   "newtestmodels/jb-weld-replacement-cap": {
-    "hash": "d8cfe3b676ef24564d2201c00b61d960d86b164dda6738f01acf5b72b25a3709",
-    "verts": 2702,
-    "tris": 5400,
+    "hash": "330492d05675c47bbcd2f20c13f130efbaf4cf84d18563302f44a3907e2dfaad",
+    "verts": 2680,
+    "tris": 5356,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 695.443,
@@ -427,13 +442,26 @@
     },
     "skipped": {}
   },
-  "newtestmodels/Model 1 Ekstra lid": {
-    "hash": "fa5c17e5f501bdc4aab0b48fc0023a72e0385a054f298b0975c73d1854dc754d",
-    "verts": 52177,
-    "tris": 104350,
+  "newtestmodels/Midea Porta Split Wasserabfluss": {
+    "hash": "7d12456e068d9fb29c61040b174eed07dc1cf5377b2ca3de8edadb607388b8b9",
+    "verts": 15147,
+    "tris": 30294,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17761.999,
+    "volume": 4352.806,
+    "dispatch": {
+      "grid": 64,
+      "region": 2
+    },
+    "skipped": {}
+  },
+  "newtestmodels/Model 1 Ekstra lid": {
+    "hash": "cd3ac3c886680bb446a2bbcaa3de40f17a81ac62072dd1f300efe1786b1fb0e2",
+    "verts": 55499,
+    "tris": 110994,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 17762.1,
     "dispatch": {
       "grid": 402
     },
@@ -457,12 +485,12 @@
     "skipped": {}
   },
   "newtestmodels/OpenVessel": {
-    "hash": "b3dfe8127835d5d8075ae1b9226ceafaa65b19cc68ef4c6f51ed268effca17fa",
-    "verts": 95937,
-    "tris": 191890,
+    "hash": "f223d5464344ee4a9c58d63ca8b87f7db10389f4753010adbe5325157db02356",
+    "verts": 113874,
+    "tris": 227764,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17307.082,
+    "volume": 17306.861,
     "dispatch": {
       "grid": 312,
       "sphereCap": 1,
@@ -496,12 +524,12 @@
     "skipped": {}
   },
   "newtestmodels/Pool_Nozzle": {
-    "hash": "30b39b41fcd5c5c7b623ffc041d86c4c4c047f09a1e1216427bc9ca7a95ca8f2",
-    "verts": 74504,
-    "tris": 149032,
+    "hash": "efe2653d4dca7d5e02c14d0e9dce61c6c570f1287e10ead2fc0640407d2d1735",
+    "verts": 79510,
+    "tris": 159044,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 43546.587,
+    "volume": 43546.668,
     "dispatch": {
       "grid": 102
     },
@@ -520,12 +548,12 @@
     "skipped": {}
   },
   "newtestmodels/rivet-tool": {
-    "hash": "cf7f9573d9341fa20fc802d9fe3354b5752472059e161c2bdd8327a294816591",
-    "verts": 8004,
-    "tris": 16004,
+    "hash": "d3698862d546914a2ed8ae303cbe0154e8d8cd17c7a14bce0ca178e828859fdb",
+    "verts": 8684,
+    "tris": 17364,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 1776.029,
+    "volume": 1775.971,
     "dispatch": {
       "grid": 68
     },
@@ -556,12 +584,12 @@
     "skipped": {}
   },
   "newtestmodels/Spacemouse TPU sock": {
-    "hash": "d047b9c55d001b08c640dac6230d639004940eb90b0c3bd7654ec3e6330d6eeb",
-    "verts": 88072,
-    "tris": 176144,
+    "hash": "1922f91a93877fd6716f3fa5c657748e99bd9e4c1a5c9823b8a7f1275c9da05b",
+    "verts": 95995,
+    "tris": 191990,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 3142.069,
+    "volume": 3142.188,
     "dispatch": {
       "grid": 34
     },
@@ -581,12 +609,12 @@
     "skipped": {}
   },
   "newtestmodels/StingStopp_4000_Base Version 1.1": {
-    "hash": "86b636fc32a52011e41e6f91bdf7ce282ce5d6da75763c7e91d5a8b7161d6d75",
-    "verts": 195938,
-    "tris": 391872,
+    "hash": "8f3cea5acfc8861cb9f216641235081089c6183a48cccf38514b6463913550ca",
+    "verts": 196878,
+    "tris": 393752,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 107416.605,
+    "volume": 107416.606,
     "dispatch": {
       "band": 5,
       "grid": 729
@@ -594,12 +622,12 @@
     "skipped": {}
   },
   "newtestmodels/StingStopp_4000_Top Version 1.0": {
-    "hash": "19005cd4f69493e266102ac6adeec782d0a2ca33203e000c33b2581d8f82d17f",
-    "verts": 95079,
-    "tris": 190158,
+    "hash": "da40635b9e3c7b50da6e4a24ba7704742be4dd249af816a57cbc764ea767b013",
+    "verts": 95902,
+    "tris": 191804,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 45471.921,
+    "volume": 45471.944,
     "dispatch": {
       "band": 6,
       "grid": 250
@@ -607,12 +635,12 @@
     "skipped": {}
   },
   "newtestmodels/turbinewhistle_a8-i8_t4": {
-    "hash": "6a2ca809022eb6d941692c18d25b3b76c4d01a2c8e2cb9f3e25fc43e6cbbb0ca",
-    "verts": 53375,
-    "tris": 106826,
+    "hash": "e4c7984626f1bdd699fcd1e438715099b79f09db57bcba8c3fe5029437e2de20",
+    "verts": 53548,
+    "tris": 107172,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 9931.386,
+    "volume": 9931.387,
     "dispatch": {
       "grid": 243,
       "thinFace": 1
@@ -620,24 +648,24 @@
     "skipped": {}
   },
   "newtestmodels/Voron_Design_Cube_v8": {
-    "hash": "c6fc8845faac9abc3c0b2c77e9fd17c76e62e79f1ba0f05f6782f34fbca6f3c0",
-    "verts": 14982,
-    "tris": 29976,
+    "hash": "d3c42fdd136420be4670d5391bbc7efc3800cc529b9c81a88d8fa4996562c9a2",
+    "verts": 15047,
+    "tris": 30106,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 20502.891,
+    "volume": 20502.864,
     "dispatch": {
       "grid": 127
     },
     "skipped": {}
   },
   "newtestmodels/wall-hook": {
-    "hash": "61c91593d8c6b822eb3d8845544af039e1cce67427ae21823243ff061d0769a7",
-    "verts": 22058,
-    "tris": 44120,
+    "hash": "20c2c4747a8a34ee19720a34d4a7f2bdd98f145cb485c10d8d44e8c0f5923bd3",
+    "verts": 22727,
+    "tris": 45458,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 18956.085,
+    "volume": 18956.148,
     "dispatch": {
       "grid": 79
     },
@@ -655,12 +683,12 @@
     "error": "Map maximum size exceeded"
   },
   "newtestmodels/wio-tracker-l1-eink-case-v1_3-back": {
-    "hash": "af1e168915e14eaf995e4ec47a42043cac80c1b746f725f192b3d0aba31d6aa5",
-    "verts": 28689,
-    "tris": 57374,
+    "hash": "614e492118be2c03c7f877bc438aec8806a8198eb2a8f24ed2ab473cbd3a045c",
+    "verts": 28787,
+    "tris": 57570,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 10596.033,
+    "volume": 10596.049,
     "dispatch": {
       "band": 1,
       "grid": 121
@@ -668,12 +696,12 @@
     "skipped": {}
   },
   "newtestmodels/wio-tracker-l1-eink-case-v1_3-front": {
-    "hash": "a3443c8ae7b65fa0ee18943374b32862a222924ba5534c1fe0bc3452e6823e61",
-    "verts": 42965,
-    "tris": 85974,
+    "hash": "ee14fd36e6732eab6c4f9a0c6768412c70ca5434fd256f9035cd5c504d81e910",
+    "verts": 43170,
+    "tris": 86384,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17182.731,
+    "volume": 17182.741,
     "dispatch": {
       "band": 12,
       "grid": 298,
@@ -702,21 +730,21 @@
     }
   },
   "sourcemodels/furniture-leg": {
-    "hash": "708c7e06a7a0a3cc35fd0c254b095f7d36d97cdb2e4eef72e686d6b677736fa3",
-    "verts": 37348,
-    "tris": 74716,
+    "hash": "8a7d5fb882fbd0d20d3abc612b18fce4a6d7281ed79fa22c7b66a2590d50d0ad",
+    "verts": 53683,
+    "tris": 107386,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 21038.954,
+    "volume": 21039.042,
     "dispatch": {
       "grid": 267
     },
     "skipped": {}
   },
   "sourcemodels/GARMIN_MOUNT_v15 (1)": {
-    "hash": "c69774ad1c41dada235594ee52ffdb92e8e7e3457967f55acd5dc46ca6a60fcf",
-    "verts": 2788,
-    "tris": 5576,
+    "hash": "2ea692b7991f3a007708e08c80eeffd16705bb4962eaa6c22658e6c912718ee6",
+    "verts": 2772,
+    "tris": 5544,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 807.592,
@@ -739,36 +767,36 @@
     "skipped": {}
   },
   "sourcemodels/handle_v4_two-tooth": {
-    "hash": "ad7dbc43b3fe86a6a81cf84ff4b5a16bee4066da07b59c59899204bba39b70a2",
-    "verts": 44174,
-    "tris": 88344,
+    "hash": "8a55f8fa7a6ee04822766a66cd5e2f1587f7d51ec1f19c6556ea186d4d2301c5",
+    "verts": 60015,
+    "tris": 120026,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 34873.857,
+    "volume": 34874.662,
     "dispatch": {
       "grid": 206
     },
     "skipped": {}
   },
   "sourcemodels/Model 1 Ekstra lid": {
-    "hash": "17c5cfb01b260bd2b24ce5ad10cfc19a8c97dea50ffba911e7d2579ca70ec052",
-    "verts": 52187,
-    "tris": 104370,
+    "hash": "1134d236bef86f2713d7e9962baaa0c3cdc2a0f34753e58ae6170850e75873cc",
+    "verts": 54454,
+    "tris": 108904,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17762.028,
+    "volume": 17762.07,
     "dispatch": {
       "grid": 402
     },
     "skipped": {}
   },
   "sourcemodels/nist_ctc_01_asme1_ap242-e1": {
-    "hash": "1fc01804ae73c571554c72c527b8e279c697055cdfc515f9dc7d67e928443e55",
-    "verts": 3987611,
-    "tris": 7975258,
+    "hash": "5a3eb3cdc27e30b329603642211e866140a138e2d5d5f8653db7dfaefcc4e9ce",
+    "verts": 3987973,
+    "tris": 7975982,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 14644956.378,
+    "volume": 14644956.175,
     "dispatch": {
       "coneSlice": 4,
       "grid": 113
@@ -799,24 +827,24 @@
     "skipped": {}
   },
   "sourcemodels/nist_ctc_04_asme1_ap242-e1": {
-    "hash": "71f7f9831bdc4859b3c44fa34f4abce58d59569ebb46d3a8fcec97171c2e84f1",
-    "verts": 2595540,
-    "tris": 5191100,
+    "hash": "849e234649138ab9a183cc1a962c3b67c33a2b4d35918149ea62dfafd3bb7a2e",
+    "verts": 2609501,
+    "tris": 5219022,
     "openEdges": 110,
     "nonManifoldEdges": 0,
-    "volume": 17524432.676,
+    "volume": 17524431.34,
     "dispatch": {
       "grid": 484
     },
     "skipped": {}
   },
   "sourcemodels/nist_ctc_05_asme1_ap242-e1": {
-    "hash": "2af289c796e2c873fc7fdd13af2df8e50a88ce665ff8b72db68d3a4adc5169e9",
-    "verts": 1529133,
-    "tris": 3058302,
+    "hash": "86ede1e2662d0c69443c0e83f673d5409ff74efb97eb7d201e1d6116c1b9336e",
+    "verts": 1529828,
+    "tris": 3059692,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12695067.158,
+    "volume": 12695066.806,
     "dispatch": {
       "band": 36,
       "cone": 10,
@@ -887,12 +915,12 @@
     "skipped": {}
   },
   "sourcemodels/nist_ftc_10_asme1_ap242-e2": {
-    "hash": "8e1af6268e0fb7321b7cf4964a9f1da812f7bd9fc16273855463a0f40404a8e0",
-    "verts": 172756,
-    "tris": 344492,
+    "hash": "69e5143643ace00ce339d90259bdb352b2da21c781ef133f9a8c3591b612d152",
+    "verts": 190066,
+    "tris": 379112,
     "openEdges": 1112,
     "nonManifoldEdges": 0,
-    "volume": 187499.751,
+    "volume": 187495.7,
     "dispatch": {
       "coneSlice": 16,
       "grid": 266
@@ -900,9 +928,9 @@
     "skipped": {}
   },
   "sourcemodels/nist_ftc_11_asme1_ap242-e2": {
-    "hash": "3e3f4740e1ce8554a4b86a25cb73665ac8f69c38eb1b28033404265134bf4f82",
-    "verts": 143928,
-    "tris": 287856,
+    "hash": "7afb68efb1c5358f508d890ea3213477f0cd102ef6c42d6dd9050d3f4377ef2f",
+    "verts": 143943,
+    "tris": 287886,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 5119.899,
@@ -981,12 +1009,12 @@
     "skipped": {}
   },
   "sourcemodels/OpenVessel": {
-    "hash": "fcb905b0356839e4a83f6b41ca36a136d4af4339743de0c651dccaab1edb8dce",
-    "verts": 95326,
-    "tris": 190668,
+    "hash": "cb2fd70606b61ea6cc157310210108bbdd5050a94c6efbdca6b4c03dd42ca286",
+    "verts": 108018,
+    "tris": 216052,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17306.804,
+    "volume": 17306.657,
     "dispatch": {
       "grid": 319,
       "sphereCap": 1,
@@ -995,24 +1023,24 @@
     "skipped": {}
   },
   "sourcemodels/Pool_Nozzle (1)": {
-    "hash": "e5cff0064b57af048530e56ba9213a66bb8009a8f66a4852a13f09a8a6b95aae",
-    "verts": 74020,
-    "tris": 148064,
+    "hash": "2dbf6ec8fba92d958960c80930d3dcbe6c94e0ac5dae14fc64425fcf4bc7e75b",
+    "verts": 76995,
+    "tris": 154014,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 43547.641,
+    "volume": 43547.665,
     "dispatch": {
       "grid": 125
     },
     "skipped": {}
   },
   "sourcemodels/turbinewhistle_a8-i8_t4": {
-    "hash": "1347a50ecb1087478d90e4eeae628562c47d0344ed9140ec12b231a3f3e95fbb",
-    "verts": 52643,
-    "tris": 105362,
+    "hash": "2d34add4f02c5bc7da5c3354038ee48d35b7176cdfddcd82e29ca6959b4b4dd4",
+    "verts": 52618,
+    "tris": 105312,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 9932.088,
+    "volume": 9932.087,
     "dispatch": {
       "grid": 281,
       "thinFace": 1
@@ -1052,24 +1080,24 @@
     "skipped": {}
   },
   "SquAIRPot": {
-    "hash": "676838e9b3dae3f6fbd9a642c22ff104f110fc0db235b074084823ab4a6de3c4",
-    "verts": 69655,
-    "tris": 139306,
+    "hash": "a1e67cbe9e9a9ddf85433951ec95ad40a24f1ab1a1adceb7c6586c7dc29208a2",
+    "verts": 75052,
+    "tris": 150100,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 118526.855,
+    "volume": 118526.83,
     "dispatch": {
       "grid": 188
     },
     "skipped": {}
   },
   "Tapered Collet Insert": {
-    "hash": "4278c821ece59d9fc608cd43818d0679999b26b36ab8ae2d942ff8e2b5d8e521",
-    "verts": 12406,
-    "tris": 24812,
+    "hash": "9891bdd30e34d7a811636c6909e257f1623cb98268d24637298eb7dedcec5c63",
+    "verts": 12821,
+    "tris": 25642,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 5629.777,
+    "volume": 5629.715,
     "dispatch": {
       "grid": 12,
       "unroll": 1
@@ -1077,12 +1105,12 @@
     "skipped": {}
   },
   "tool": {
-    "hash": "df9beb0f4ee09090e1fd9dd46834e2c3c4e1897430bd4ab1b902a7a2da0e54c8",
-    "verts": 29677,
-    "tris": 59354,
+    "hash": "a1eede28b883df375c43f916f3d45f6d95f478c8e733a67c6926f09fe952b7a8",
+    "verts": 30400,
+    "tris": 60800,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2437.992,
+    "volume": 2438.014,
     "dispatch": {
       "grid": 233
     },

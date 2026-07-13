@@ -3,6 +3,7 @@
 // the final edge-defect audit, so a consumer can tell a clean conversion from a suspect one (and
 // advise the user to export a mesh directly from CAD) without re-deriving mesh topology.
 import type { IndexedMesh } from "../io/stl.ts";
+import { EdgeTable } from "./edge-table.ts";
 
 /** "error" = geometry is missing or the mesh is defective — the import cannot be trusted.
  * "warning" = a heuristic repair produced a result that is PROBABLY right but was not derived
@@ -114,19 +115,18 @@ export interface EdgeDefects { openEdges: number; nonManifoldEdges: number; }
  * every edge belongs to exactly one solid and the exclusion cannot split a shared edge's count. */
 export function meshDefects(mesh: IndexedMesh, solidOfTri?: Uint32Array, openSolids?: number[]): EdgeDefects {
   const skip = openSolids && openSolids.length > 0 && solidOfTri ? new Set(openSolids) : null;
-  const inc = new Map<number, number>();
-  const K = 0x4000000; // vertex ids stay < 2^26, so min*K+max stays exact in a double
   const I = mesh.indices;
   const nt = I.length / 3;
+  // EdgeTable, not a Map: an assembly mesh can carry more unique edges than a Map's 2^24 cap.
+  const inc = new EdgeTable(nt * 1.6);
   for (let t = 0; t < nt; t++) {
     if (skip && skip.has(solidOfTri![t]!)) continue;
-    for (let e = 0; e < 3; e++) {
-      const a = I[t * 3 + e]!, b = I[t * 3 + (e + 1) % 3]!;
-      const k = a < b ? a * K + b : b * K + a;
-      inc.set(k, (inc.get(k) ?? 0) + 1);
-    }
+    for (let e = 0; e < 3; e++) inc.bump(I[t * 3 + e]!, I[t * 3 + (e + 1) % 3]!);
   }
   let openEdges = 0, nonManifoldEdges = 0;
-  for (const c of inc.values()) { if (c === 1) openEdges++; else if (c > 2) nonManifoldEdges++; }
+  for (let s = 0; s < inc.capacity; s++) {
+    const c = inc.cnt[s]!;
+    if (c === 1) openEdges++; else if (c > 2) nonManifoldEdges++;
+  }
   return { openEdges, nonManifoldEdges };
 }

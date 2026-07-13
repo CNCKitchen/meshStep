@@ -5,6 +5,7 @@ import { readSTL, writeBinarySTL, isBinarySTL, parseStepHeader, autoTessellation
 import { Viewer, BASE_COLOR, type CameraView } from "./viewer.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
+  autoSmooth,
   buildIndexedGeometry,
   buildSoupGeometry,
   boundaryEdges,
@@ -38,6 +39,7 @@ const overlayText = $("overlayText");
 const progressBar = $("progressBar");
 const progressFill = $("progressFill");
 
+const tSmooth = $<HTMLInputElement>("tSmooth");
 const tColors = $<HTMLInputElement>("tColors");
 const tColorsLabel = $("tColorsLabel");
 const tEdges = $<HTMLInputElement>("tEdges");
@@ -136,6 +138,12 @@ let openSolidsSet = new Set<number>();
 let solidOfTri: Uint32Array | null = null; // per-triangle body id (context-menu part info)
 let defectEdges: EdgeSet | null = null; // open-edge segments, sheet bodies excluded
 let defectSolids = new Set<number>(); // bodies with unexpected open edges — marked in the parts tree
+// Pre-smooth display state, kept so the crease-angle field can re-run the auto-smooth split
+// live (applySmoothing) without a full re-convert.
+let displayMeshBase: RawMesh | null = null; // post color-split, pre autoSmooth
+let faceColorsBase: Float32Array | null = null; // colors matching displayMeshBase's vertices
+let featEdges: EdgeSet | null = null; // current feature/crease overlay segments
+let measureData: ConvertResult["measure"] | null = null;
 
 let reference: ReferenceSurface | null = null;
 let dev: DeviationResult | null = null;
@@ -269,7 +277,16 @@ function onWorkerMessage(msg: WorkerOut): void {
     console.error(msg.message);
     return;
   }
-  applyResult(msg);
+  try {
+    applyResult(msg);
+  } catch (err) {
+    // Without this, a display-path failure (e.g. out of memory on a huge mesh) leaves the
+    // overlay stuck on "Finalizing…" forever with no message.
+    hideOverlay();
+    convertBtn.disabled = !stepText;
+    setStatus(String(err), true);
+    console.error(err);
+  }
 }
 
 function applyResult(res: ConvertResult): void {
@@ -324,7 +341,8 @@ function applyResult(res: ConvertResult): void {
   tColors.disabled = !faceColors;
   tColors.checked = hasFileColors && !!faceColors; // file colors show by default; random is opt-in
   sectionBtn.disabled = false; // there is a solid to cut now
-  geo = buildIndexedGeometry(displayMesh);
+  displayMeshBase = displayMesh;
+  faceColorsBase = faceColors;
 
   // Open-edge (defect) overlay: a sheet body's boundary is open BY DESIGN — drop those solids'
   // segments so the red highlight and the counters only report unexpected openings. The
@@ -339,32 +357,59 @@ function applyResult(res: ConvertResult): void {
   // threshold (dihedral between adjacent triangles), re-detectable live via the angle field.
   isMeshModel = res.kind !== "step";
   tFeatureLabel.textContent = isMeshModel ? "Feature edges (by angle)" : "Surface boundaries (CAD faces)";
-  creaseField.hidden = !isMeshModel;
+  updateCreaseField();
   const feat = isMeshModel
     ? creaseEdges(mesh, res.mesh.solidOfTri, num("creaseAngle", 30))
     : featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
   solidOfTri = res.mesh.solidOfTri;
   defectEdges = b;
+  featEdges = feat;
+  measureData = res.measure;
+  hiddenParts = new Set(); // applySmoothing re-applies this set; the old model's ids must not leak
   closeMenus(); // a stale context menu would act on the previous model's ids
 
-  viewer.setMesh(geo, b, feat, faceColors, res.mesh.solidOfTri);
-  viewer.setShowColors(tColors.checked); // the flag persists across loads; match the checkbox
-  // After setMesh (which clears the previous model's measurements). Distance measuring works on
-  // bare surface points even when the payload has no analytic edges (AP242 tessellated bodies).
-  viewer.setMeasureData(res.measure);
+  applySmoothing(num("creaseAngle", 30));
   measureBtn.disabled = false;
   viewer.fit();
   buildPartsPanel(res.structure);
 
   showGeometryInfo(res, openEdges);
 
-  dev = null;
-  recomputeDeviation();
-
   hideOverlay();
   convertBtn.disabled = !stepText; // stays disabled for a loaded STL (nothing to convert)
   exportBtn.disabled = false;
   setStatus(`${res.kind === "step" ? "Done" : "Loaded"} · ${triCount(mesh).toLocaleString()} tris`);
+}
+
+/**
+ * Auto-smooth pass: split display vertices at crease edges and bake crease-aware normals, so
+ * the smooth/flat toggle is a pure material flag with zero per-frame cost. Under flat shading
+ * the extra vertices are invisible (same positions, same triangle order). Runs on the
+ * post-color-split mesh, remapping the color attribute through `src`; the raw `mesh` stays
+ * untouched for export and edge extraction. Called at load and again on crease-angle edits —
+ * setMesh replaces the buffers, so it restores everything derived from them (colors, measure
+ * data, hidden parts, deviation coloring). Placed measurement markers are cleared: they
+ * reference the old buffers.
+ */
+function applySmoothing(angleDeg: number): void {
+  if (!displayMeshBase || !defectEdges || !featEdges || !solidOfTri) return;
+  const sm = autoSmooth(displayMeshBase, Math.min(179, Math.max(1, angleDeg)));
+  let colors: Float32Array | null = null;
+  if (faceColorsBase) {
+    colors = new Float32Array(sm.src.length * 3);
+    for (let i = 0; i < sm.src.length; i++) {
+      const s = sm.src[i]! * 3;
+      colors[i * 3] = faceColorsBase[s]!; colors[i * 3 + 1] = faceColorsBase[s + 1]!; colors[i * 3 + 2] = faceColorsBase[s + 2]!;
+    }
+  }
+  geo = buildIndexedGeometry(sm.mesh, sm.normals);
+  viewer.setMesh(geo, defectEdges, featEdges, colors, solidOfTri);
+  viewer.setShowColors(tColors.checked); // the flag persists across loads; match the checkbox
+  // After setMesh (which clears measurements). Distance measuring works on bare surface points
+  // even when the payload has no analytic edges (AP242 tessellated bodies).
+  viewer.setMeasureData(measureData);
+  viewer.setHiddenSolids(hiddenParts);
+  recomputeDeviation(); // deviation colors are per-vertex of the freshly split geometry
 }
 
 // ---- parts tree ----
@@ -802,17 +847,30 @@ function updateLegend(clamp: number): void {
 }
 
 // ---- toggles ----
-// Crease-angle re-detection (STL/3MF only): O(triangles) per keystroke, so debounce lightly.
+// The crease-angle field lives under the Smooth-shading toggle: for STEP it only matters while
+// smoothing is on, so it follows that checkbox; for STL/3MF it also drives the feature-edge
+// overlay and stays visible whenever a model is loaded.
+function updateCreaseField(): void {
+  creaseField.hidden = !mesh || (!isMeshModel && !tSmooth.checked);
+}
+
+// Crease-angle re-detection: re-runs the auto-smooth split (every model kind) and, for STL/3MF,
+// re-extracts the feature-edge overlay too. O(triangles) per change, so debounce lightly.
 let creaseTimer: ReturnType<typeof setTimeout> | undefined;
 creaseAngle.addEventListener("input", () => {
   clearTimeout(creaseTimer);
   creaseTimer = setTimeout(() => {
-    if (!isMeshModel || !mesh || !solidOfTri) return;
-    const deg = num("creaseAngle", 30);
-    viewer.setFeatureEdgeSet(creaseEdges(mesh, solidOfTri, Math.min(179, Math.max(1, deg))));
-  }, 150);
+    if (!mesh || !solidOfTri) return;
+    const deg = Math.min(179, Math.max(1, num("creaseAngle", 30)));
+    if (isMeshModel) featEdges = creaseEdges(mesh, solidOfTri, deg); // applySmoothing pushes it via setMesh
+    applySmoothing(deg);
+  }, 250);
 });
 
+tSmooth.addEventListener("change", () => {
+  viewer.setSmoothShading(tSmooth.checked);
+  updateCreaseField();
+});
 tColors.addEventListener("change", () => viewer.setShowColors(tColors.checked));
 tEdges.addEventListener("change", () => viewer.setOpenEdges(tEdges.checked));
 tFeature.addEventListener("change", () => viewer.setFeatureEdges(tFeature.checked));

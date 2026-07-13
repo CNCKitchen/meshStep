@@ -11,6 +11,7 @@
 // and only flips a whole body outward when that body is closed (an open shell has no meaningful
 // signed volume).
 import type { IndexedMesh } from "../io/stl.ts";
+import { EdgeTable } from "./edge-table.ts";
 
 const KEY = 0x4000000; // supports up to ~67M vertices
 
@@ -21,12 +22,22 @@ export function orientConsistent(mesh: IndexedMesh, solidOfTri?: ArrayLike<numbe
   const ekey = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
 
   // Undirected edge -> incident triangles (topology is fixed; only windings change as we flip).
-  const edge = new Map<number, number[]>();
+  // EdgeTable (no 2^24 Map cap) holds the first two incident triangles inline; the rare 3rd+
+  // triangle of a non-manifold edge spills to a small side map keyed by the packed pair.
+  const edge = new EdgeTable(nt * 1.6, 2);
+  const extra = new Map<number, number[]>();
   for (let t = 0; t < nt; t++) {
     for (let e = 0; e < 3; e++) {
-      const k = ekey(idx[t * 3 + e]!, idx[t * 3 + ((e + 1) % 3)]!);
-      const arr = edge.get(k);
-      if (arr) arr.push(t); else edge.set(k, [t]);
+      const a = idx[t * 3 + e]!, b = idx[t * 3 + ((e + 1) % 3)]!;
+      const s = edge.bump(a, b);
+      const c = edge.cnt[s]!;
+      if (c === 1) edge.v0[s] = t;
+      else if (c === 2) edge.v1[s] = t;
+      else {
+        const k = ekey(a, b);
+        const arr = extra.get(k);
+        if (arr) arr.push(t); else extra.set(k, [t]);
+      }
     }
   }
   const flip = (t: number): void => { const i = t * 3 + 1, j = t * 3 + 2; const tmp = idx[i]!; idx[i] = idx[j]!; idx[j] = tmp; };
@@ -43,9 +54,9 @@ export function orientConsistent(mesh: IndexedMesh, solidOfTri?: ArrayLike<numbe
       let agree = 0, disagree = 0;
       for (let e = 0; e < 3; e++) {
         const a = idx[t * 3 + e]!, b = idx[t * 3 + ((e + 1) % 3)]!;
-        const inc = edge.get(ekey(a, b))!;
-        if (inc.length !== 2) continue; // open or non-manifold edge — no orientation signal
-        const nb = inc[0] === t ? inc[1]! : inc[0]!;
+        const s = edge.find(a, b);
+        if (edge.cnt[s]! !== 2) continue; // open or non-manifold edge — no orientation signal
+        const nb = edge.v0[s] === t ? edge.v1[s]! : edge.v0[s]!;
         if (hasDir(nb, b, a)) agree++; else disagree++;
       }
       if (disagree > agree) { flip(t); flips++; }
@@ -86,17 +97,21 @@ export function orientConsistent(mesh: IndexedMesh, solidOfTri?: ArrayLike<numbe
       comp.push(t);
       for (let e = 0; e < 3; e++) {
         const a = idx[t * 3 + e]!, b = idx[t * 3 + ((e + 1) % 3)]!;
-        const inc = edge.get(ekey(a, b))!;
+        const s = edge.find(a, b);
+        const c = edge.cnt[s]!;
         // A boundary edge (count 1) means an open shell — no meaningful signed volume. An EVEN
         // count > 2 is a self-touching solid (two coincident B-rep edges welded, Stealthburner's
         // tangent-contact line): still a waterproof volume, keep it flippable and — crucially —
         // available as a nesting ENCLOSURE for its cavity shells.
-        if (inc.length === 1) closed = false;
-        for (const nb of inc) {
-          if (seen[nb]) continue;
+        if (c === 1) closed = false;
+        const visit = (nb: number): void => {
+          if (seen[nb]) return;
           seen[nb] = 1;
           stack.push(nb);
-        }
+        };
+        visit(edge.v0[s]!);
+        if (c >= 2) visit(edge.v1[s]!);
+        if (c > 2) for (const nb of extra.get(ekey(a, b))!) visit(nb);
       }
     }
     if (!closed) continue;

@@ -124,12 +124,14 @@
             <button type="button" class="seg-btn" data-style="wireframe" title="Show the triangle mesh">Wireframe</button>
             <button type="button" class="seg-btn" data-style="edges" title="Hide surfaces, show only the CAD edges">Edges</button>
           </div>
-          <label class="toggle"><input type="checkbox" id="tColors" checked disabled /> <span id="tColorsLabel">Model colors (from STEP)</span></label>
-          <label class="toggle"><input type="checkbox" id="tFeature" checked /> <span id="tFeatureLabel">Surface boundaries (CAD faces)</span></label>
-          <div class="field crease-field" id="creaseField" hidden>
-            <label for="creaseAngle">Edge angle threshold <span class="unit">°</span></label>
+          <label class="toggle"><input type="checkbox" id="tSmooth" /> Smooth shading</label>
+          <div class="field crease-field" id="creaseField" hidden
+               title="Edges whose faces meet at more than this angle stay sharp under smooth shading; for STL/3MF it also sets which edges count as feature edges.">
+            <label for="creaseAngle">Crease angle threshold <span class="unit">°</span></label>
             <input type="number" id="creaseAngle" value="30" step="5" min="1" max="179" />
           </div>
+          <label class="toggle"><input type="checkbox" id="tColors" checked disabled /> <span id="tColorsLabel">Model colors (from STEP)</span></label>
+          <label class="toggle"><input type="checkbox" id="tFeature" checked /> <span id="tFeatureLabel">Surface boundaries (CAD faces)</span></label>
           <label class="toggle"><input type="checkbox" id="tEdges" /> Highlight open edges</label>
         </section>
 

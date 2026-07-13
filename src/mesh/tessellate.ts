@@ -1929,6 +1929,52 @@ function reorientSphere(s: Sphere, loops: BLoop[], sampled: Map<number, Vec3[]>)
 }
 
 /**
+ * Strip zero-width POLE DARTS from a sphere face's loops. A face that contains a parametrisation
+ * pole in its INTERIOR (an umbrella-valve dome: a full cap minus a slit lune that stops short of
+ * the apex) is cut open by the kernel with a DART — the same meridian edge traversed out and back
+ * (rim -> pole -> rim, adjacent in the loop with opposite senses) so the pole is reachable from
+ * the boundary. The chained projection lifts both traversals at the SAME u (the pole pins no
+ * longitude), the spike encloses no area, sanitize collapses it, and the CDT meshes the loop's
+ * residual signed area — exactly the cut-out lune, the COMPLEMENT of the face (Midea drain valve:
+ * the dome's concave seat came out as a convex bump). The dart is pure topology — zero width, and
+ * both uses live in THIS loop, so no neighbour shares its samples — so removing it changes no
+ * shared boundary. The caller then hands the face to the periodic-REGION mesher, which rebuilds
+ * it as a band from the once-winding rim to a synthetic pole row (welded into a fan). Returns
+ * null when no pole dart is found.
+ */
+function stripSpherePoleDarts(s: Sphere, loops: BLoop[], sampled: Map<number, Vec3[]>): BLoop[] | null {
+  const tol = Math.max(1e-9, 1e-6 * s.r);
+  const isPole = (p: Vec3): boolean => {
+    for (const sgn of [1, -1]) {
+      if (Math.hypot(
+        p[0] - (s.f.o[0] + sgn * s.r * s.f.z[0]),
+        p[1] - (s.f.o[1] + sgn * s.r * s.f.z[1]),
+        p[2] - (s.f.o[2] + sgn * s.r * s.f.z[2]),
+      ) < tol) return true;
+    }
+    return false;
+  };
+  let found = false;
+  const out: BLoop[] = loops.map((lp) => {
+    let es = lp.edges;
+    for (let i = 0; es.length > 2 && i < es.length; i++) {
+      const a = es[i]!, b = es[(i + 1) % es.length]!;
+      if (a.edgeId !== b.edgeId || a.orient === b.orient) continue;
+      const base = sampled.get(a.edgeId);
+      if (!base || base.length === 0) continue;
+      const turn = a.orient ? base[base.length - 1]! : base[0]!;
+      if (!isPole(turn)) continue;
+      const j = (i + 1) % es.length;
+      es = es.filter((_, k) => k !== i && k !== j);
+      found = true;
+      i = -1; // rescan: a loop can carry one dart per slit
+    }
+    return es === lp.edges ? lp : { outer: lp.outer, edges: es };
+  });
+  return found ? out : null;
+}
+
+/**
  * Full-revolution band (a cylinder/cone hole wall, etc.) whose rims are separate FULL-PERIOD circle
  * loops with no seam edges — how some kernels (Onshape/ST-DEVELOPER) represent a drilled hole. Each
  * rim projects to an open horizontal line in (u,v) enclosing no area, so the param grid meshes
@@ -3907,6 +3953,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds);
           ok = mark(face.faceId, "sphereFull", true);
         } else if (outer) {
+          // A POLE DART (the same meridian edge out-and-back to a pole) proves the pole is
+          // INTERIOR to the face: strip it and mesh the once-winding rim with the REGION mesher
+          // FIRST — the grid would otherwise CDT the dart-stripped loop's residual signed area,
+          // which is the complement lune, not the face (Midea umbrella-valve dome).
+          const stripPoleDarts = stripSpherePoleDarts(surface, face.loops, sampled);
+          const stripped = stripPoleDarts !== null;
+          const loops = stripPoleDarts ?? face.loops;
+          const louter = stripped ? (loops.find((l) => l.outer) ?? loops[0]!) : outer;
           // A cap closing to a pole (sole full-longitude parallel rim) fans to the pole; any other
           // spherical patch returns false from the cap mesher and uses the param grid — with the
           // sphere REPARAMETRISED so pole and seam sit away from the patch (a corner blend often
@@ -3915,13 +3969,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           // (a screw head's dome pierced by its hex socket, Ontos) it happily fans over the hole —
           // or fans from the hole's rim and leaves the real shared rim fully open. A multi-loop
           // sphere zone is a revolution band like any other: band -> unroll -> param grid.
-          const single = face.loops.length === 1;
-          ok = (single && mark(face.faceId, "sphereCap", tessellateSphereCap(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-            || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (!single && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, face.loops, sampled), face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || mark(face.faceId, "region", tessellatePeriodicRegion(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, outer, sampled, face.faceId, verts, faceIds, sign, chordTol)));
+          const single = loops.length === 1;
+          ok = (single && mark(face.faceId, "sphereCap", tessellateSphereCap(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+            || (stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (!single && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)));
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
         && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))

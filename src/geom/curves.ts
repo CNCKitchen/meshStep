@@ -345,6 +345,43 @@ function arcSegments(radius: number, sweepAbs: number, chordTol: number, normalD
 }
 
 /**
+ * Douglas–Peucker polyline simplification that also honours a maximum segment length: a span whose
+ * points all sit within ε of its chord still gets split at its farthest point while the chord is
+ * longer than maxSeg, so downstream consumers keep their ~targetEdge boundary spacing. Endpoints
+ * are always kept.
+ */
+function dpSimplify(pts: Vec3[], eps: number, maxSeg: number): Vec3[] {
+  if (pts.length <= 2) return pts;
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack: [number, number][] = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop()!;
+    if (b - a < 2) continue;
+    const pa = pts[a]!, pb = pts[b]!;
+    const ex = pb[0] - pa[0], ey = pb[1] - pa[1], ez = pb[2] - pa[2];
+    const l2 = ex * ex + ey * ey + ez * ez;
+    let imax = -1, dmax = -1;
+    for (let i = a + 1; i < b; i++) {
+      const p = pts[i]!;
+      let w = l2 > 0 ? ((p[0] - pa[0]) * ex + (p[1] - pa[1]) * ey + (p[2] - pa[2]) * ez) / l2 : 0;
+      w = w < 0 ? 0 : w > 1 ? 1 : w;
+      const dx = p[0] - pa[0] - w * ex, dy = p[1] - pa[1] - w * ey, dz = p[2] - pa[2] - w * ez;
+      const d = dx * dx + dy * dy + dz * dz;
+      if (d > dmax) { dmax = d; imax = i; }
+    }
+    if (imax < 0) continue;
+    if (Math.sqrt(dmax) > eps || Math.sqrt(l2) > maxSeg) {
+      keep[imax] = 1;
+      stack.push([a, imax], [imax, b]);
+    }
+  }
+  const out: Vec3[] = [];
+  for (let i = 0; i < pts.length; i++) if (keep[i]) out.push(pts[i]!);
+  return out;
+}
+
+/**
  * Cut an OPEN sampled polyline down to the sub-arc between an edge's vertices. Some exporters share
  * ONE curve between several EDGE_CURVEs (Shapr3D: a rim's 0.3mm closing sliver and its 5mm dip are
  * arcs of the same open B-spline), so a whole-domain polyline with its endpoints snapped to v0/v1
@@ -486,8 +523,47 @@ export function sampleEdgePolyline(
     let clen = 0;
     for (let i = 1; i < cps.length; i++) clen += dist(cps[i - 1]!, cps[i]!);
     const n = Math.max(2, Math.ceil(clen / Math.max(maxSegLen, 1e-9)));
-    const pts: Vec3[] = [];
-    for (let i = 0; i <= n; i++) pts.push(deBoor(degree, cps, knots, u0 + ((u1 - u0) * i) / n, weights));
+    // Seed uniform-in-u plus the distinct interior knots (a kink at a full-multiplicity knot can
+    // sit exactly between probe midpoints and hide), then bisect any span whose midpoint sags off
+    // its chord by more than chordTol. The control polygon bounds LENGTH but says nothing about
+    // curvature — the old length-only count left small intersection arcs (OpenVessel's r=1.5mm
+    // porthole rims through the B-spline hull) as ~10-segment polygons no matter how fine a
+    // deviation the caller requested.
+    const us: number[] = [];
+    for (let i = 0; i <= n; i++) us.push(u0 + ((u1 - u0) * i) / n);
+    const span = (u1 - u0) || 1e-12;
+    for (const k of knots) if (k > u0 + 1e-9 * span && k < u1 - 1e-9 * span) us.push(k);
+    us.sort((a, b) => a - b);
+    const ts: number[] = [];
+    for (const u of us) if (ts.length === 0 || u - ts[ts.length - 1]! > 1e-12 * span) ts.push(u);
+    let pts: Vec3[] = ts.map((u) => deBoor(degree, cps, knots, u, weights));
+    const maxPts = 4000;
+    const cosDev = Math.cos(Math.min(normalDev, Math.PI));
+    // Sampling floor: never place samples closer than this in 3D. Exporter artifacts (parametric
+    // speed collapse, sub-µm curvature spikes on hull blend rails — OpenVessel's stem) otherwise
+    // pile points into a micro-cluster; the CDT then fans every ~targetEdge interior vertex into
+    // it, which looks far worse than the ≤ floor/4 chord deviation the merge leaves at the spot.
+    const minSeg = Math.min(maxSegLen / 4, Math.max(4 * chordTol, 1e-4));
+    for (let i = 0; i + 1 < ts.length && ts.length < maxPts; ) {
+      const um = (ts[i]! + ts[i + 1]!) / 2;
+      const pm = deBoor(degree, cps, knots, um, weights);
+      const a = pts[i]!, b = pts[i + 1]!;
+      const sag = dist(pm, lerp(a, b, 0.5));
+      const la = dist(a, pm), lb = dist(pm, b);
+      const turnDot = la > 1e-9 && lb > 1e-9
+        ? ((pm[0] - a[0]) * (b[0] - pm[0]) + (pm[1] - a[1]) * (b[1] - pm[1]) + (pm[2] - a[2]) * (b[2] - pm[2])) / (la * lb)
+        : 1;
+      if ((sag > chordTol || dist(a, b) > maxSegLen || turnDot < cosDev) && la > minSeg && lb > minSeg) {
+        ts.splice(i + 1, 0, um); pts.splice(i + 1, 0, pm);
+      } else i++;
+    }
+    // Douglas–Peucker sweep (ε = chordTol/2, maxSegLen preserved): exporter noise leaves runs of
+    // floor-length segments around each spike (and parametric speed collapse bunches the uniform
+    // seeds the same way); DP collapses every such trail to the one vertex that actually deviates,
+    // so the CDT's boundary-graded size field doesn't read the trail as a fine feature and crowd
+    // micro-triangles around it. Points a smooth arc needs stay: dropping one of them would leave
+    // ~4·chordTol of sag, well over ε.
+    pts = dpSimplify(pts, chordTol / 2, maxSegLen);
     // The edge may cover only PART of the curve (exporters share one curve between edges) — cut the
     // whole-domain polyline to the v0..v1 span instead of blindly snapping the domain endpoints.
     const cut = cutOpenPolyline(pts, v0, v1);
