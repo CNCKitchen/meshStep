@@ -88,7 +88,7 @@ export class Viewer {
   private showColors = true; // STEP face colors, on by default when the file has them
   private transparentOn = false;
   private solidVisible = true; // false => CAD-edges-only view
-  private smoothOn = false; // smooth (baked crease-aware normals) vs flat facet shading
+  private smoothOn = true; // smooth (baked crease-aware normals) vs flat facet shading
 
   // Per-vertex color sources for the solid mesh; applyVisibility picks which one is active
   // (deviation analysis wins over the model's own face colors while its toggle is on).

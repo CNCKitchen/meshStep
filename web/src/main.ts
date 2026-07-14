@@ -359,7 +359,7 @@ function applyResult(res: ConvertResult): void {
   tFeatureLabel.textContent = isMeshModel ? "Feature edges (by angle)" : "Surface boundaries (CAD faces)";
   updateCreaseField();
   const feat = isMeshModel
-    ? creaseEdges(mesh, res.mesh.solidOfTri, num("creaseAngle", 30))
+    ? creaseEdges(mesh, res.mesh.solidOfTri, num("creaseAngle", 20))
     : featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
   solidOfTri = res.mesh.solidOfTri;
   defectEdges = b;
@@ -368,7 +368,7 @@ function applyResult(res: ConvertResult): void {
   hiddenParts = new Set(); // applySmoothing re-applies this set; the old model's ids must not leak
   closeMenus(); // a stale context menu would act on the previous model's ids
 
-  applySmoothing(num("creaseAngle", 30));
+  applySmoothing(num("creaseAngle", 20));
   measureBtn.disabled = false;
   viewer.fit();
   buildPartsPanel(res.structure);
@@ -861,7 +861,7 @@ creaseAngle.addEventListener("input", () => {
   clearTimeout(creaseTimer);
   creaseTimer = setTimeout(() => {
     if (!mesh || !solidOfTri) return;
-    const deg = Math.min(179, Math.max(1, num("creaseAngle", 30)));
+    const deg = Math.min(179, Math.max(1, num("creaseAngle", 20)));
     if (isMeshModel) featEdges = creaseEdges(mesh, solidOfTri, deg); // applySmoothing pushes it via setMesh
     applySmoothing(deg);
   }, 250);

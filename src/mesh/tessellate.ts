@@ -1955,8 +1955,21 @@ function stripSpherePoleDarts(s: Sphere, loops: BLoop[], sampled: Map<number, Ve
     return false;
   };
   let found = false;
-  const out: BLoop[] = loops.map((lp) => {
+  const out: BLoop[] = [];
+  for (const lp of loops) {
     let es = lp.edges;
+    // WHOLE-LOOP dart: the loop is exactly one meridian edge out-and-back between the two poles —
+    // how a kernel cuts open a FULL-sphere ball face (SKF bearing balls). Zero width, both
+    // traversals live in this loop so no neighbour shares its samples: drop the loop entirely.
+    // Punching it as a CDT hole instead is what this function exists to prevent — the degenerate
+    // slit sheds unenforceable constraints and parity-floods a phantom lune out of the face.
+    if (es.length === 2 && es[0]!.edgeId === es[1]!.edgeId && es[0]!.orient !== es[1]!.orient) {
+      const base = sampled.get(es[0]!.edgeId);
+      if (base && base.length > 0 && isPole(base[0]!) && isPole(base[base.length - 1]!)) {
+        found = true;
+        continue; // the whole loop is the dart
+      }
+    }
     for (let i = 0; es.length > 2 && i < es.length; i++) {
       const a = es[i]!, b = es[(i + 1) % es.length]!;
       if (a.edgeId !== b.edgeId || a.orient === b.orient) continue;
@@ -1969,8 +1982,8 @@ function stripSpherePoleDarts(s: Sphere, loops: BLoop[], sampled: Map<number, Ve
       found = true;
       i = -1; // rescan: a loop can carry one dart per slit
     }
-    return es === lp.edges ? lp : { outer: lp.outer, edges: es };
-  });
+    out.push(es === lp.edges ? lp : { outer: lp.outer, edges: es });
+  }
   return found ? out : null;
 }
 
@@ -2653,15 +2666,37 @@ function tessellateConeCap(
 ): boolean {
   const cone = surface as unknown as { r: number; sin: number };
   if (surface.kind !== "CONICAL_SURFACE" || !(cone.sin > 0)) return false;
-  const rim: Vec3[] = [];
-  for (const oe of outerLoop.edges) {
-    const base = sampled.get(oe.edgeId); if (!base) return false;
-    const poly = oe.orient ? base : base.slice().reverse();
-    for (let i = 0; i < poly.length - 1; i++) rim.push(poly[i]!);
-  }
-  if (rim.length < 3) return false;
   const apex = surface.evaluate(0, -cone.r / cone.sin);
   const dd = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+  // An apex SLIT — a ruling from the rim down to the apex, walked out and back inside the same
+  // loop (mecanum hub countersink whose rim is scalloped by the roller pockets) — is a parametric
+  // seam, not rim: drop any edge with an endpoint at the apex. The slit's samples are referenced
+  // by no other face (both traversals live in THIS loop) and the loft re-creates the ruling
+  // continuously, so watertightness is unaffected. Wedge slices whose genuine trim edges end at
+  // the apex lose those edges too, but their remaining rim is a partial arc and the winding gate
+  // below still rejects them.
+  let slant = 0;
+  for (const oe of outerLoop.edges) {
+    const base = sampled.get(oe.edgeId); if (!base || base.length === 0) return false;
+    slant = Math.max(slant, dd(base[0]!, apex), dd(base[base.length - 1]!, apex));
+  }
+  const rim: Vec3[] = [];
+  const mouths: Vec3[] = []; // dropped edges' rim-side endpoints
+  for (const oe of outerLoop.edges) {
+    const poly0 = sampled.get(oe.edgeId)!;
+    const poly = oe.orient ? poly0 : poly0.slice().reverse();
+    const a0 = dd(poly[0]!, apex) < 0.02 * slant, a1 = dd(poly[poly.length - 1]!, apex) < 0.02 * slant;
+    if (a0 || a1) {
+      if (!(a0 && a1)) mouths.push(a0 ? poly[poly.length - 1]! : poly[0]!);
+      continue;
+    }
+    for (let i = 0; i < poly.length - 1; i++) rim.push(poly[i]!);
+  }
+  // ZERO-WIDTH slits only: all dropped legs must meet the rim at ONE point. Two rulings at
+  // different angles bound a genuine pie-wedge cut — a wedge narrower than the winding gate's
+  // tolerance would otherwise be lofted over. Those faces keep their old path (param grid).
+  for (const m of mouths) if (dd(m, mouths[0]!) > 1e-3 * slant) return false;
+  if (rim.length < 3) return false;
   const stride = Math.max(1, Math.ceil(rim.length / 512)); // winding gate needs samples, not every point
   let hu: number | undefined, hv: number | undefined, travel = 0, prevU: number | undefined;
   for (let i = 0; i < rim.length; i += stride) {

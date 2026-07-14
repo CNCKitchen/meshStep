@@ -442,6 +442,19 @@
     },
     "skipped": {}
   },
+  "newtestmodels/mecanum_d58mm_8rollers": {
+    "hash": "626d82435961971b10caf8ec7726bfff4b582fdc6ffa84c4f040415de2b8dd46",
+    "verts": 112675,
+    "tris": 225334,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 38882.172,
+    "dispatch": {
+      "coneCap": 1,
+      "grid": 412
+    },
+    "skipped": {}
+  },
   "newtestmodels/Midea Porta Split Wasserabfluss": {
     "hash": "7d12456e068d9fb29c61040b174eed07dc1cf5377b2ca3de8edadb607388b8b9",
     "verts": 15147,
@@ -580,6 +593,19 @@
     "volume": 115251.289,
     "dispatch": {
       "grid": 543
+    },
+    "skipped": {}
+  },
+  "newtestmodels/skf_bearing_608-2rsh_2": {
+    "hash": "de5e29d30c332eb86e82da6d5aaf09214f50fdd36cd7fecfef6ab6d0d4fd2902",
+    "verts": 125431,
+    "tris": 250862,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 1636.061,
+    "dispatch": {
+      "grid": 61,
+      "region": 7
     },
     "skipped": {}
   },

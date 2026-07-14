@@ -116,7 +116,7 @@ class Sphere implements Surface {
     const dir = add(scale(ring, Math.cos(v)), scale(this.f.z, Math.sin(v)));
     return add(this.f.o, scale(dir, this.r));
   }
-  project(p: Vec3): [number, number] {
+  project(p: Vec3, hu?: number): [number, number] {
     const d = sub(p, this.f.o);
     // Latitude against the point's OWN distance from the centre (not the nominal radius): that
     // makes this the true nearest-point projection, so a query slightly off the sphere (a triangle
@@ -124,7 +124,13 @@ class Sphere implements Surface {
     // on-surface points.
     const L = Math.max(1e-12, Math.hypot(d[0], d[1], d[2]));
     const v = Math.asin(Math.max(-1, Math.min(1, dot(d, this.f.z) / L)));
-    return [Math.atan2(dot(d, this.f.y), dot(d, this.f.x)), v];
+    const px = dot(d, this.f.x), py = dot(d, this.f.y);
+    // At a pole the longitude is undefined — atan2 of fp noise lands anywhere on the period, and a
+    // boundary sample AT the pole (a ball's seam meridians meet there) then lifts a wild diagonal
+    // the CDT cannot enforce. Keep the caller's continuity hint instead: any u is equally valid at
+    // the pole, and the hint is the loop-consistent one.
+    if (hu !== undefined && Math.hypot(px, py) < 1e-9 * L) return [hu, v];
+    return [Math.atan2(py, px), v];
   }
   normal(u: number, v: number): Vec3 {
     return normalize(sub(this.evaluate(u, v), this.f.o));
