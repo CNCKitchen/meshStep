@@ -13,6 +13,8 @@ import { analyzeSurface } from "../geom/surfaces.ts";
 export interface MeasureEdge {
   edgeId: number;
   solidId: number;
+  /** Assembly occurrence index (0-based) this record is placed for — matches SolidInstance.instance. */
+  instance: number;
   kind: "line" | "circle" | "ellipse" | "other";
   /** Edge length in mm — analytic where closed-form (line, circular arc), else polyline sum. */
   length: number;
@@ -36,6 +38,8 @@ export interface MeasureEdge {
 export interface MeasureFace {
   faceId: number;
   solidId: number;
+  /** Assembly occurrence index (0-based) this record is placed for — matches SolidInstance.instance. */
+  instance: number;
   /** STEP surface kind (PLANE | CYLINDRICAL_SURFACE | ...); "" for complex/rational surfaces. */
   kind: string;
   origin?: [number, number, number];
@@ -114,9 +118,9 @@ export function collectMeasureGeometry(
     const edgeFaces = new Map<number, number[]>();
     for (const face of solid.faces) {
       const surfInfo = analyzeSurface(brep.table, face.surfaceId, scale, brep.units.radPerAngle);
-      for (const f of frames) {
+      for (const [k, f] of frames.entries()) {
         faces.push({
-          faceId: face.faceId, solidId: solid.id, kind: surfInfo.kind,
+          faceId: face.faceId, solidId: solid.id, instance: k, kind: surfInfo.kind,
           origin: surfInfo.origin ? applyF(f, surfInfo.origin) as [number, number, number] : undefined,
           axis: surfInfo.axis ? rot(f, surfInfo.axis) as [number, number, number] : undefined,
           radius: surfInfo.radius, semiAngle: surfInfo.semiAngle,
@@ -155,7 +159,7 @@ export function collectMeasureGeometry(
   const points = new Float32Array(totalPts * 3);
   let at = 0;
   for (const r of raw) {
-    for (const f of r.frames) {
+    for (const [k, f] of r.frames.entries()) {
       const first = at;
       for (const p of r.polyline) {
         const w = applyF(f, p);
@@ -163,7 +167,7 @@ export function collectMeasureGeometry(
         at++;
       }
       edges.push({
-        edgeId: r.edgeId, solidId: r.solidId, kind: r.info.kind, length: r.length,
+        edgeId: r.edgeId, solidId: r.solidId, instance: k, kind: r.info.kind, length: r.length,
         center: r.info.center ? applyF(f, r.info.center) as [number, number, number] : undefined,
         axis: r.info.axis ? rot(f, r.info.axis) as [number, number, number]
           : r.info.dir ? rot(f, r.info.dir) as [number, number, number] : undefined,

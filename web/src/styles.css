@@ -185,11 +185,29 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 #stage { position: relative; overflow: hidden; }
 #viewport { position: absolute; inset: 0; }
 #viewport canvas { display: block; }
-.hint {
+/* Bottom bar: mouse-scheme picker + navigation hint */
+.vp-bottom {
   position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%);
-  font-size: 11px; color: var(--muted); background: var(--chip-bg);
-  padding: 4px 10px; border-radius: 5px; pointer-events: none;
+  display: flex; align-items: center; gap: 8px;
+  max-width: calc(100% - 24px); z-index: 3;
 }
+.hint {
+  font-size: 11px; color: var(--muted); background: var(--chip-bg);
+  padding: 5px 10px; border-radius: 5px; pointer-events: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nav-scheme {
+  display: flex; align-items: center; gap: 6px; flex: none;
+  font-size: 11px; color: var(--muted); background: var(--chip-bg);
+  backdrop-filter: blur(4px); border: 1px solid var(--line);
+  border-radius: 5px; padding: 2px 4px 2px 8px; cursor: pointer;
+}
+.nav-scheme select {
+  background: none; border: none; color: var(--text);
+  font-size: 11px; font-weight: 500; cursor: pointer; outline: none; max-width: 180px;
+}
+.nav-scheme select option { background: var(--panel); color: var(--text); }
+.nav-scheme:hover { border-color: var(--accent); }
 /* ---- viewport toolbar (top-center stack: toolbar → contextual tool row → store CTA) ---- */
 .vp-top {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
@@ -327,6 +345,9 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .part-row.off .part-name { opacity: 0.45; }
 .part-meta { flex: none; color: var(--muted); font-size: 11px; }
 .auto-note { margin: 4px 0 0; font-size: 11px; color: var(--muted); }
+
+/* ---- exploded view ---- */
+#explodeRow input[type="range"] { width: 200px; accent-color: var(--accent); margin: 0 6px; }
 
 /* ---- measure mode ---- */
 .parts-btn.active { border-color: var(--accent); color: var(--accent); }

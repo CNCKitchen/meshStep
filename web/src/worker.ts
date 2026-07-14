@@ -2,7 +2,7 @@
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
-import { importStep, estimateStepSize, readSTL, read3MF, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate } from "../../src/index.ts";
+import { importStep, estimateStepSize, readSTL, read3MF, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate, type SolidInstance } from "../../src/index.ts";
 import { EdgeTable } from "../../src/mesh/edge-table.ts";
 
 export interface ConvertRequest {
@@ -71,6 +71,11 @@ export interface ConvertResult {
   /** Analytic measurement geometry (exact circle centers/radii + edge polylines coincident with
    * the mesh), instance-placed like the mesh; null for AP242 tessellated bodies with no B-rep. */
   measure: MeasureGeometry | null;
+  /** Every placed part occurrence (a part used ×N is N entries); null for STL/3MF, where each
+   * body is a single occurrence and solidOfTri doubles as the instance mapping. */
+  instances: SolidInstance[] | null;
+  /** Per-triangle index into `instances`, aligned with solidOfTri; null for STL/3MF. */
+  instanceOfTri: Uint32Array | null;
 }
 
 export interface ProgressMessage {
@@ -182,6 +187,8 @@ function loadStl(req: LoadStlRequest): void {
         openEdges, nonManifoldEdges, facesDropped: 0, facesSkipped: 0, warnings: [],
       },
       measure: null,
+      instances: null,
+      instanceOfTri: null,
     },
     [mesh.positions.buffer, mesh.indices.buffer, faceOfTri.buffer, solidOfTri.buffer],
   );
@@ -280,6 +287,8 @@ async function load3mf(req: Load3mfRequest): Promise<void> {
         openEdges, nonManifoldEdges, facesDropped: 0, facesSkipped: 0, warnings: [],
       },
       measure: null,
+      instances: null,
+      instanceOfTri: null,
     },
     [positions.buffer, indices.buffer, faceOfTri.buffer, solidOfTri.buffer],
   );
@@ -346,9 +355,11 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
         openSolids: tess.openSolids,
         diagnostics: tess.diagnostics,
         measure: tess.measure ?? null,
+        instances: tess.instances,
+        instanceOfTri: tess.instanceOfTri,
       },
       // Transfer the underlying buffers to avoid a copy.
-      [pos.buffer, idx.buffer, fot.buffer, sot.buffer,
+      [pos.buffer, idx.buffer, fot.buffer, sot.buffer, tess.instanceOfTri.buffer,
         ...(tess.measure ? [tess.measure.points.buffer] : [])],
     );
   } catch (err) {

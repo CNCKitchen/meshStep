@@ -12,14 +12,41 @@ import { extractColors, type ModelColors } from "./step/styles.ts";
 import { extractStructure, type PartNode } from "./step/structure.ts";
 import { collectMeasureGeometry, type MeasureGeometry } from "./brep/measure-geometry.ts";
 
+/** One placed occurrence of a solid in the assembly. A part used N times is one solid id with N
+ * instances; `instanceOfTri` maps every triangle of the final mesh to its entry in this list. */
+export interface SolidInstance {
+  /** Body id — same ids as solidOfTri / PartBody.id. */
+  solidId: number;
+  /** Occurrence index within the solid's placement list — matches MeasureFace/MeasureEdge.instance. */
+  instance: number;
+  /** Placement applied to this occurrence's vertices (null = meshed in place, identity). */
+  frame: Frame | null;
+}
+
 /** Move each part's vertices into its assembly world placement(s). Each vertex belongs to one solid
  * (bodies are welded independently), so the first instance transforms in place; a part used N times
  * in the assembly appends N-1 transformed copies of its vertices and triangles (each copy is its own
- * welded component, so watertightness is preserved per instance). Rigid transforms keep winding. */
+ * welded component, so watertightness is preserved per instance). Rigid transforms keep winding.
+ * Also emits the per-occurrence identity (`instances` + `instanceOfTri`) so consumers can address a
+ * single placed copy — the placement itself is baked into the vertices and is otherwise gone. */
 function applyAssemblyPlacement(
   mesh: IndexedMesh, faceOfTri: Uint32Array, solidOfTri: Uint32Array, xf: Map<number, Frame[]>,
-): { mesh: IndexedMesh; faceOfTri: Uint32Array; solidOfTri: Uint32Array } {
-  const unchanged = { mesh, faceOfTri, solidOfTri };
+): { mesh: IndexedMesh; faceOfTri: Uint32Array; solidOfTri: Uint32Array; instances: SolidInstance[]; instanceOfTri: Uint32Array } {
+  // Instance table covers every solid with triangles (identity-placed ones included), in
+  // first-appearance order; instance k of a multi-placed solid sits at firstInst(sid) + k.
+  const instances: SolidInstance[] = [];
+  const firstInst = new Map<number, number>();
+  for (let t = 0; t < solidOfTri.length; t++) {
+    const sid = solidOfTri[t]!;
+    if (firstInst.has(sid)) continue;
+    firstInst.set(sid, instances.length);
+    const frames = xf.get(sid);
+    if (!frames || frames.length === 0) instances.push({ solidId: sid, instance: 0, frame: null });
+    else for (let k = 0; k < frames.length; k++) instances.push({ solidId: sid, instance: k, frame: frames[k]! });
+  }
+  const baseInstOfTri = new Uint32Array(solidOfTri.length);
+  for (let t = 0; t < solidOfTri.length; t++) baseInstOfTri[t] = firstInst.get(solidOfTri[t]!)!;
+  const unchanged = { mesh, faceOfTri, solidOfTri, instances, instanceOfTri: baseInstOfTri };
   if (xf.size === 0) return unchanged;
   const P = mesh.positions, I = mesh.indices;
   const nV = P.length / 3;
@@ -31,8 +58,10 @@ function applyAssemblyPlacement(
     out[o + 2] = f.o[2] + f.x[2] * x + f.y[2] * y + f.z[2] * z;
   };
   // Extra instances first (they read the still-untransformed local coordinates), then instance 0.
-  const extraV: number[] = [], extraI: number[] = [], extraF: number[] = [], extraS: number[] = [];
+  const extraV: number[] = [], extraI: number[] = [], extraF: number[] = [], extraS: number[] = [], extraInst: number[] = [];
   for (const [sid, frames] of xf) {
+    const base = firstInst.get(sid);
+    if (base === undefined) continue; // solid with no triangles — nothing to replicate
     for (let k = 1; k < frames.length; k++) {
       const f = frames[k]!;
       const remap = new Map<number, number>();
@@ -46,7 +75,7 @@ function applyAssemblyPlacement(
       for (let t = 0; t < solidOfTri.length; t++) {
         if (solidOfTri[t] !== sid) continue;
         extraI.push(remap.get(I[t * 3]!)!, remap.get(I[t * 3 + 1]!)!, remap.get(I[t * 3 + 2]!)!);
-        extraF.push(faceOfTri[t]!); extraS.push(sid);
+        extraF.push(faceOfTri[t]!); extraS.push(sid); extraInst.push(base + k);
       }
     }
   }
@@ -63,7 +92,9 @@ function applyAssemblyPlacement(
   fo.set(faceOfTri); fo.set(extraF, faceOfTri.length);
   const so = new Uint32Array(solidOfTri.length + extraS.length);
   so.set(solidOfTri); so.set(extraS, solidOfTri.length);
-  return { mesh: { positions, indices }, faceOfTri: fo, solidOfTri: so };
+  const io = new Uint32Array(baseInstOfTri.length + extraInst.length);
+  io.set(baseInstOfTri); io.set(extraInst, baseInstOfTri.length);
+  return { mesh: { positions, indices }, faceOfTri: fo, solidOfTri: so, instances, instanceOfTri: io };
 }
 
 /** Assemble the consolidated conversion verdict from the tessellation warnings and a final
@@ -143,6 +174,11 @@ export interface ImportResult extends MeshResult {
   /** Analytic measurement geometry (per-edge curve identity + exact boundary polylines,
    * instance-placed like the mesh) when `measureGeometry` was requested. */
   measure?: MeasureGeometry;
+  /** Every placed part occurrence: a solid used ×N in the assembly is N entries here (its
+   * placements are baked into the vertices — this is the only surviving per-copy identity). */
+  instances: SolidInstance[];
+  /** Per-triangle index into `instances`, aligned with solidOfTri/faceOfTri. */
+  instanceOfTri: Uint32Array;
 }
 
 /** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */

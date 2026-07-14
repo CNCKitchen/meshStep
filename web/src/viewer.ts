@@ -7,6 +7,7 @@ import { MeshBVH } from "three-mesh-bvh";
 import { filterTriangles, filterSegments, wireframeIndex, type EdgeSet } from "./mesh-utils.ts";
 import { SectionController } from "./section.ts";
 import { MeasureController, type MeasureMode } from "./measure.ts";
+import { SCHEMES, MMB, RMB, type ControlScheme, type NavAction } from "./nav-schemes.ts";
 import type { MeasureGeometry } from "../../src/index.ts";
 
 interface Content {
@@ -57,11 +58,18 @@ export class Viewer {
   private content: Content;
   private container: HTMLElement;
 
-  // bumpMesh-style navigation (same scheme as smartInfillGenerator): left-drag
-  // orbits around the surface point under the cursor (free over the poles),
-  // the wheel zooms toward the cursor, and right-drag pans in screen space.
-  // OrbitControls keeps only damping + right-drag pan; rotation and zoom are
-  // handled manually below.
+  // Scheme-driven navigation: the active ControlScheme maps pointer chords
+  // (buttons bitmask + modifiers) to orbit / pan / drag-zoom. Orbit spins
+  // around the surface point under the cursor (free over the poles), the
+  // wheel zooms toward the cursor, and pan translates in screen space — all
+  // handled manually below; OrbitControls keeps only the target + lookAt.
+  private scheme: ControlScheme = SCHEMES[0]!;
+  private navAction: NavAction | null = null; // gesture in progress
+  private navMask = 0; // pressed-button chord (buttons bitmask) of the active gesture
+  private navLast: { x: number; y: number } | null = null; // pan/zoom drag anchor
+  private zoomAnchor: { x: number; y: number } | null = null; // drag-zoom zooms toward this screen point
+  private chordDown: { t: number; x: number; y: number } | null = null; // CATIA tick-zoom detection
+  private catiaZoomLatch = false; // middle-drag means zoom (not pan) until the chord ends
   private pivotMarker: THREE.Mesh;
   private orbitPivot: THREE.Vector3 | null = null; // active drag pivot
   private lastOrbitPivot: THREE.Vector3 | null = null; // fallback between drags
@@ -120,6 +128,18 @@ export class Viewer {
   private section: SectionController;
   // Axes triad in the lower-right corner showing the world orientation.
   private viewHelper: ViewHelper;
+
+  // Exploded view: per-instance world offsets applied on the CPU into the (shared) position
+  // buffer — the wireframe, highlight overlay and pick geometry share that buffer, so they move
+  // for free; the feature/open-edge line sets carry per-segment instance ids and are rebuilt.
+  private explodeData: { instanceOfTri: Uint32Array; offsetsAt: (f: number) => Float64Array } | null = null;
+  private explodeFactor = 0; // currently applied factor
+  private explodePending: number | null = null; // coalesced slider input; applied once per frame
+  private explodeTarget: number | null = null; // eased-animation target (mode enter/exit)
+  private explodeBase: Float32Array | null = null; // pristine solid positions (exact restore at 0)
+  private instanceOfVertex: Uint32Array | null = null; // display vertex -> instance (lazy)
+  private explodedOffsets: Float64Array | null = null; // current offsets (null = collapsed)
+  private pickBvhDirty = false; // positions moved since the BVH was built — refit before use
 
   // Measurement mode: snapping, markers and committed dimensions (measure.ts). Labels render as
   // DOM elements through a CSS2DRenderer overlay pass (theme-aware, never section-clipped).
@@ -237,12 +257,12 @@ export class Viewer {
     const c = new OrbitControls(this.camera, this.renderer.domElement);
     c.enableDamping = true;
     c.dampingFactor = 0.08;
-    // Right-drag pans in the screen plane (not along the ground).
-    c.screenSpacePanning = true;
-    // Rotation + zoom are manual (pivot-on-cursor orbit, cursor-centric
-    // zoom — see installNavigation). OrbitControls keeps damping + R-drag pan.
+    // Rotation, pan and zoom are all manual (scheme-mapped buttons, pivot-on-
+    // cursor orbit, cursor-centric zoom — see installNavigation). OrbitControls
+    // only owns the target and the per-frame lookAt.
     c.enableRotate = false;
     c.enableZoom = false;
+    c.enablePan = false;
     // Full polar range: the manual orbit (onOrbitMove) already clamps its own
     // pitch to poleEps, so the reconstruction never lands on the ±Z pole
     // during a drag. The only on-pole placements are the top/bottom presets
@@ -318,30 +338,123 @@ export class Viewer {
     return new THREE.Box3().expandByObject(s).getSize(new THREE.Vector3()).length() || 100;
   }
 
-  // ---------- navigation (orbit / move / zoom) ----------
-  // Same camera routine as smartInfillGenerator (bumpMesh-style): left-drag
-  // orbits around the surface point under the cursor with no polar clamping,
-  // the wheel zooms toward the cursor, and right-drag pans in screen space.
+  // ---------- navigation (orbit / pan / zoom) ----------
+  // Orbit rotates around the surface point under the cursor with no polar
+  // clamping, the wheel zooms toward the cursor, and pan translates in screen
+  // space. WHICH buttons do what comes from the active ControlScheme
+  // (nav-schemes.ts): the chord (buttons bitmask + modifiers) is re-resolved
+  // at every press/release, so chorded schemes (CATIA/FreeCAD middle-then-
+  // second-button) and mid-gesture switches work without special cases.
+
+  /** Switch the pointer-button control scheme (dropdown in the bottom bar). */
+  setNavScheme(scheme: ControlScheme): void {
+    this.scheme = scheme;
+    // Cancel any in-flight gesture so stale state can't leak across schemes.
+    this.endOrbitDrag();
+    this.navAction = null;
+    this.navMask = 0;
+    this.navLast = null;
+    this.zoomAnchor = null;
+    this.chordDown = null;
+    this.catiaZoomLatch = false;
+  }
 
   private installNavigation(canvas: HTMLCanvasElement): void {
-    canvas.addEventListener("pointerdown", (ev) => {
-      if (ev.button === 0) this.beginOrbit(ev);
-      else if (ev.button === 2) this.rmbStart = { x: ev.clientX, y: ev.clientY };
+    canvas.addEventListener("pointerdown", (ev) => this.syncNavButtons(ev));
+    // Middle-click autoscroll (Windows) would swallow every middle-drag scheme.
+    canvas.addEventListener("mousedown", (ev) => {
+      if (ev.button === 1) ev.preventDefault();
     });
-    // Right-drag pans (OrbitControls) — the context menu only opens on a clean right CLICK.
+    // The context menu only opens on a clean right CLICK — a right-DRAG is
+    // navigation in most schemes (pan here, orbit in Onshape/Tinkercad/Rhino).
     canvas.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
       const s = this.rmbStart;
       this.rmbStart = null;
+      if (ev.buttons & 7) return; // right released mid-chord (CATIA/NX gestures)
       if (s && Math.hypot(ev.clientX - s.x, ev.clientY - s.y) > 4) return;
       this.onContextMenu?.(this.pickSolid(ev.clientX, ev.clientY), ev.clientX, ev.clientY);
     });
     // Move + release on document so a drag that leaves the canvas still tracks.
-    document.addEventListener("pointermove", this.onOrbitMove);
-    document.addEventListener("pointerup", this.onOrbitUp);
+    document.addEventListener("pointermove", this.onNavMove);
+    document.addEventListener("pointerup", (ev) => {
+      if (this.navMask) this.syncNavButtons(ev);
+    });
     document.addEventListener("keydown", this.onViewKey);
     canvas.addEventListener("wheel", this.onWheel, { passive: false });
   }
+
+  /** Track the pressed-button chord and re-resolve the gesture when it changes.
+   *  Spec quirk this exists for: pressing/releasing a SECOND button while one
+   *  is already down arrives as pointermove — NOT pointerdown/pointerup — so
+   *  every pointer event funnels through here (via onNavMove for the chorded
+   *  case) before being routed. */
+  private syncNavButtons(ev: PointerEvent): void {
+    const mask = ev.buttons & 7;
+    if (mask === this.navMask) return;
+    const prev = this.navMask;
+    this.navMask = mask;
+    // rmbStart must catch chorded right presses too (they skip pointerdown).
+    if (mask & RMB && !(prev & RMB)) this.rmbStart = { x: ev.clientX, y: ev.clientY };
+    // CATIA tick-zoom: a second button quickly CLICKED (not held) while middle
+    // stays down flips the rest of the middle-drag from pan to zoom.
+    if (this.scheme.catiaZoomTick && prev & MMB && mask & MMB) {
+      if (mask & ~MMB & ~prev) {
+        this.chordDown = { t: performance.now(), x: ev.clientX, y: ev.clientY };
+      } else if (prev & ~MMB & ~mask && this.chordDown) {
+        const d = this.chordDown;
+        if (performance.now() - d.t < 300 && Math.hypot(ev.clientX - d.x, ev.clientY - d.y) < 5) {
+          this.catiaZoomLatch = true;
+        }
+        this.chordDown = null;
+      }
+    } else {
+      this.chordDown = null;
+    }
+    this.updateNavAction(ev);
+  }
+
+  /** Re-resolve the drag action from the current button chord + modifiers.
+   *  Called at every button press/release so chords switch mid-gesture. */
+  private updateNavAction(ev: PointerEvent): void {
+    const mask = ev.buttons & 7;
+    if (!(mask & MMB)) this.catiaZoomLatch = false; // chord over
+    let action: NavAction | null = null;
+    if (this.catiaZoomLatch && mask === MMB) {
+      action = "zoom";
+    } else if (mask) {
+      const b = this.scheme.bindings.find(
+        (b) =>
+          b.buttons === mask && !!b.shift === ev.shiftKey && !!b.ctrl === ev.ctrlKey && !!b.alt === ev.altKey
+      );
+      action = b?.action ?? null;
+    }
+    if (action === this.navAction) return;
+    this.endOrbitDrag();
+    this.navAction = null;
+    this.navLast = null;
+    this.zoomAnchor = null;
+    if (!action || this.section.busy()) return; // gizmo drags must not also move the camera
+    this.navAction = action;
+    if (action === "orbit") {
+      this.beginOrbit(ev);
+    } else {
+      this.navLast = { x: ev.clientX, y: ev.clientY };
+      if (action === "zoom") this.zoomAnchor = { x: ev.clientX, y: ev.clientY };
+    }
+  }
+
+  private onNavMove = (ev: PointerEvent): void => {
+    // Chorded button changes (second button pressed/released mid-drag) arrive
+    // as pointermove — catch them by the mask changing under an active gesture.
+    if (this.navMask && (ev.buttons & 7) !== this.navMask) {
+      this.syncNavButtons(ev);
+      return;
+    }
+    if (this.navAction === "orbit") this.onOrbitMove(ev);
+    else if (this.navAction === "pan") this.onPanMove(ev);
+    else if (this.navAction === "zoom") this.onZoomMove(ev);
+  };
 
   /** Meshes the orbit ray can land on: the model itself (even in the
    *  edges-only view, where the solid is hidden but still the part) and the
@@ -393,7 +506,15 @@ export class Viewer {
    *  build REORDERS the index in place, which would scramble the triangle -> solidOfTri mapping
    *  (and the drawn mesh, since the position/index buffers are shared with the visible solid). */
   private ensurePickBvh(): MeshBVH | null {
-    if (this.pickBvh) return this.pickBvh;
+    if (this.pickBvh) {
+      // Exploded-view offsets moved the (shared) positions under the tree — refit the bounds
+      // on demand (cheaper than a rebuild; bounds get looser but stay correct).
+      if (this.pickBvhDirty) {
+        this.pickBvh.refit();
+        this.pickBvhDirty = false;
+      }
+      return this.pickBvh;
+    }
     const c = this.content;
     if (!c.solid || !this.fullIndex) return null;
     const geo = new THREE.BufferGeometry();
@@ -401,6 +522,7 @@ export class Viewer {
     geo.setIndex(new THREE.BufferAttribute(this.fullIndex, 1));
     this.pickGeo = geo;
     this.pickBvh = new MeshBVH(geo, { indirect: true });
+    this.pickBvhDirty = false;
     return this.pickBvh;
   }
 
@@ -515,22 +637,58 @@ export class Viewer {
     this.camera.updateMatrixWorld();
   };
 
-  private onOrbitUp = (): void => {
+  private endOrbitDrag(): void {
     if (!this.orbitPivot) return;
     this.orbitPivot = null;
     this.orbitStart = null;
     this.orbitLast = null;
     this.orbiting = false; // the free orbit keeps its orientation — no re-leveling
     this.pivotMarker.visible = false;
-  };
+  }
 
-  /** Cursor-centric zoom: keep the world point under the cursor pinned. */
+  /** Screen-space pan: translate camera + target along the view plane so the
+   *  model follows the cursor 1:1 (world units per pixel at the target depth). */
+  private onPanMove(ev: PointerEvent): void {
+    if (!this.navLast) return;
+    const dx = ev.clientX - this.navLast.x;
+    const dy = ev.clientY - this.navLast.y;
+    this.navLast = { x: ev.clientX, y: ev.clientY };
+    if (dx === 0 && dy === 0) return;
+    const h = Math.max(1, this.renderer.domElement.clientHeight);
+    const worldPerPx = this.orthoOn
+      ? (this.ortho.top - this.ortho.bottom) / this.ortho.zoom / h
+      : (2 * this.persp.position.distanceTo(this.controls.target) * Math.tan((this.persp.fov * Math.PI) / 360)) / h;
+    this.camera.updateMatrixWorld();
+    this._oRight.setFromMatrixColumn(this.camera.matrixWorld, 0).normalize();
+    this._oUp.setFromMatrixColumn(this.camera.matrixWorld, 1).normalize();
+    this._oTmp.copy(this._oRight).multiplyScalar(-dx * worldPerPx).addScaledVector(this._oUp, dy * worldPerPx);
+    this.camera.position.add(this._oTmp);
+    this.controls.target.add(this._oTmp);
+    this.controls.update();
+  }
+
+  /** Drag-zoom (Shift+MMB in SolidWorks, CATIA chord, ...): drag up = zoom in,
+   *  zooming about the point where the gesture started. */
+  private onZoomMove(ev: PointerEvent): void {
+    if (!this.navLast || !this.zoomAnchor) return;
+    const dy = ev.clientY - this.navLast.y;
+    this.navLast = { x: ev.clientX, y: ev.clientY };
+    if (dy === 0) return;
+    this.zoomAt(Math.exp(-dy * 0.005), this.zoomAnchor.x, this.zoomAnchor.y);
+  }
+
   private onWheel = (ev: WheelEvent): void => {
     ev.preventDefault();
+    // SolidWorks/Autodesk/NX muscle memory: their schemes zoom OUT on scroll up.
+    const zoomIn = this.scheme.wheelZoomsOut ? ev.deltaY > 0 : ev.deltaY < 0;
+    this.zoomAt(zoomIn ? 1.1 : 1 / 1.1, ev.clientX, ev.clientY);
+  };
+
+  /** Cursor-centric zoom: keep the world point under (clientX, clientY) pinned. */
+  private zoomAt(factor: number, clientX: number, clientY: number): void {
     const rect = this.renderer.domElement.getBoundingClientRect();
-    const ndcX = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-    const ndcY = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-    const factor = ev.deltaY > 0 ? 1 / 1.1 : 1.1;
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
     if (this.orthoOn) {
       // Scale the frustum, then shift so the cursor's world point re-projects
       // to the same screen position.
@@ -564,7 +722,7 @@ export class Viewer {
       this.controls.target.sub(p).multiplyScalar(s).add(p);
     }
     this.controls.update();
-  };
+  }
 
   private onViewKey = (ev: KeyboardEvent): void => {
     if (ev.altKey || ev.shiftKey) return;
@@ -687,6 +845,22 @@ export class Viewer {
 
   private animate = (): void => {
     requestAnimationFrame(this.animate);
+    // Exploded view: ease toward an animation target, then apply at most one factor per frame
+    // (slider input events coalesce into explodePending).
+    if (this.explodeTarget !== null) {
+      const d = this.explodeTarget - this.explodeFactor;
+      if (Math.abs(d) < 0.004) {
+        this.explodePending = this.explodeTarget;
+        this.explodeTarget = null;
+      } else {
+        this.explodePending = this.explodeFactor + d * 0.18;
+      }
+    }
+    if (this.explodePending !== null) {
+      const f = this.explodePending;
+      this.explodePending = null;
+      this.applyExplode(f);
+    }
     this.controls.update();
     this.updateClipPlanes();
     this.updateLights();
@@ -763,6 +937,15 @@ export class Viewer {
     this.boundarySet = boundary;
     this.featureSet = feature;
     this.hiddenSolids.clear();
+    // Explode state is per-model: the base-position copy and vertex->instance map reference the
+    // old buffers. setExplode (called after setMesh) provides the new model's data.
+    this.explodeData = null;
+    this.explodeBase = null;
+    this.instanceOfVertex = null;
+    this.explodedOffsets = null;
+    this.explodeFactor = 0;
+    this.explodePending = null;
+    this.explodeTarget = null;
 
     // Blinn-Phong, not PBR: cheaper per fragment AND gives the glossy CAD-style
     // specular highlight (Onshape look) that makes curvature readable.
@@ -895,14 +1078,7 @@ export class Viewer {
     } else {
       this.drawnSolidOfTri = this.solidOfTri;
     }
-    if (c.feature && this.featureSet) {
-      const p = this.hiddenSolids.size ? filterSegments(this.featureSet, this.hiddenSolids) : this.featureSet.positions;
-      c.feature.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
-    }
-    if (c.edges && this.boundarySet) {
-      const p = this.hiddenSolids.size ? filterSegments(this.boundarySet, this.hiddenSolids) : this.boundarySet.positions;
-      c.edges.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
-    }
+    this.refreshEdgeOverlays();
     // The wireframe is derived from the (now changed) index — rebuilding it on a 2M-tri model
     // is the expensive part, so defer until it is actually shown.
     this.wireDirty = true;
@@ -947,10 +1123,114 @@ export class Viewer {
    * the STL crease-angle threshold changes. Honors the current per-part hiding. */
   setFeatureEdgeSet(feature: EdgeSet): void {
     this.featureSet = feature;
+    this.refreshEdgeOverlays();
+  }
+
+  // ---------- exploded view ----------
+
+  /** Positions of a line EdgeSet with the current explode offsets and hidden-part filter applied. */
+  private displayedSegPositions(set: EdgeSet): Float32Array {
+    let s = set;
+    const off = this.explodedOffsets;
+    if (off && set.instanceOfSeg) {
+      const p = set.positions.slice();
+      const inst = set.instanceOfSeg;
+      for (let i = 0; i < set.count; i++) {
+        const o = inst[i]! * 3, b = i * 6;
+        p[b] += off[o]!; p[b + 1] += off[o + 1]!; p[b + 2] += off[o + 2]!;
+        p[b + 3] += off[o]!; p[b + 4] += off[o + 1]!; p[b + 5] += off[o + 2]!;
+      }
+      s = { ...set, positions: p };
+    }
+    return this.hiddenSolids.size ? filterSegments(s, this.hiddenSolids) : s.positions;
+  }
+
+  /** Re-push the feature / open-edge line positions (hidden filter + explode offsets). */
+  private refreshEdgeOverlays(): void {
     const c = this.content;
-    if (!c.feature) return;
-    const p = this.hiddenSolids.size ? filterSegments(feature, this.hiddenSolids) : feature.positions;
-    c.feature.geometry.setAttribute("position", new THREE.Float32BufferAttribute(p, 3));
+    if (c.feature && this.featureSet) {
+      c.feature.geometry.setAttribute("position", new THREE.Float32BufferAttribute(this.displayedSegPositions(this.featureSet), 3));
+      c.feature.geometry.boundingSphere = null; // stale bounds would frustum-cull moved lines
+    }
+    if (c.edges && this.boundarySet) {
+      c.edges.geometry.setAttribute("position", new THREE.Float32BufferAttribute(this.displayedSegPositions(this.boundarySet), 3));
+      c.edges.geometry.boundingSphere = null;
+    }
+  }
+
+  /** Provide the model's explode data (per-triangle instance ids + offsets provider), or null to
+   * disable. Call after setMesh; heavy derived state (base-position copy, vertex->instance map)
+   * is built lazily on the first nonzero factor, so non-exploding sessions pay nothing. */
+  setExplode(data: { instanceOfTri: Uint32Array; offsetsAt: (f: number) => Float64Array } | null): void {
+    this.explodeData = data;
+    this.explodeBase = null;
+    this.instanceOfVertex = null;
+    this.explodedOffsets = null;
+    this.explodeFactor = 0;
+    this.explodePending = null;
+    this.explodeTarget = null;
+  }
+
+  /** Set the explode factor (0 = assembled .. 1 = fully exploded). `animate` eases there over a
+   * few frames — used when entering/leaving the explode mode; slider drags pass false and apply
+   * synchronously, so a caller reading positions right after (e.g. deviation) sees the result. */
+  setExplodeFactor(f: number, animate = false): void {
+    if (!this.explodeData) return;
+    const v = Math.min(1, Math.max(0, f));
+    if (animate) {
+      this.explodeTarget = v;
+    } else {
+      this.explodeTarget = null;
+      this.explodePending = null;
+      this.applyExplode(v);
+    }
+  }
+
+  /** Apply per-instance offsets into the shared position buffer (and the line overlays). The
+   * wireframe, highlight overlay and pick geometry share that buffer, so they follow for free;
+   * the pick BVH is refit lazily on next use. Factor 0 restores the pristine copy exactly. */
+  private applyExplode(f: number): void {
+    const c = this.content;
+    const data = this.explodeData;
+    if (!c.solid || !data || !this.fullIndex) return;
+    if (f === this.explodeFactor && (f > 0) === !!this.explodedOffsets) return;
+    const attr = c.solid.geometry.getAttribute("position") as THREE.BufferAttribute;
+    const arr = attr.array as Float32Array;
+    if (!this.explodeBase) this.explodeBase = arr.slice();
+    if (!this.instanceOfVertex) {
+      // Instances are separate welded components, so no display vertex straddles two instances —
+      // a per-corner sweep over the full index assigns every vertex unambiguously.
+      const inst = new Uint32Array(arr.length / 3);
+      const it = data.instanceOfTri, idx = this.fullIndex;
+      for (let t = 0; t < it.length; t++) {
+        inst[idx[t * 3]!] = it[t]!;
+        inst[idx[t * 3 + 1]!] = it[t]!;
+        inst[idx[t * 3 + 2]!] = it[t]!;
+      }
+      this.instanceOfVertex = inst;
+    }
+    this.explodeFactor = f;
+    const base = this.explodeBase;
+    if (f <= 0) {
+      arr.set(base);
+      this.explodedOffsets = null;
+    } else {
+      const off = data.offsetsAt(f);
+      const inst = this.instanceOfVertex;
+      for (let v = 0; v < inst.length; v++) {
+        const o = inst[v]! * 3, p = v * 3;
+        arr[p] = base[p]! + off[o]!;
+        arr[p + 1] = base[p + 1]! + off[o + 1]!;
+        arr[p + 2] = base[p + 2]! + off[o + 2]!;
+      }
+      this.explodedOffsets = off;
+    }
+    attr.needsUpdate = true;
+    c.solid.geometry.computeBoundingBox(); // visibleBox/fit read it via expandByObject
+    c.solid.geometry.computeBoundingSphere(); // shared (same object) with wire + highlight
+    this.refreshEdgeOverlays();
+    this.pickBvhDirty = true;
+    this.clipSphereDirty = true;
   }
 
   setWireframe(v: boolean): void {

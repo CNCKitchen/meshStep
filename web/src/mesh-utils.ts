@@ -36,13 +36,16 @@ export interface EdgeSet {
   positions: Float32Array;
   count: number;
   solidOfSeg: Uint32Array;
+  /** Placed-occurrence id per segment (present when the extractor was given instanceOfTri) —
+   * lets the exploded view translate the line overlays together with their instance. */
+  instanceOfSeg?: Uint32Array;
 }
 
 /**
  * Extract boundary ("open") edges of an indexed mesh: edges used by exactly one
  * triangle. A watertight mesh has none.
  */
-export function boundaryEdges(mesh: RawMesh, solidOfTri: Uint32Array): EdgeSet {
+export function boundaryEdges(mesh: RawMesh, solidOfTri: Uint32Array, instanceOfTri?: Uint32Array): EdgeSet {
   const idx = mesh.indices;
   const pos = mesh.positions;
   // EdgeTable, not a Map: a large assembly mesh carries more unique edges than a Map's 2^24 cap
@@ -57,18 +60,22 @@ export function boundaryEdges(mesh: RawMesh, solidOfTri: Uint32Array): EdgeSet {
   // Second pass: collect the actual vertex pairs for edges used once.
   const out: number[] = [];
   const segSolid: number[] = [];
-  const emit = (u: number, v: number, s: number): void => {
+  const segInst: number[] = [];
+  const emit = (u: number, v: number, t: number): void => {
     if (useCount.cnt[useCount.find(u, v)]! !== 1) return;
     out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
     out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
-    segSolid.push(s);
+    segSolid.push(solidOfTri[t] ?? 0);
+    if (instanceOfTri) segInst.push(instanceOfTri[t] ?? 0);
   };
   for (let t = 0; t < idx.length; t += 3) {
     const a = idx[t]!, b = idx[t + 1]!, c = idx[t + 2]!;
-    const s = solidOfTri[t / 3] ?? 0;
-    emit(a, b, s); emit(b, c, s); emit(c, a, s);
+    emit(a, b, t / 3); emit(b, c, t / 3); emit(c, a, t / 3);
   }
-  return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
+  return {
+    positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid),
+    ...(instanceOfTri ? { instanceOfSeg: Uint32Array.from(segInst) } : {}),
+  };
 }
 
 /**
@@ -79,7 +86,7 @@ export function boundaryEdges(mesh: RawMesh, solidOfTri: Uint32Array): EdgeSet {
  * the tessellation tolerance. Each segment carries its solid id (bodies are welded
  * independently, so an edge never straddles two solids).
  */
-export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: Uint32Array): EdgeSet {
+export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: Uint32Array, instanceOfTri?: Uint32Array): EdgeSet {
   const idx = mesh.indices;
   const pos = mesh.positions;
   // EdgeTable (no 2^24 Map cap): cnt = use-count, v0 = first face id, v1 = flag bits.
@@ -99,21 +106,25 @@ export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: 
 
   const out: number[] = [];
   const segSolid: number[] = [];
-  const emit = (u: number, v: number, s: number): void => {
+  const segInst: number[] = [];
+  const emit = (u: number, v: number, t: number): void => {
     const k = et.find(u, v);
     if (et.v1[k]! & SEEN) return;
     if (et.cnt[k]! !== 1 && !(et.v1[k]! & FEATURE)) return; // interior-to-a-face edge: skip
     et.v1[k] = et.v1[k]! | SEEN;
     out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
     out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
-    segSolid.push(s);
+    segSolid.push(solidOfTri[t] ?? 0);
+    if (instanceOfTri) segInst.push(instanceOfTri[t] ?? 0);
   };
   for (let t = 0; t < tris; t++) {
     const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
-    const s = solidOfTri[t] ?? 0;
-    emit(a, b, s); emit(b, c, s); emit(c, a, s);
+    emit(a, b, t); emit(b, c, t); emit(c, a, t);
   }
-  return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
+  return {
+    positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid),
+    ...(instanceOfTri ? { instanceOfSeg: Uint32Array.from(segInst) } : {}),
+  };
 }
 
 /**
@@ -122,7 +133,7 @@ export function featureEdges(mesh: RawMesh, faceOfTri: Uint32Array, solidOfTri: 
  * model has no B-rep (STL). Degenerate triangles (zero-area) never register a crease, and edges
  * used by 3+ triangles are always emitted (a non-manifold junction is a feature by any measure).
  */
-export function creaseEdges(mesh: RawMesh, solidOfTri: Uint32Array, angleDeg: number): EdgeSet {
+export function creaseEdges(mesh: RawMesh, solidOfTri: Uint32Array, angleDeg: number, instanceOfTri?: Uint32Array): EdgeSet {
   const idx = mesh.indices;
   const pos = mesh.positions;
   const tris = idx.length / 3;
@@ -163,21 +174,25 @@ export function creaseEdges(mesh: RawMesh, solidOfTri: Uint32Array, angleDeg: nu
 
   const out: number[] = [];
   const segSolid: number[] = [];
-  const emit = (u: number, v: number, s: number): void => {
+  const segInst: number[] = [];
+  const emit = (u: number, v: number, t: number): void => {
     const k = et.find(u, v);
     if (et.v1[k]! & SEEN) return;
     if (et.cnt[k]! !== 1 && !(et.v1[k]! & CREASE)) return; // smooth interior edge: skip
     et.v1[k] = et.v1[k]! | SEEN;
     out.push(pos[u * 3]!, pos[u * 3 + 1]!, pos[u * 3 + 2]!);
     out.push(pos[v * 3]!, pos[v * 3 + 1]!, pos[v * 3 + 2]!);
-    segSolid.push(s);
+    segSolid.push(solidOfTri[t] ?? 0);
+    if (instanceOfTri) segInst.push(instanceOfTri[t] ?? 0);
   };
   for (let t = 0; t < tris; t++) {
     const a = idx[t * 3]!, b = idx[t * 3 + 1]!, c = idx[t * 3 + 2]!;
-    const s = solidOfTri[t] ?? 0;
-    emit(a, b, s); emit(b, c, s); emit(c, a, s);
+    emit(a, b, t); emit(b, c, t); emit(c, a, t);
   }
-  return { positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid) };
+  return {
+    positions: new Float32Array(out), count: segSolid.length, solidOfSeg: Uint32Array.from(segSolid),
+    ...(instanceOfTri ? { instanceOfSeg: Uint32Array.from(segInst) } : {}),
+  };
 }
 
 /**
@@ -323,14 +338,19 @@ export function dropSolidSegments(edges: EdgeSet, drop: ReadonlySet<number>): Ed
   if (drop.size === 0) return edges;
   const positions = new Float32Array(edges.positions.length);
   const solidOfSeg = new Uint32Array(edges.count);
+  const instanceOfSeg = edges.instanceOfSeg ? new Uint32Array(edges.count) : null;
   let n = 0;
   for (let s = 0; s < edges.count; s++) {
     if (drop.has(edges.solidOfSeg[s]!)) continue;
     positions.set(edges.positions.subarray(s * 6, s * 6 + 6), n * 6);
     solidOfSeg[n] = edges.solidOfSeg[s]!;
+    if (instanceOfSeg) instanceOfSeg[n] = edges.instanceOfSeg![s]!;
     n++;
   }
-  return { positions: positions.subarray(0, n * 6), count: n, solidOfSeg: solidOfSeg.subarray(0, n) };
+  return {
+    positions: positions.subarray(0, n * 6), count: n, solidOfSeg: solidOfSeg.subarray(0, n),
+    ...(instanceOfSeg ? { instanceOfSeg: instanceOfSeg.subarray(0, n) } : {}),
+  };
 }
 
 /** Line-segment positions with every segment of a hidden solid removed. */

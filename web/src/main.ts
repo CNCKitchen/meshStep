@@ -3,6 +3,7 @@ import "./styles.css";
 import * as THREE from "three";
 import { readSTL, writeBinarySTL, isBinarySTL, parseStepHeader, autoTessellation, type PartNode } from "../../src/index.ts";
 import { Viewer, BASE_COLOR, type CameraView } from "./viewer.ts";
+import { SCHEMES } from "./nav-schemes.ts";
 import { ReferenceSurface, type DeviationResult } from "./deviation.ts";
 import {
   autoSmooth,
@@ -18,6 +19,7 @@ import {
   type EdgeSet,
   type RawMesh,
 } from "./mesh-utils.ts";
+import { buildExplode, type ExplodeInfo } from "./explode.ts";
 import type { ConvertResult, WorkerOut } from "./worker.ts";
 
 // ---- DOM helpers ----
@@ -54,6 +56,10 @@ const sectionBtn = $<HTMLButtonElement>("sectionBtn");
 const sectionRow = $("sectionRow");
 const measureBtn = $<HTMLButtonElement>("measureBtn");
 const measureRow = $("measureRow");
+const explodeBtn = $<HTMLButtonElement>("explodeBtn");
+const explodeRow = $("explodeRow");
+const explodeRange = $<HTMLInputElement>("explodeRange");
+const explodeCollapse = $<HTMLButtonElement>("explodeCollapse");
 const mDist = $<HTMLButtonElement>("mDist");
 const mEdge = $<HTMLButtonElement>("mEdge");
 const mClear = $<HTMLButtonElement>("mClear");
@@ -144,6 +150,7 @@ let displayMeshBase: RawMesh | null = null; // post color-split, pre autoSmooth
 let faceColorsBase: Float32Array | null = null; // colors matching displayMeshBase's vertices
 let featEdges: EdgeSet | null = null; // current feature/crease overlay segments
 let measureData: ConvertResult["measure"] | null = null;
+let explodeInfo: ExplodeInfo | null = null; // hierarchical + mate-axis explode offsets per model
 
 let reference: ReferenceSurface | null = null;
 let dev: DeviationResult | null = null;
@@ -344,12 +351,30 @@ function applyResult(res: ConvertResult): void {
   displayMeshBase = displayMesh;
   faceColorsBase = faceColors;
 
+  // Exploded view: hierarchical (part-tree) offsets with mate-axis directions. Built up front so
+  // the edge extractors below can tag every overlay segment with its placed instance. Its
+  // instanceOfTri is concrete for every model kind (synthesized from solidOfTri for STL/3MF).
+  explodeInfo = buildExplode({
+    structure: res.structure,
+    mesh,
+    solidOfTri: res.mesh.solidOfTri,
+    faceOfTri: res.mesh.faceOfTri,
+    instances: res.instances,
+    instanceOfTri: res.instanceOfTri,
+    measure: res.measure,
+  });
+  resetExplodeUi();
+  explodeBtn.disabled = explodeInfo.leafCount < 2;
+  explodeBtn.title = explodeInfo.leafCount < 2
+    ? "Exploded view (needs an assembly with several parts)"
+    : "Exploded view";
+
   // Open-edge (defect) overlay: a sheet body's boundary is open BY DESIGN — drop those solids'
   // segments so the red highlight and the counters only report unexpected openings. The
   // authoritative count comes from the import diagnostics (same exclusion, core-side).
   openSolidsSet = new Set(res.openSolids);
   const openEdges = res.diagnostics.openEdges;
-  const b = dropSolidSegments(boundaryEdges(mesh, res.mesh.solidOfTri), openSolidsSet);
+  const b = dropSolidSegments(boundaryEdges(mesh, res.mesh.solidOfTri, explodeInfo.instanceOfTri), openSolidsSet);
   // Bodies with defect segments get flagged in the parts tree (sheet bodies already dropped).
   defectSolids = new Set();
   for (let s = 0; s < b.count; s++) defectSolids.add(b.solidOfSeg[s]!);
@@ -359,8 +384,8 @@ function applyResult(res: ConvertResult): void {
   tFeatureLabel.textContent = isMeshModel ? "Feature edges (by angle)" : "Surface boundaries (CAD faces)";
   updateCreaseField();
   const feat = isMeshModel
-    ? creaseEdges(mesh, res.mesh.solidOfTri, num("creaseAngle", 20))
-    : featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri);
+    ? creaseEdges(mesh, res.mesh.solidOfTri, num("creaseAngle", 20), explodeInfo.instanceOfTri)
+    : featureEdges(mesh, res.mesh.faceOfTri, res.mesh.solidOfTri, explodeInfo.instanceOfTri);
   solidOfTri = res.mesh.solidOfTri;
   defectEdges = b;
   featEdges = feat;
@@ -393,6 +418,7 @@ function applyResult(res: ConvertResult): void {
  */
 function applySmoothing(angleDeg: number): void {
   if (!displayMeshBase || !defectEdges || !featEdges || !solidOfTri) return;
+  resetExplodeUi(); // setMesh replaces the buffers the explode offsets were applied to
   const sm = autoSmooth(displayMeshBase, Math.min(179, Math.max(1, angleDeg)));
   let colors: Float32Array | null = null;
   if (faceColorsBase) {
@@ -404,6 +430,7 @@ function applySmoothing(angleDeg: number): void {
   }
   geo = buildIndexedGeometry(sm.mesh, sm.normals);
   viewer.setMesh(geo, defectEdges, featEdges, colors, solidOfTri);
+  viewer.setExplode(explodeInfo); // after setMesh (which resets the per-model explode state)
   viewer.setShowColors(tColors.checked); // the flag persists across loads; match the checkbox
   // After setMesh (which clears measurements). Distance measuring works on bare surface points
   // even when the payload has no analytic edges (AP242 tessellated bodies).
@@ -812,6 +839,9 @@ function recomputeDeviation(): void {
     legend.hidden = true;
     return;
   }
+  // Deviation reads the live position buffer — exploded coordinates would color-code garbage.
+  // setExplodeOn collapses synchronously (animate: false), so the read below is safe.
+  setExplodeOn(false, false);
   dev = reference.deviationFor(geo, null);
   recolorDeviation();
 }
@@ -862,7 +892,7 @@ creaseAngle.addEventListener("input", () => {
   creaseTimer = setTimeout(() => {
     if (!mesh || !solidOfTri) return;
     const deg = Math.min(179, Math.max(1, num("creaseAngle", 20)));
-    if (isMeshModel) featEdges = creaseEdges(mesh, solidOfTri, deg); // applySmoothing pushes it via setMesh
+    if (isMeshModel) featEdges = creaseEdges(mesh, solidOfTri, deg, explodeInfo?.instanceOfTri); // applySmoothing pushes it via setMesh
     applySmoothing(deg);
   }, 250);
 });
@@ -903,12 +933,15 @@ for (const b of styleBtns) {
 
 // ---- viewport toolbar: section tool ----
 let sectionOn = false;
-sectionBtn.addEventListener("click", () => {
-  sectionOn = !sectionOn;
-  sectionBtn.classList.toggle("active", sectionOn);
-  viewer.setSection(sectionOn);
-  sectionRow.hidden = !sectionOn;
-});
+function setSectionOn(on: boolean): void {
+  if (sectionOn === on) return;
+  sectionOn = on;
+  sectionBtn.classList.toggle("active", on);
+  viewer.setSection(on);
+  sectionRow.hidden = !on;
+  if (on) setExplodeOn(false); // a plane cutting exploded parts would report a lie
+}
+sectionBtn.addEventListener("click", () => setSectionOn(!sectionOn));
 $<HTMLButtonElement>("secX").addEventListener("click", () => viewer.setSectionAxis("x"));
 $<HTMLButtonElement>("secY").addEventListener("click", () => viewer.setSectionAxis("y"));
 $<HTMLButtonElement>("secZ").addEventListener("click", () => viewer.setSectionAxis("z"));
@@ -921,6 +954,7 @@ function setMeasureOn(on: boolean): void {
   measureBtn.classList.toggle("active", on);
   viewer.setMeasure(on);
   measureRow.hidden = !on;
+  if (on) setExplodeOn(false); // measuring exploded coordinates would report a lie
 }
 measureBtn.addEventListener("click", () => setMeasureOn(!measureOn));
 viewer.onMeasureExit = () => setMeasureOn(false); // ESC in the viewport leaves the mode
@@ -932,6 +966,39 @@ function setMeasureMode(mode: "distance" | "edge"): void {
 mDist.addEventListener("click", () => setMeasureMode("distance"));
 mEdge.addEventListener("click", () => setMeasureMode("edge"));
 mClear.addEventListener("click", () => viewer.clearMeasurements());
+
+// ---- viewport toolbar: exploded view ----
+// A mode like Measure/Section, mutually exclusive with both (they read true geometry; explode
+// deliberately moves it). Entering applies the slider's last value (animated); leaving animates
+// back together. The slider itself keeps its value across mode exits, so re-entry restores it.
+let explodeOn = false;
+function setExplodeOn(on: boolean, animate = true): void {
+  if (explodeOn === on) return;
+  explodeOn = on;
+  explodeBtn.classList.toggle("active", on);
+  explodeRow.hidden = !on;
+  if (on) {
+    if (measureOn) setMeasureOn(false);
+    if (sectionOn) setSectionOn(false);
+    viewer.setExplodeFactor(parseFloat(explodeRange.value) || 0, animate);
+  } else {
+    viewer.setExplodeFactor(0, animate);
+  }
+}
+/** Model (re)load: drop the mode without touching the viewer (setMesh already reset it). */
+function resetExplodeUi(): void {
+  explodeOn = false;
+  explodeBtn.classList.remove("active");
+  explodeRow.hidden = true;
+}
+explodeBtn.addEventListener("click", () => setExplodeOn(!explodeOn));
+explodeRange.addEventListener("input", () => {
+  if (explodeOn) viewer.setExplodeFactor(parseFloat(explodeRange.value) || 0);
+});
+explodeCollapse.addEventListener("click", () => {
+  explodeRange.value = "0";
+  viewer.setExplodeFactor(0, true);
+});
 
 // ---- viewport toolbar: camera ----
 let orthoOn = true; // CAD-style orthographic by default; the button shows the CURRENT mode
@@ -969,6 +1036,28 @@ autoRange.addEventListener("click", () => {
 });
 
 $<HTMLButtonElement>("fitBtn").addEventListener("click", () => viewer.fit());
+
+// ---- mouse control scheme (bottom bar) ----
+// Emulates the pan/orbit/zoom buttons of common CAD tools; persisted per browser.
+const navSchemeSel = $<HTMLSelectElement>("navScheme");
+const navHint = $("navHint");
+for (const s of SCHEMES) {
+  const o = document.createElement("option");
+  o.value = s.id;
+  o.textContent = s.label;
+  navSchemeSel.appendChild(o);
+}
+function applyNavScheme(id: string | null): void {
+  const s = SCHEMES.find((x) => x.id === id) ?? SCHEMES[0]!;
+  navSchemeSel.value = s.id;
+  viewer.setNavScheme(s);
+  navHint.textContent = `${s.hint} · right-click for part menu`;
+}
+applyNavScheme(localStorage.getItem("meshstep.navscheme"));
+navSchemeSel.addEventListener("change", () => {
+  applyNavScheme(navSchemeSel.value);
+  localStorage.setItem("meshstep.navscheme", navSchemeSel.value);
+});
 
 // ---- file info panel ----
 // Header fields render on file load (no tessellation needed); geometry fields fill in on Convert.
