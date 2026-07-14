@@ -139,6 +139,8 @@ export class Viewer {
   private explodeBase: Float32Array | null = null; // pristine solid positions (exact restore at 0)
   private instanceOfVertex: Uint32Array | null = null; // display vertex -> instance (lazy)
   private explodedOffsets: Float64Array | null = null; // current offsets (null = collapsed)
+  private explodeBlendFrom: Float64Array | null = null; // style-switch: offsets to blend away from
+  private explodeBlendT = 1; // 1 = no blend in progress
   private pickBvhDirty = false; // positions moved since the BVH was built — refit before use
 
   // Measurement mode: snapping, markers and committed dimensions (measure.ts). Labels render as
@@ -845,8 +847,14 @@ export class Viewer {
 
   private animate = (): void => {
     requestAnimationFrame(this.animate);
-    // Exploded view: ease toward an animation target, then apply at most one factor per frame
-    // (slider input events coalesce into explodePending).
+    // Exploded view: cross-blend after a style switch, ease toward an animation target, then
+    // apply at most one factor per frame (slider input events coalesce into explodePending).
+    if (this.explodeBlendT < 1) {
+      this.explodeBlendT = Math.min(1, this.explodeBlendT + 0.1);
+      this.applyExplode(this.explodePending ?? this.explodeFactor, true);
+      this.explodePending = null;
+      if (this.explodeBlendT >= 1) this.explodeBlendFrom = null;
+    }
     if (this.explodeTarget !== null) {
       const d = this.explodeTarget - this.explodeFactor;
       if (Math.abs(d) < 0.004) {
@@ -1169,6 +1177,16 @@ export class Viewer {
     this.explodeFactor = 0;
     this.explodePending = null;
     this.explodeTarget = null;
+    this.explodeBlendFrom = null;
+    this.explodeBlendT = 1;
+  }
+
+  /** The offsets provider changed meaning (explode STYLE switch) while possibly exploded:
+   * cross-blend from the currently applied offsets to the new style's over a few frames. */
+  restyleExplode(): void {
+    if (!this.explodeData || !this.explodedOffsets) return; // collapsed — next explode just uses the new style
+    this.explodeBlendFrom = this.explodedOffsets;
+    this.explodeBlendT = 0;
   }
 
   /** Set the explode factor (0 = assembled .. 1 = fully exploded). `animate` eases there over a
@@ -1189,11 +1207,11 @@ export class Viewer {
   /** Apply per-instance offsets into the shared position buffer (and the line overlays). The
    * wireframe, highlight overlay and pick geometry share that buffer, so they follow for free;
    * the pick BVH is refit lazily on next use. Factor 0 restores the pristine copy exactly. */
-  private applyExplode(f: number): void {
+  private applyExplode(f: number, force = false): void {
     const c = this.content;
     const data = this.explodeData;
     if (!c.solid || !data || !this.fullIndex) return;
-    if (f === this.explodeFactor && (f > 0) === !!this.explodedOffsets) return;
+    if (!force && f === this.explodeFactor && (f > 0) === !!this.explodedOffsets) return;
     const attr = c.solid.geometry.getAttribute("position") as THREE.BufferAttribute;
     const arr = attr.array as Float32Array;
     if (!this.explodeBase) this.explodeBase = arr.slice();
@@ -1216,6 +1234,13 @@ export class Viewer {
       this.explodedOffsets = null;
     } else {
       const off = data.offsetsAt(f);
+      // Style switch mid-explode: ease from the old style's offsets into the new one's.
+      if (this.explodeBlendFrom && this.explodeBlendT < 1 && this.explodeBlendFrom.length === off.length) {
+        const t = this.explodeBlendT;
+        const s = t * t * (3 - 2 * t);
+        const from = this.explodeBlendFrom;
+        for (let i = 0; i < off.length; i++) off[i] = from[i]! * (1 - s) + off[i]! * s;
+      }
       const inst = this.instanceOfVertex;
       for (let v = 0; v < inst.length; v++) {
         const o = inst[v]! * 3, p = v * 3;

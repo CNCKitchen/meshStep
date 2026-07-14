@@ -19,13 +19,22 @@
 import type { MeasureGeometry, PartNode, SolidInstance } from "../../src/index.ts";
 import type { RawMesh } from "./mesh-utils.ts";
 
+/** How the parts move apart:
+ *  - hierarchical — assembly-tree grouped, mate-axis-aware (the smart default).
+ *  - radial — classic scale-about-COG, ignores hierarchy and mates.
+ *  - axis — stack-up along one direction (auto = dominant mate axis), like a layered drawing.
+ *  - peel — outermost parts fly away first; the slider is "how deep have I disassembled".
+ *  - layout — parts travel to a flat grid in front of the assembly (workbench inventory). */
+export type ExplodeStyle = "hierarchical" | "radial" | "axis" | "peel" | "layout";
+export type ExplodeAxis = "auto" | "x" | "y" | "z";
+
 export interface ExplodeInfo {
   /** Per-triangle instance index (synthesized from solidOfTri for STL/3MF). */
   instanceOfTri: Uint32Array;
   /** Placed occurrences that actually carry geometry — below 2 there is nothing to explode. */
   leafCount: number;
   /** World offset per instance at explode factor f in [0,1], 3 floats per instance. */
-  offsetsAt(f: number): Float64Array;
+  offsetsAt(f: number, style?: ExplodeStyle, axis?: ExplodeAxis): Float64Array;
 }
 
 /** Overall explosion strength: at factor 1 a group's distance from its parent centroid grows
@@ -186,18 +195,24 @@ export function buildExplode(args: {
     if (leaf) strays.push(leaf);
   }
   if (strays.length > 0) root = groupOf(root ? [root, ...strays] : strays);
-  let leafCount = 0;
-  const countLeaves = (n: XNode): void => {
-    if (n.inst >= 0) { leafCount++; return; }
-    for (const k of n.children) countLeaves(k);
+  const leaves: XNode[] = [];
+  const gather = (n: XNode): void => {
+    if (n.inst >= 0) { leaves.push(n); return; }
+    for (const k of n.children) gather(k);
   };
-  if (root) countLeaves(root);
+  if (root) gather(root);
+  const leafCount = leaves.length;
+
+  // Global frame shared by the flat styles: area-weighted centroid, bbox, half diagonal.
+  const C: [number, number, number] = root ? root.c : [0, 0, 0];
+  const GB = root ? root.bb : EMPTY_BB;
+  const R = root ? Math.max(root.r, 1e-9) : 1;
 
   // ---- mate-axis inference: coaxial cylinder pairs across different instances ----
   const mateAxis = new Float64Array(nI * 3); // zero vector = no unambiguous mate
   if (measure && leafCount > 1) inferMateAxes(measure, instances, instanceOfTri, faceOfTri, mesh, mateAxis);
 
-  const offsetsAt = (f: number): Float64Array => {
+  const hierarchicalAt = (f: number): Float64Array => {
     const out = new Float64Array(nI * 3);
     if (!root || f <= 0) return out;
     const fac = Math.min(1, f);
@@ -235,6 +250,160 @@ export function buildExplode(args: {
     };
     walk(root, null, 0, 1, 0, 0, 0);
     return out;
+  };
+
+  // ---- radial: classic scale-about-COG (every part's distance to the centroid grows) ----
+  const radialAt = (f: number): Float64Array => {
+    const out = new Float64Array(nI * 3);
+    if (f <= 0) return out;
+    leaves.forEach((n, k) => {
+      const dx = n.c[0] - C[0], dy = n.c[1] - C[1], dz = n.c[2] - C[2];
+      const g = K * Math.min(1, f);
+      const o = n.inst * 3;
+      if (Math.hypot(dx, dy, dz) < 1e-6 * R) {
+        const [sx, sy, sz] = spreadDir(k);
+        const mag = g * 0.3 * R;
+        out[o] = sx * mag; out[o + 1] = sy * mag; out[o + 2] = sz * mag;
+      } else {
+        out[o] = dx * g; out[o + 1] = dy * g; out[o + 2] = dz * g;
+      }
+    });
+    return out;
+  };
+
+  // ---- axis: stack-up along one direction, proportional to each part's station along it ----
+  const resolveAxis = (axis: ExplodeAxis): [number, number, number] => {
+    if (axis === "x") return [1, 0, 0];
+    if (axis === "y") return [0, 1, 0];
+    if (axis === "z") return [0, 0, 1];
+    // auto: the coordinate axis the mate axes agree on most (screws point along the assembly
+    // direction); with no mates, the axis the part centroids spread along most.
+    const score = [0, 0, 0];
+    let anyMate = false;
+    for (let i = 0; i < nI; i++) {
+      const ax = mateAxis[i * 3]!, ay = mateAxis[i * 3 + 1]!, az = mateAxis[i * 3 + 2]!;
+      if (ax === 0 && ay === 0 && az === 0) continue;
+      anyMate = true;
+      score[0] += Math.abs(ax); score[1] += Math.abs(ay); score[2] += Math.abs(az);
+    }
+    if (!anyMate) {
+      const mean = [0, 0, 0];
+      for (const n of leaves) { mean[0] += n.c[0]; mean[1] += n.c[1]; mean[2] += n.c[2]; }
+      for (let d = 0; d < 3; d++) mean[d] = mean[d]! / Math.max(1, leaves.length);
+      for (const n of leaves) for (let d = 0; d < 3; d++) score[d] += (n.c[d]! - mean[d]!) ** 2;
+    }
+    const best = score[0] >= score[1] && score[0] >= score[2] ? 0 : score[1] >= score[2] ? 1 : 2;
+    return best === 0 ? [1, 0, 0] : best === 1 ? [0, 1, 0] : [0, 0, 1];
+  };
+  const axisAt = (f: number, axis: ExplodeAxis): Float64Array => {
+    if (f <= 0) return new Float64Array(nI * 3);
+    const a = resolveAxis(axis);
+    let pMin = Infinity, pMax = -Infinity;
+    for (const n of leaves) {
+      const p = n.c[0] * a[0] + n.c[1] * a[1] + n.c[2] * a[2];
+      if (p < pMin) pMin = p;
+      if (p > pMax) pMax = p;
+    }
+    const span = pMax - pMin;
+    if (span < 1e-6) return radialAt(f); // everything at one station — nothing to stack
+    const mid = (pMin + pMax) / 2;
+    const out = new Float64Array(nI * 3);
+    // Endpoints travel ~2.2 half-diagonals at f=1 — clears even a flat pancake assembly whose
+    // stacking span (a few mm) is tiny next to its width.
+    const g = Math.min(1, f) * 2.2 * R;
+    for (const n of leaves) {
+      const p = n.c[0] * a[0] + n.c[1] * a[1] + n.c[2] * a[2];
+      const mag = ((p - mid) / (span / 2)) * g;
+      const o = n.inst * 3;
+      out[o] = a[0] * mag; out[o + 1] = a[1] * mag; out[o + 2] = a[2] * mag;
+    }
+    return out;
+  };
+
+  // ---- peel: outer parts leave first, the slider walks inward layer by layer ----
+  let peelRank: Float64Array | null = null; // per-leaf rank in [0,1]: 0 = outermost
+  const peelAt = (f: number): Float64Array => {
+    const out = new Float64Array(nI * 3);
+    if (f <= 0 || leaves.length < 2) return out;
+    if (!peelRank) {
+      // Enclosure-depth proxy: distance of the centroid to the nearest global bbox wall —
+      // shallow = outer shell, deep = core. Rank-based so odd shapes can't skew the pacing.
+      const depth = leaves.map((n, k) => ({
+        k,
+        d: Math.min(
+          n.c[0] - GB[0], GB[3] - n.c[0],
+          n.c[1] - GB[1], GB[4] - n.c[1],
+          n.c[2] - GB[2], GB[5] - n.c[2],
+        ),
+      }));
+      depth.sort((a, b) => a.d - b.d);
+      peelRank = new Float64Array(leaves.length);
+      depth.forEach((e, order) => { peelRank![e.k] = order / (depth.length - 1); });
+    }
+    const fac = Math.min(1, f);
+    leaves.forEach((n, k) => {
+      const rank = peelRank![k]!;
+      const start = 0.7 * rank; // outermost moves immediately; the core waits until f ~ 0.7
+      const local = Math.min(1, Math.max(0, (fac - start) / (1 - start)));
+      if (local <= 0) return;
+      const ease = local * local * (3 - 2 * local);
+      const mag = (1.2 + 1.6 * (1 - rank)) * R * ease; // outer parts also end up farther out
+      let dx = n.c[0] - C[0], dy = n.c[1] - C[1], dz = n.c[2] - C[2];
+      const len = Math.hypot(dx, dy, dz);
+      if (len < 1e-6 * R) [dx, dy, dz] = spreadDir(k);
+      else { dx /= len; dy /= len; dz /= len; }
+      const o = n.inst * 3;
+      out[o] = dx * mag; out[o + 1] = dy * mag; out[o + 2] = dz * mag;
+    });
+    return out;
+  };
+
+  // ---- layout: shelf-pack every part onto a flat grid in front of the assembly (-Y side) ----
+  let layoutTarget: Float64Array | null = null; // per-leaf target centroid (x, y, z)
+  const layoutAt = (f: number): Float64Array => {
+    const out = new Float64Array(nI * 3);
+    if (f <= 0 || leaves.length === 0) return out;
+    if (!layoutTarget) {
+      layoutTarget = new Float64Array(leaves.length * 3);
+      const pad = 0.06 * R;
+      // Big parts first, rows capped near the assembly's width (or the grid's own square).
+      const order = leaves.map((n, k) => ({ k, w: n.bb[3] - n.bb[0] + pad, d: n.bb[4] - n.bb[1] + pad }));
+      let cellArea = 0;
+      for (const it of order) cellArea += it.w * it.d;
+      const W = Math.max(GB[3] - GB[0], Math.sqrt(cellArea) * 1.25);
+      order.sort((a, b) => Math.max(b.w, b.d) - Math.max(a.w, a.d));
+      const x0 = GB[0];
+      let cx = x0, rowY = GB[1] - pad * 3, rowDepth = 0;
+      for (const it of order) {
+        if (cx > x0 && cx + it.w > x0 + W) { cx = x0; rowY -= rowDepth; rowDepth = 0; }
+        const n = leaves[it.k]!;
+        // Cell places the part's bbox; the centroid target keeps its offset inside that bbox,
+        // and the part drops onto the assembly's ground plane (z = global min).
+        layoutTarget[it.k * 3] = cx + (n.c[0] - n.bb[0]);
+        layoutTarget[it.k * 3 + 1] = rowY - it.d + (n.c[1] - n.bb[1]);
+        layoutTarget[it.k * 3 + 2] = GB[2] + (n.c[2] - n.bb[2]);
+        cx += it.w;
+        if (it.d > rowDepth) rowDepth = it.d;
+      }
+    }
+    const fac = Math.min(1, f);
+    leaves.forEach((n, k) => {
+      const o = n.inst * 3;
+      out[o] = (layoutTarget![k * 3]! - n.c[0]) * fac;
+      out[o + 1] = (layoutTarget![k * 3 + 1]! - n.c[1]) * fac;
+      out[o + 2] = (layoutTarget![k * 3 + 2]! - n.c[2]) * fac;
+    });
+    return out;
+  };
+
+  const offsetsAt = (f: number, style: ExplodeStyle = "hierarchical", axis: ExplodeAxis = "auto"): Float64Array => {
+    switch (style) {
+      case "radial": return radialAt(f);
+      case "axis": return axisAt(f, axis);
+      case "peel": return peelAt(f);
+      case "layout": return layoutAt(f);
+      default: return hierarchicalAt(f);
+    }
   };
 
   return { instanceOfTri, leafCount, offsetsAt };

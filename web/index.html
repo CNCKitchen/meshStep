@@ -231,6 +231,19 @@
             <button type="button" class="parts-btn" id="mClear" title="Remove all measurements">Clear</button>
           </div>
           <div class="vp-toolrow" id="explodeRow" hidden>
+            <select id="explodeStyle" class="explode-style" title="How the parts move apart">
+              <option value="hierarchical">Grouped</option>
+              <option value="radial">Radial</option>
+              <option value="axis">Stacked</option>
+              <option value="peel">Peel</option>
+              <option value="layout">Flat lay</option>
+            </select>
+            <span id="explodeAxisSeg" class="explode-axis" hidden>
+              <button type="button" class="parts-btn active" data-axis="auto" title="Stack along the dominant assembly direction">Auto</button>
+              <button type="button" class="parts-btn" data-axis="x" title="Stack along X">X</button>
+              <button type="button" class="parts-btn" data-axis="y" title="Stack along Y">Y</button>
+              <button type="button" class="parts-btn" data-axis="z" title="Stack along Z">Z</button>
+            </span>
             <input type="range" id="explodeRange" min="0" max="1" step="0.01" value="0.5" title="Explosion distance" />
             <button type="button" class="parts-btn" id="explodeCollapse" title="Animate the assembly back together">Collapse</button>
           </div>

@@ -19,7 +19,7 @@ import {
   type EdgeSet,
   type RawMesh,
 } from "./mesh-utils.ts";
-import { buildExplode, type ExplodeInfo } from "./explode.ts";
+import { buildExplode, type ExplodeAxis, type ExplodeInfo, type ExplodeStyle } from "./explode.ts";
 import type { ConvertResult, WorkerOut } from "./worker.ts";
 
 // ---- DOM helpers ----
@@ -59,6 +59,8 @@ const measureRow = $("measureRow");
 const explodeBtn = $<HTMLButtonElement>("explodeBtn");
 const explodeRow = $("explodeRow");
 const explodeRange = $<HTMLInputElement>("explodeRange");
+const explodeStyleSel = $<HTMLSelectElement>("explodeStyle");
+const explodeAxisSeg = $("explodeAxisSeg");
 const explodeCollapse = $<HTMLButtonElement>("explodeCollapse");
 const mDist = $<HTMLButtonElement>("mDist");
 const mEdge = $<HTMLButtonElement>("mEdge");
@@ -150,7 +152,9 @@ let displayMeshBase: RawMesh | null = null; // post color-split, pre autoSmooth
 let faceColorsBase: Float32Array | null = null; // colors matching displayMeshBase's vertices
 let featEdges: EdgeSet | null = null; // current feature/crease overlay segments
 let measureData: ConvertResult["measure"] | null = null;
-let explodeInfo: ExplodeInfo | null = null; // hierarchical + mate-axis explode offsets per model
+let explodeInfo: ExplodeInfo | null = null; // per-model explode offsets (all styles)
+let explodeStyle: ExplodeStyle = "hierarchical"; // session preference, survives model loads
+let explodeAxis: ExplodeAxis = "auto";
 
 let reference: ReferenceSurface | null = null;
 let dev: DeviationResult | null = null;
@@ -430,7 +434,12 @@ function applySmoothing(angleDeg: number): void {
   }
   geo = buildIndexedGeometry(sm.mesh, sm.normals);
   viewer.setMesh(geo, defectEdges, featEdges, colors, solidOfTri);
-  viewer.setExplode(explodeInfo); // after setMesh (which resets the per-model explode state)
+  // After setMesh (which resets the per-model explode state). The wrapper reads the live style
+  // selection, so the dropdown swaps offset functions without touching the viewer's state.
+  viewer.setExplode(explodeInfo && {
+    instanceOfTri: explodeInfo.instanceOfTri,
+    offsetsAt: (f: number) => explodeInfo!.offsetsAt(f, explodeStyle, explodeAxis),
+  });
   viewer.setShowColors(tColors.checked); // the flag persists across loads; match the checkbox
   // After setMesh (which clears measurements). Distance measuring works on bare surface points
   // even when the payload has no analytic edges (AP242 tessellated bodies).
@@ -995,6 +1004,22 @@ explodeBtn.addEventListener("click", () => setExplodeOn(!explodeOn));
 explodeRange.addEventListener("input", () => {
   if (explodeOn) viewer.setExplodeFactor(parseFloat(explodeRange.value) || 0);
 });
+// Style dropdown + stack-axis picker. Switching while exploded cross-blends between the two
+// arrangements (restyleExplode); collapsed, the next explode simply uses the new style.
+explodeStyleSel.addEventListener("change", () => {
+  explodeStyle = explodeStyleSel.value as ExplodeStyle;
+  explodeAxisSeg.hidden = explodeStyle !== "axis";
+  viewer.restyleExplode();
+});
+for (const b of explodeAxisSeg.querySelectorAll<HTMLButtonElement>("[data-axis]")) {
+  b.addEventListener("click", () => {
+    explodeAxis = b.dataset.axis as ExplodeAxis;
+    for (const x of explodeAxisSeg.querySelectorAll<HTMLButtonElement>("[data-axis]")) {
+      x.classList.toggle("active", x === b);
+    }
+    viewer.restyleExplode();
+  });
+}
 explodeCollapse.addEventListener("click", () => {
   explodeRange.value = "0";
   viewer.setExplodeFactor(0, true);
