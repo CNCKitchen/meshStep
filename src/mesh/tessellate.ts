@@ -1128,6 +1128,34 @@ function gridCDT(
     interiorIdx.push(allP2.length); allP2.push([u, v]); allP3.push(surface.evaluate(u, v));
   };
   for (let i = 1; i < nU; i++) for (let j = 1; j < nV; j++) tryAdd(umin + ((umax - umin) * i) / nU, vmin + ((vmax - vmin) * j) / nV);
+  // OFFSET ROW along fine boundaries (advancing-front seed). Where a boundary is sampled far finer
+  // than this face's own target — a 0.5mm thread-root fillet's rail shared with a 1mm-target plane —
+  // the coarse base grid gives Delaunay nothing to pair the dense rail samples with: the first
+  // interior "row" ends up 3-6× the rail spacing, every rail-hugging triangle is a tall sliver fan,
+  // and refinement cannot repair it (a rail triangle's circumcentre lands too close to the boundary
+  // and is rejected by the 0.5·size clearance guard below). Seed one interior point OPPOSITE each
+  // fine segment — its midpoint offset inward by ~0.8 segment lengths, the equilateral row an
+  // advancing-front mesher would build — so the first row matches the rail 1:1 and the size field /
+  // refinement / relaxation grade smoothly from there. tryAdd's own guards drop candidates that land
+  // outside the region (the offset direction is decided by which side is inside), inside a slit
+  // corridor, or on top of another boundary. Fine-uniform faces (target ≈ segment length) add none.
+  // Dense-boundary cap mirrors the refinement's: a boundary of tens of thousands of samples (mega
+  // thread rails on their flat neighbours, StingStopp) would seed a point per segment — ×1.3 the
+  // whole model — where the old fan transition is at least localized and refinement already
+  // declines to grade it.
+  for (const [ax, ay, bx, by, lnTrue] of (sseg.length <= 8000 ? sseg : [])) {
+    const ln = Math.hypot(bx - ax, by - ay);
+    // Fine in TRUE metric, and NOT an anisotropy artifact: a ruling-aligned rail measures short in
+    // the compressed plane but its long triangles are intentional (same reasoning as the grading
+    // length above) — seeding a row against it would crowd micro-triangles along every fillet rail.
+    if (!(ln > 1e-9) || lnTrue >= 0.5 * target || ln < 0.7 * lnTrue) continue;
+    const mx = (ax + bx) / 2, my = (ay + by) / 2;
+    const nx = -(by - ay) / ln, ny = (bx - ax) / ln, h = 0.8 * ln;
+    for (const s of [1, -1]) {
+      const u = (mx + s * h * nx) / uSc, v = (my + s * h * ny) / vSc;
+      if (inRegion([u, v])) { tryAdd(u, v); break; } // inward side only — the other is outside
+    }
+  }
 
   const cdtPts: P2[] = allP2.map(([u, v]) => [SX(u), SY(v)]);
   // KEYHOLE DE-SLIT candidate. A hole joined to the outer boundary by a zero-width corridor
@@ -1385,6 +1413,88 @@ function gridCDT(
   if (requireClosed && prevMissing > 0) {
     if (DBG) console.error(`[grid] fid=${fid} requireClosed: ${prevMissing} constraint(s) unrealised — face declined`);
     return false;
+  }
+  // TANGENTIAL RELAXATION (ODT-style). Where a fine-sampled boundary meets a coarse interior — a
+  // 0.5mm thread-root fillet's rails on a 1mm-target plane — refinement grades the SIZE correctly
+  // but leaves the transition as raw circumcentre inserts: rows of valence-12 fans along the shared
+  // edge and starburst rings around short fine edges (Midea Wasserabfluss thread run-outs), on a
+  // junction that shades perfectly smooth. Relax each interior vertex toward the area-weighted
+  // average of its incident triangles' circumcentres (in the scaled CDT plane, so anisotropic faces
+  // relax in their own metric) and re-run the CDT so Delaunay flips repair the valence. Boundary
+  // vertices never move — the shared edge samples, and thus watertightness, stay untouched. Gated
+  // to faces that actually have a fine-boundary transition, and only when the kept triangulation is
+  // fully constrained (a rescued/degenerate region is too delicate to perturb). Guards mirror the
+  // refinement's own: a moved point must stay in-region with 0.3·size boundary clearance, and a
+  // re-run that loses a constraint is rolled back wholesale.
+  // Anisotropy-compressed faces are excluded: their ruling-aligned rails read as ultra-fine in the
+  // compressed plane by design (the long triangles are the point), the fan transition there is
+  // inherent to that trade, and measured relaxation sweeps change nothing visible — they only cost
+  // a CDT re-run per sweep on every thread flank of a screw.
+  const minBLn = sseg.reduce((m, s) => Math.min(m, s[4] > 1e-9 ? s[4] : m), Infinity);
+  if (!noRefine && prevMissing === 0 && !prevRescue && interiorIdx.length > 0
+    && nBoundaryPts <= 8000 && minBLn < 0.35 * target && uSc === uScale && vSc === vScale) {
+    const interior = new Set(interiorIdx);
+    for (let sweep = 0; sweep < 6; sweep++) {
+      const nP = cdtPts.length;
+      const accX = new Float64Array(nP), accY = new Float64Array(nP), accW = new Float64Array(nP);
+      for (const [a, b, c] of tris) {
+        const A = cdtPts[a]!, B = cdtPts[b]!, C = cdtPts[c]!;
+        const ar = Math.abs((B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]));
+        if (!(ar > 1e-30)) continue;
+        // Circumcentre, falling back to the centroid when it lands far outside (a sliver's
+        // circumcentre shoots off and would drag the whole average with it).
+        const gx = (A[0] + B[0] + C[0]) / 3, gy = (A[1] + B[1] + C[1]) / 3;
+        let px = gx, py = gy;
+        const d = 2 * (A[0] * (B[1] - C[1]) + B[0] * (C[1] - A[1]) + C[0] * (A[1] - B[1]));
+        if (Math.abs(d) > 1e-12) {
+          const a2 = A[0] * A[0] + A[1] * A[1], b2 = B[0] * B[0] + B[1] * B[1], c2 = C[0] * C[0] + C[1] * C[1];
+          const cx2 = (a2 * (B[1] - C[1]) + b2 * (C[1] - A[1]) + c2 * (A[1] - B[1])) / d;
+          const cy2 = (a2 * (C[0] - B[0]) + b2 * (A[0] - C[0]) + c2 * (B[0] - A[0])) / d;
+          const e2 = Math.max(
+            (B[0] - A[0]) ** 2 + (B[1] - A[1]) ** 2,
+            (C[0] - B[0]) ** 2 + (C[1] - B[1]) ** 2,
+            (A[0] - C[0]) ** 2 + (A[1] - C[1]) ** 2,
+          );
+          if ((cx2 - gx) ** 2 + (cy2 - gy) ** 2 <= 4 * e2) { px = cx2; py = cy2; }
+        }
+        if (interior.has(a)) { accX[a] += ar * px; accY[a] += ar * py; accW[a] += ar; }
+        if (interior.has(b)) { accX[b] += ar * px; accY[b] += ar * py; accW[b] += ar; }
+        if (interior.has(c)) { accX[c] += ar * px; accY[c] += ar * py; accW[c] += ar; }
+      }
+      const movedIdx: number[] = [];
+      const oldP2: P2[] = [], oldP3: Vec3[] = [], oldC: P2[] = [];
+      for (const v of interiorIdx) {
+        if (!(accW[v]! > 0)) continue; // orphaned (rolled-back insert) or unreferenced — leave be
+        const px = cdtPts[v]![0] + 0.8 * (accX[v]! / accW[v]! - cdtPts[v]![0]);
+        const py = cdtPts[v]![1] + 0.8 * (accY[v]! / accW[v]! - cdtPts[v]![1]);
+        if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
+        const [sz, dist] = sizeDist(px, py);
+        if (dist < 0.3 * sz) continue;
+        if ((px - cdtPts[v]![0]) ** 2 + (py - cdtPts[v]![1]) ** 2 < (0.02 * sz) ** 2) continue;
+        const u = px / uSc, vv = py / vSc;
+        if (!inRegion([u, vv])) continue;
+        movedIdx.push(v); oldP2.push(allP2[v]!); oldP3.push(allP3[v]!); oldC.push(cdtPts[v]!);
+        allP2[v] = [u, vv]; allP3[v] = surface.evaluate(u, vv); cdtPts[v] = [px, py];
+      }
+      if (movedIdx.length === 0) break;
+      // Re-seat only interior points the kept triangulation references: a refinement rollback may
+      // have orphaned inserts whose re-inclusion would reproduce the very constraint loss it undid.
+      const referenced = new Set<number>();
+      for (const t of tris) { referenced.add(t[0]); referenced.add(t[1]); referenced.add(t[2]); }
+      const liveInterior = interiorIdx.filter((v) => referenced.has(v));
+      const prevTris = tris;
+      tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], liveInterior, cdtOut);
+      if (cdtOut.missing > prevMissing) {
+        if (DBG) console.error(`[grid] fid=${fid} relaxation sweep ${sweep} lost ${cdtOut.missing - prevMissing} constraint(s) — rolled back`);
+        for (let i = 0; i < movedIdx.length; i++) { const v = movedIdx[i]!; allP2[v] = oldP2[i]!; allP3[v] = oldP3[i]!; cdtPts[v] = oldC[i]!; }
+        tris = prevTris;
+        break;
+      }
+      prevMissing = cdtOut.missing;
+      prevRescue = cdtOut.rescue;
+      if (DBG) console.error(`[grid] fid=${fid} relaxation sweep ${sweep}: moved ${movedIdx.length}/${interiorIdx.length} interior pts`);
+      if (movedIdx.length * 10 < interiorIdx.length) break; // converged — nearly everything settled
+    }
   }
   // Surface the CDT's own distress to the import diagnostics: unenforceable boundary constraints
   // mean the face region was reconstructed rather than derived (the class behind every remaining

@@ -382,6 +382,48 @@ function dpSimplify(pts: Vec3[], eps: number, maxSeg: number): Vec3[] {
 }
 
 /**
+ * Collapse ISOLATED short segments left by knot seeding / bisection parity: a polyline vertex whose
+ * incident segment is far shorter than its neighbours' and whose removal deviates less than the
+ * FULL chord tolerance is sampling noise, not geometry. DP alone keeps such vertices (its ε is
+ * chordTol/2, and on a curved edge each point "earns" that much), but downstream the CDT's
+ * boundary-graded size field reads the short segment's length as a local feature size and crowds a
+ * starburst of micro-triangles around the spot — on an edge that shades perfectly smooth.
+ * Endpoints are always kept, so shared-edge welding is unaffected.
+ */
+function mergeShortSegs(pts: Vec3[], chordTol: number, maxSeg: number): Vec3[] {
+  const devDrop = (a: Vec3, p: Vec3, b: Vec3): number => {
+    const ex = b[0] - a[0], ey = b[1] - a[1], ez = b[2] - a[2];
+    const l2 = ex * ex + ey * ey + ez * ez;
+    let w = l2 > 0 ? ((p[0] - a[0]) * ex + (p[1] - a[1]) * ey + (p[2] - a[2]) * ez) / l2 : 0;
+    w = w < 0 ? 0 : w > 1 ? 1 : w;
+    return Math.hypot(p[0] - a[0] - w * ex, p[1] - a[1] - w * ey, p[2] - a[2] - w * ez);
+  };
+  for (let pass = 0; pass < 8 && pts.length > 2; pass++) {
+    let changed = false;
+    const out: Vec3[] = [pts[0]!];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const prev = out[out.length - 1]!, cur = pts[i]!, next = pts[i + 1]!;
+      const lIn = dist(prev, cur), lOut = dist(cur, next);
+      const short = Math.min(lIn, lOut), long = Math.max(lIn, lOut);
+      if (short < 0.5 * long
+        && devDrop(prev, cur, next) <= chordTol
+        && dist(prev, next) <= maxSeg) {
+        // Drop cur, and keep its successor unconditionally this pass: back-to-back drops would
+        // stack deviations that were each only checked against the pre-drop neighbours.
+        changed = true;
+        if (i + 1 < pts.length - 1) { out.push(next); i++; }
+        continue;
+      }
+      out.push(cur);
+    }
+    out.push(pts[pts.length - 1]!);
+    pts = out;
+    if (!changed) break;
+  }
+  return pts;
+}
+
+/**
  * Cut an OPEN sampled polyline down to the sub-arc between an edge's vertices. Some exporters share
  * ONE curve between several EDGE_CURVEs (Shapr3D: a rim's 0.3mm closing sliver and its 5mm dip are
  * arcs of the same open B-spline), so a whole-domain polyline with its endpoints snapped to v0/v1
@@ -564,6 +606,7 @@ export function sampleEdgePolyline(
     // micro-triangles around it. Points a smooth arc needs stay: dropping one of them would leave
     // ~4·chordTol of sag, well over ε.
     pts = dpSimplify(pts, chordTol / 2, maxSegLen);
+    pts = mergeShortSegs(pts, chordTol, maxSegLen);
     // The edge may cover only PART of the curve (exporters share one curve between edges) — cut the
     // whole-domain polyline to the v0..v1 span instead of blindly snapping the domain endpoints.
     const cut = cutOpenPolyline(pts, v0, v1);
@@ -575,7 +618,7 @@ export function sampleEdgePolyline(
   if (kind !== "LINE") {
     const c = makeCurve(t, curveId, s, aRad);
     if (c) {
-      let pts = sampleCurve(c, chordTol, maxSegLen, c.t0, c.t1, normalDev);
+      let pts = mergeShortSegs(sampleCurve(c, chordTol, maxSegLen, c.t0, c.t1, normalDev), chordTol, maxSegLen);
       const ringClosed = pts.length > 3 && dist(pts[0]!, pts[pts.length - 1]!) < Math.max(1e-9, chordTol * 1e-3);
       if (ringClosed) {
         // Closed curve (full circle/intersection ring): its seam start is unrelated to the edge's
