@@ -609,6 +609,39 @@
     },
     "skipped": {}
   },
+  "newtestmodels/SLARP ASSEMBLY": {
+    "hash": "48001a1faa0cf8a1a499c81dd60184383e5e2e4469c08347a9a4ce2c269a233c",
+    "verts": 2619071,
+    "tris": 5238582,
+    "openEdges": 0,
+    "nonManifoldEdges": 2,
+    "volume": 2025008.688,
+    "dispatch": {
+      "band": 578,
+      "coneCap": 3,
+      "coneSlice": 14,
+      "fullPeriodic": 6,
+      "grid": 7437,
+      "ribbon": 2,
+      "thinFace": 11,
+      "unroll": 59
+    },
+    "skipped": {}
+  },
+  "newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2": {
+    "hash": "b3fd6ce16f1094d58eb5b1aa83cff940a19b018a705cdea2d976c7cf19c2f5bd",
+    "verts": 1785235,
+    "tris": 3570874,
+    "openEdges": 0,
+    "nonManifoldEdges": 2,
+    "volume": 1258861.128,
+    "dispatch": {
+      "grid": 5880,
+      "ribbon": 2,
+      "thinFace": 23
+    },
+    "skipped": {}
+  },
   "newtestmodels/Spacemouse TPU sock": {
     "hash": "1922f91a93877fd6716f3fa5c657748e99bd9e4c1a5c9823b8a7f1275c9da05b",
     "verts": 95995,
@@ -865,12 +898,12 @@
     "skipped": {}
   },
   "sourcemodels/nist_ctc_05_asme1_ap242-e1": {
-    "hash": "86ede1e2662d0c69443c0e83f673d5409ff74efb97eb7d201e1d6116c1b9336e",
-    "verts": 1529828,
-    "tris": 3059692,
+    "hash": "667f71d3a5d17a3311760450422a2cf5aa49f59df65c682cbb9598108a5bdca1",
+    "verts": 1530108,
+    "tris": 3060252,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12695066.806,
+    "volume": 12695064.537,
     "dispatch": {
       "band": 36,
       "cone": 10,

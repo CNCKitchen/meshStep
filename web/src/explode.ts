@@ -24,7 +24,8 @@ import type { RawMesh } from "./mesh-utils.ts";
  *  - radial — classic scale-about-COG, ignores hierarchy and mates.
  *  - axis — stack-up along one direction (auto = dominant mate axis), like a layered drawing.
  *  - peel — outermost parts fly away first; the slider is "how deep have I disassembled".
- *  - layout — parts travel to a flat grid in front of the assembly (workbench inventory). */
+ *  - layout — parts travel to a flat grid in front of the assembly (workbench inventory);
+ *    the axis picks the plane's normal ("up"), z = lay flat on the ground plane. */
 export type ExplodeStyle = "hierarchical" | "radial" | "axis" | "peel" | "layout";
 export type ExplodeAxis = "auto" | "x" | "y" | "z";
 
@@ -358,30 +359,42 @@ export function buildExplode(args: {
     return out;
   };
 
-  // ---- layout: shelf-pack every part onto a flat grid in front of the assembly (-Y side) ----
+  // ---- layout: shelf-pack every part onto a flat grid in front of the assembly ----
+  // The axis is the plane's NORMAL ("up"): z lays parts on the ground (XY) plane in front of
+  // the assembly (-Y side), x/y pick the other two coordinate planes with the same convention
+  // (grid along the first remaining axis, rows advancing toward negative on the second).
   let layoutTarget: Float64Array | null = null; // per-leaf target centroid (x, y, z)
-  const layoutAt = (f: number): Float64Array => {
+  let layoutNormal = -1; // axis the cached targets were built for
+  const layoutAt = (f: number, axis: ExplodeAxis): Float64Array => {
     const out = new Float64Array(nI * 3);
     if (f <= 0 || leaves.length === 0) return out;
-    if (!layoutTarget) {
+    const nAx = axis === "x" ? 0 : axis === "y" ? 1 : 2; // auto behaves as z (ground plane)
+    const uAx = nAx === 0 ? 1 : 0;
+    const vAx = nAx === 2 ? 1 : 2;
+    if (!layoutTarget || layoutNormal !== nAx) {
+      layoutNormal = nAx;
       layoutTarget = new Float64Array(leaves.length * 3);
       const pad = 0.06 * R;
       // Big parts first, rows capped near the assembly's width (or the grid's own square).
-      const order = leaves.map((n, k) => ({ k, w: n.bb[3] - n.bb[0] + pad, d: n.bb[4] - n.bb[1] + pad }));
+      const order = leaves.map((n, k) => ({
+        k,
+        w: n.bb[uAx + 3]! - n.bb[uAx]! + pad,
+        d: n.bb[vAx + 3]! - n.bb[vAx]! + pad,
+      }));
       let cellArea = 0;
       for (const it of order) cellArea += it.w * it.d;
-      const W = Math.max(GB[3] - GB[0], Math.sqrt(cellArea) * 1.25);
+      const W = Math.max(GB[uAx + 3]! - GB[uAx]!, Math.sqrt(cellArea) * 1.25);
       order.sort((a, b) => Math.max(b.w, b.d) - Math.max(a.w, a.d));
-      const x0 = GB[0];
-      let cx = x0, rowY = GB[1] - pad * 3, rowDepth = 0;
+      const x0 = GB[uAx]!;
+      let cx = x0, rowY = GB[vAx]! - pad * 3, rowDepth = 0;
       for (const it of order) {
         if (cx > x0 && cx + it.w > x0 + W) { cx = x0; rowY -= rowDepth; rowDepth = 0; }
         const n = leaves[it.k]!;
         // Cell places the part's bbox; the centroid target keeps its offset inside that bbox,
-        // and the part drops onto the assembly's ground plane (z = global min).
-        layoutTarget[it.k * 3] = cx + (n.c[0] - n.bb[0]);
-        layoutTarget[it.k * 3 + 1] = rowY - it.d + (n.c[1] - n.bb[1]);
-        layoutTarget[it.k * 3 + 2] = GB[2] + (n.c[2] - n.bb[2]);
+        // and the part drops onto the plane (normal coordinate = global min).
+        layoutTarget[it.k * 3 + uAx] = cx + (n.c[uAx]! - n.bb[uAx]!);
+        layoutTarget[it.k * 3 + vAx] = rowY - it.d + (n.c[vAx]! - n.bb[vAx]!);
+        layoutTarget[it.k * 3 + nAx] = GB[nAx]! + (n.c[nAx]! - n.bb[nAx]!);
         cx += it.w;
         if (it.d > rowDepth) rowDepth = it.d;
       }
@@ -401,7 +414,7 @@ export function buildExplode(args: {
       case "radial": return radialAt(f);
       case "axis": return axisAt(f, axis);
       case "peel": return peelAt(f);
-      case "layout": return layoutAt(f);
+      case "layout": return layoutAt(f, axis);
       default: return hierarchicalAt(f);
     }
   };

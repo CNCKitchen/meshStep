@@ -352,6 +352,24 @@ function repairWire(
   let best = { asm: base, selfInts: baseInts };
   let bestScore = score(base, baseInts);
   if (slots.length === 0) return best;
+  // A candidate may reshuffle edges WITHIN the baseline's parameter extent (plus slack) but never
+  // GROW it past one period + half: flipping a seam edge outward can "untangle" any loop by
+  // unrolling it one extra period into a clean simple polygon that DOUBLE-COVERS the surface
+  // (SMILEY's Ram Base throat: bottom rim lifted to [-3π,-π], top rim shoved to [-5π,-3π], the
+  // two 2π teleport chords riding the rims — zero strict crossings and the LARGER area, so it
+  // out-scored the true band; the fold audit then rolled the face back and the rail ribbon cut
+  // the throat 2.6mm deep). Strict self-intersection counting is structurally blind to the double
+  // cover (nothing overlaps on the universal cover), so cap the span instead — a genuine repair
+  // never extends it (the collapsed-rails class grows 0 → exactly one period, within the cap).
+  const spanOf = (p2: P2[], c: 0 | 1): number => {
+    let mn = Infinity, mx = -Infinity;
+    for (const q of p2) { if (q[c] < mn) mn = q[c]; if (q[c] > mx) mx = q[c]; }
+    return mx - mn;
+  };
+  const uP = surface.periodicU ? surface.uPeriod || TWO_PI : 0;
+  const vP = surface.periodicV ? surface.vPeriod || TWO_PI : 0;
+  const uCap = uP ? Math.max(spanOf(base.p2, 0), uP) + 0.5 * uP : Infinity;
+  const vCap = vP ? Math.max(spanOf(base.p2, 1), vP) + 0.5 * vP : Infinity;
   const forced = new Int8Array(2 * pcs.length);
   const offsets = [0, 1, -1];
   const total = Math.pow(3, slots.length);
@@ -359,6 +377,7 @@ function repairWire(
     let c = combo;
     for (const s of slots) { forced[s] = offsets[c % 3]!; c = (c / 3) | 0; }
     const asm = assembleWire(surface, pcs, forced);
+    if (spanOf(asm.p2, 0) > uCap || spanOf(asm.p2, 1) > vCap) continue;
     const ints = countSelfIntersections(asm.p2, best.selfInts + 1);
     const sc = score(asm, ints);
     if (sc[0] < bestScore[0] || (sc[0] === bestScore[0] && (sc[1] < bestScore[1]
@@ -710,6 +729,22 @@ function tessellateParamGrid(
   // region never got the face).
   const outerWinds = (!!surface.periodicU && Math.abs(projected[oi]!.lp.windU) >= 1)
     || (!!surface.periodicV && Math.abs(projected[oi]!.lp.windV) >= 1);
+  // TWO winding loops = a band between bare rims, never a disk-with-holes: the outer's parity
+  // region is the sliver between the rim and its period-closing chord, and the other rim is a
+  // zero-area slit "hole" whose constraints the CDT happily realises as collinear chains — so the
+  // requireClosed gate below passes while the fill covers the wrong region entirely (SLARP's
+  // helical-spring tube: the whole coil collapsed to a wisp at one end). Structurally the face
+  // belongs to the band/unroll meshers — decline instead of emitting a plausible-looking leak.
+  if (outerWinds) {
+    for (let i = 0; i < projected.length; i++) {
+      if (i === oi) continue;
+      const lp = projected[i]!.lp;
+      if ((!!surface.periodicU && Math.abs(lp.windU) >= 1) || (!!surface.periodicV && Math.abs(lp.windV) >= 1)) {
+        if (DBG) console.error(`[grid] fid=${fid} bail: outer AND loop ${i} both wind a periodic axis (band between rims)`);
+        return false;
+      }
+    }
+  }
   const v0 = verts.length, f0 = faceIds.length;
   if (!gridCDT(surface, outer, holes, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign, clean, false, false, outerWinds)) return false;
   // FOLD AUDIT. A correct triangulation of a trimmed patch covers each boundary segment exactly as
@@ -1860,6 +1895,183 @@ function tessellatePeriodicUnroll(
           break;
         }
       }
+      // HOLE-SPLICE SEAM (last resort). When windows tile the ENTIRE circumference, every meridian
+      // at every slope crosses several (SLARP's MXL spigot grip: 46 slanted flutes at ~8° pitch,
+      // each spanning ~35°) — no hole-avoiding cut exists, the vertex-cut seam leaves the straddled
+      // windows FOLDED, and their near-period jump chords ride the collinear flute-arc line through
+      // every other flute's vertices: dozens of mutually-blocking constraints, rescue-fill leaks.
+      // Cutting THROUGH holes is legitimate if each straddled hole is SPLIT at the meridian: its two
+      // chains splice into the seam sides (the seam weaves around them), the two cut points lie ON
+      // shared hole chords (the neighbour face gains an exactly-collinear T-vertex, closed by the
+      // zip), and both seam sides sample identical stack stations — identical 3D points — so the
+      // weld seals the cut. Pieces of seam between spliced windows are sampled at the face target.
+      if (conflicted() || foldedHole() || holeLoops.some((h) => countSelfIntersections(h.p2) > 0)) {
+        const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
+        // Contiguous unwrapped around-coords per hole (only non-winding holes reach this mesher).
+        const hA = holes.map((h) => {
+          const a: number[] = [norm(h.p2[0]![c])];
+          for (let i = 1; i < h.p2.length; i++) a.push(a[i - 1]! + wrapD(h.p2[i]![c] - h.p2[i - 1]![c]));
+          return a;
+        });
+        // Meridian scan: each rim crossed exactly once, every hole crossed 0 or exactly 2 times,
+        // maximising the around-distance to the nearest loop VERTEX so every crossing is strictly
+        // transversal (a grazed vertex would make the chain split ambiguous).
+        let aStar = NaN, aMargin = -1;
+        for (let k = 0; k < K; k++) {
+          const ak = ((k + 0.5) * period) / K;
+          if (cross(rims[0]!.p2, ak) !== 1 || cross(rims[1]!.p2, ak) !== 1) continue;
+          let ok = true;
+          for (const h of holes) { const cnt = cross(h.p2, ak); if (cnt !== 0 && cnt !== 2) { ok = false; break; } }
+          if (!ok) continue;
+          let margin = Infinity;
+          for (const arr of [rims[0]!.p2, rims[1]!.p2, ...holes.map((h) => h.p2)]) {
+            for (const q of arr) { const dd = norm(q[c] - ak); const m = Math.min(dd, period - dd); if (m < margin) margin = m; }
+          }
+          if (margin > aMargin) { aMargin = margin; aStar = ak; }
+        }
+        const b2 = Number.isFinite(aStar) ? buildRimCut(rims[0]!, aStar) : null;
+        const t2 = b2 ? buildRimCut(rims[1]!, aStar) : null;
+        splice: if (b2 && t2) {
+          interface Chain { p3: Vec3[]; a: number[]; v: number[] }
+          interface SplicedHole { vLo: number; vHi: number; east: Chain; west: Chain }
+          const spliced: SplicedHole[] = [];
+          const rest: { p3: Vec3[]; p2: P2[] }[] = [];
+          for (let hi = 0; hi < holes.length; hi++) {
+            const h = holes[hi]!, a = hA[hi]!, n = h.p2.length;
+            let amin = Infinity, amax = -Infinity;
+            for (const x of a) { if (x < amin) amin = x; if (x > amax) amax = x; }
+            const m = Math.ceil((amin - aStar) / period);
+            const target = aStar + m * period;
+            if (target >= amax) {
+              // untouched window — shift its whole unwrapped span into [aStar, aStar+period]
+              const kk = Math.ceil((aStar - amin) / period);
+              rest.push({ p3: h.p3, p2: h.p2.map((q, i) => toP2(a[i]! + kk * period, q[stackC])) });
+              continue;
+            }
+            // split at the meridian: exactly two transversal crossings (the scan guaranteed it)
+            const cuts: { seg: number; t: number; v: number; p3: Vec3 }[] = [];
+            for (let i = 0; i < n; i++) {
+              const j = (i + 1) % n;
+              const a0 = a[i]!, a1 = i === n - 1 ? a[0]! : a[j]!;
+              if ((a0 < target) === (a1 < target)) continue;
+              const t = (target - a0) / (a1 - a0);
+              cuts.push({
+                seg: i, t,
+                v: h.p2[i]![stackC] + (h.p2[j]![stackC] - h.p2[i]![stackC]) * t,
+                p3: [
+                  h.p3[i]![0] + (h.p3[j]![0] - h.p3[i]![0]) * t,
+                  h.p3[i]![1] + (h.p3[j]![1] - h.p3[i]![1]) * t,
+                  h.p3[i]![2] + (h.p3[j]![2] - h.p3[i]![2]) * t,
+                ],
+              });
+            }
+            if (cuts.length !== 2) { if (DBG) console.error(`[unroll] fid=${fid} hole-splice: hole ${hi} yields ${cuts.length} cuts — abandoned`); break splice; }
+            cuts.sort((x, y) => x.seg - y.seg || x.t - y.t);
+            const [c1, c2] = cuts as [typeof cuts[0], typeof cuts[0]];
+            const mkChain = (from: typeof c1, to: typeof c1, direct: boolean): Chain => {
+              const p3: Vec3[] = [from.p3], av: number[] = [target], vv: number[] = [from.v];
+              if (!direct) {
+                for (let i = (from.seg + 1) % n; ; i = (i + 1) % n) {
+                  p3.push(h.p3[i]!); av.push(a[i]!); vv.push(h.p2[i]![stackC]);
+                  if (i === to.seg) break;
+                }
+              }
+              p3.push(to.p3); av.push(target); vv.push(to.v);
+              return { p3, a: av, v: vv };
+            };
+            // Both cuts on ONE segment: the forward chain c1->c2 is a direct jump (no corners).
+            const chain1 = mkChain(c1, c2, c1.seg === c2.seg), chain2 = mkChain(c2, c1, false);
+            const side = (ch: Chain): number => { // >0 east of the meridian, <0 west
+              let s = 0;
+              for (let i = 1; i + 1 < ch.a.length; i++) s += ch.a[i]! - target;
+              return s;
+            };
+            const east = side(chain1) >= 0 ? chain1 : chain2;
+            const west = east === chain1 ? chain2 : chain1;
+            if (side(east) < 0 || side(west) > 0) { if (DBG) console.error(`[unroll] fid=${fid} hole-splice: hole ${hi} chains not separated — abandoned`); break splice; }
+            spliced.push({ vLo: Math.min(c1.v, c2.v), vHi: Math.max(c1.v, c2.v), east, west });
+          }
+          if (spliced.length === 0) break splice;
+          // seam intervals must be disjoint and interior to the rim span (disjoint window regions
+          // guarantee it geometrically — verify anyway, a violation would tangle the outer)
+          spliced.sort((x, y) => x.vLo - y.vLo);
+          const vBot = b2.p2[0]![stackC], vTop = t2.p2[0]![stackC];
+          const sLo = Math.min(vBot, vTop), sHi = Math.max(vBot, vTop);
+          let prevHi = sLo;
+          for (const s of spliced) {
+            if (s.vLo <= prevHi || s.vHi >= sHi) { prevHi = Infinity; break; }
+            prevHi = s.vHi;
+          }
+          if (!Number.isFinite(prevHi)) { if (DBG) console.error(`[unroll] fid=${fid} hole-splice: overlapping seam intervals — abandoned`); break splice; }
+          // Seam pieces between spliced windows, sampled at the face target with IDENTICAL stack
+          // stations on both sides (3D-identical points -> the weld closes the seam).
+          const fT = faceTarget(surface, targetEdge, chordTol, normalDev, toP2(aStar, (sLo + sHi) / 2)[0], toP2(aStar, (sLo + sHi) / 2)[1]);
+          const piece = (v0: number, v1: number): { p3: Vec3[]; v: number[] } => {
+            let len = 0, prev = surface.evaluate(...toP2(aStar, v0));
+            for (let i = 1; i <= 8; i++) {
+              const q = surface.evaluate(...toP2(aStar, v0 + ((v1 - v0) * i) / 8));
+              len += Math.hypot(q[0] - prev[0], q[1] - prev[1], q[2] - prev[2]); prev = q;
+            }
+            const nn = Math.min(4096, Math.max(1, Math.ceil(len / Math.max(fT, 1e-9))));
+            const p3: Vec3[] = [], vv: number[] = [];
+            for (let i = 1; i < nn; i++) {
+              const v = v0 + ((v1 - v0) * i) / nn;
+              p3.push(surface.evaluate(...toP2(aStar, v))); vv.push(v);
+            }
+            return { p3, v: vv };
+          };
+          // Ascending stack order for the seam walk; flip if the bottom rim sits at the higher v.
+          const asc = vTop >= vBot;
+          const ordered = asc ? spliced : spliced.slice().reverse();
+          const upP3: Vec3[] = [], upA: number[] = [], upV: number[] = []; // vBot -> vTop, EXCLUSIVE of rim cut points
+          let cursor = vBot;
+          const pushPiece = (v0: number, v1: number): void => {
+            const p = piece(v0, v1);
+            for (let i = 0; i < p.p3.length; i++) { upP3.push(p.p3[i]!); upA.push(NaN); upV.push(p.v[i]!); }
+          };
+          for (const s of ordered) {
+            const [cLo, cHi] = asc ? [s.vLo, s.vHi] : [s.vHi, s.vLo];
+            pushPiece(cursor, cLo);
+            upP3.push(null as unknown as Vec3); upA.push(spliced.indexOf(s)); upV.push(cLo); // sentinel: splice hole index
+            cursor = cHi;
+          }
+          pushPiece(cursor, vTop);
+          // Assemble each side: identical piece samples; per-side chain detours at the sentinels.
+          const sideWalk = (eastSide: boolean): { p3: Vec3[]; p2: P2[] } => {
+            const aEdge = eastSide ? aStar : aStar + period;
+            const p3: Vec3[] = [], p2: P2[] = [];
+            for (let i = 0; i < upP3.length; i++) {
+              if (upP3[i] !== null) { p3.push(upP3[i]!); p2.push(toP2(aEdge, upV[i]!)); continue; }
+              const s = spliced[upA[i]!]!;
+              let ch = eastSide ? s.east : s.west;
+              const wantFirst = asc ? Math.min(ch.v[0]!, ch.v[ch.v.length - 1]!) : Math.max(ch.v[0]!, ch.v[ch.v.length - 1]!);
+              if (ch.v[0]! !== wantFirst) ch = { p3: ch.p3.slice().reverse(), a: ch.a.slice().reverse(), v: ch.v.slice().reverse() };
+              const shift = aEdge - target0(s);
+              for (let j = 0; j < ch.p3.length; j++) {
+                p3.push(ch.p3[j]!);
+                p2.push(toP2(j === 0 || j === ch.p3.length - 1 ? aEdge : ch.a[j]! + shift, ch.v[j]!));
+              }
+            }
+            return { p3, p2 };
+          };
+          // the meridian's unwrapped position for a spliced hole = the a both its cut points carry
+          const target0 = (s: SplicedHole): number => s.east.a[0]!;
+          const up = sideWalk(false);   // right edge (a = aStar + period), vBot -> vTop
+          const down = sideWalk(true);  // left edge (a = aStar), traversed vTop -> vBot below
+          const prevOuter = outer, prevHoles = holeLoops;
+          outer = {
+            p3: [...b2.p3, ...up.p3, ...t2.p3.slice().reverse(), ...down.p3.slice().reverse()],
+            p2: [...b2.p2, ...up.p2, ...t2.p2.slice().reverse(), ...down.p2.slice().reverse()],
+          };
+          holeLoops = rest;
+          if (conflicted() || foldedHole()) {
+            if (DBG) console.error(`[unroll] fid=${fid} hole-splice: rebuild still conflicted — reverted`);
+            outer = prevOuter; holeLoops = prevHoles;
+          } else if (DBG) {
+            console.error(`[unroll] fid=${fid} hole-splice seam at a*=${aStar.toFixed(4)}: ${spliced.length} window(s) split into the seam, ${rest.length} kept as holes (margin ${aMargin.toExponential(1)})`);
+          }
+        }
+      }
     }
     return gridCDT(surface, outer, holeLoops, fid, verts, faceIds, targetEdge, chordTol, normalDev, sign);
   };
@@ -2158,6 +2370,178 @@ function tessellateRevolutionBand(
         const tot = prog[prog.length - 1]! + Math.abs(wrap(angleOf(pts[0]!) - angleOf(pts[pts.length - 1]!)));
         return prog.map((p) => (tot > 1e-12 ? p / tot : 0));
       };
+      // CURVED-COLUMN REWORK (helical springs, long swept tubes). The straight bottom→top chord
+      // wildly understates a coiled column (SLARP's 4in spring: 103mm chord, 713mm arc — with the
+      // 400-ring cap the rings land 1.8mm apart against 0.04mm rim samples: 50:1 slivers), and the
+      // per-angle linear loft smears a rim's obliqueness across the WHOLE band (the spring's ground
+      // end is a plane ⊥ the coil axis, one full pitch — 11mm — of v-waviness; interior rings become
+      // oblique spiral cuts although a constant-v ring here IS a clean perpendicular section). When
+      // the sampled column is measurably curved, rebuild the interior: ring count from true column
+      // ARC length with a v-direction target (column curvature, not the wire-radius-driven blended
+      // target), interior rings decimated to the angular target (rims keep their shared samples;
+      // the rim stitches pair by angular progress), and each rim's waveform confined to a short
+      // transition zone — smoothstep-decayed over ~3× its amplitude — so mid-band rings are clean
+      // constant-v sections. Straight-column bands (drilled holes, hole walls) never enter: their
+      // arc equals the chord and the original loft below stays bit-for-bit.
+      {
+        let bestJ = 0, bestD = -1;
+        for (let j = 0; j < angs.length; j += Math.max(1, angs.length >> 3)) {
+          ti = 0;
+          const d = d3(bottom[j]!, evalAt(c, angs[j]!, hTopAt(progB[j]!)));
+          if (d > bestD) { bestD = d; bestJ = j; }
+        }
+        ti = 0;
+        const hTb = hTopAt(progB[bestJ]!);
+        const NARC = 64;
+        let arc = 0, kappa = 0;
+        {
+          let p0 = bottom[bestJ]!, p1: Vec3 | null = null;
+          for (let i = 1; i <= NARC; i++) {
+            const p = evalAt(c, angs[bestJ]!, hB[bestJ]! + ((hTb - hB[bestJ]!) * i) / NARC);
+            arc += d3(p0, p);
+            if (p1) {
+              // circumradius curvature of the last three samples
+              const a = d3(p1, p0), b = d3(p0, p), e = d3(p1, p);
+              const s = (a + b + e) / 2;
+              const area = Math.sqrt(Math.max(0, s * (s - a) * (s - b) * (s - e)));
+              if (area > 1e-12) kappa = Math.max(kappa, (4 * area) / (a * b * e));
+            }
+            p1 = p0; p0 = p;
+          }
+        }
+        rework: if (arc > 1.05 * span && arc > 4 * target) {
+          // v-direction spacing: the column's own curvature budget, not the blended faceTarget
+          // (whose wire-radius normal-deviation term would 5× oversample the sweep direction).
+          const vsp = Math.max(target, Math.min(
+            targetEdge,
+            kappa > 1e-9 ? (2 * Math.sin(normalDev / 2)) / kappa : Infinity,
+            kappa > 1e-9 ? 2 * Math.sqrt((2 * chordTol) / kappa) : Infinity,
+          ));
+          const nR = Math.max(2, Math.min(4096, Math.ceil(arc / vsp)));
+          const mean = (a: number[]): number => a.reduce((x, y) => x + y, 0) / a.length;
+          const vb = mean(hB), vt = mean(hT);
+          const width = Math.abs(vt - vb) || 1e-12;
+          const ringDv = width / nR;
+          // rim waveforms about their means, at each rim's OWN columns
+          const wBr = hB.map((h) => h - vb), wTr = hT.map((h) => h - vt);
+          const ampB = wBr.reduce((m, x) => Math.max(m, Math.abs(x)), 0);
+          const ampT = wTr.reduce((m, x) => Math.max(m, Math.abs(x)), 0);
+          // Transition lengths: ≥3× the amplitude keeps every column monotone under the smoothstep
+          // (slope ≤ 1.5/L → waveform drift ≤ amp·1.5/(3·amp) = 0.5 of the mean advance), and ≥6
+          // ring spacings spreads the untwist over enough rings to keep quads well-shaped. A band
+          // too short to fit both zones keeps the original linear loft (fold-safe by construction).
+          const LB = Math.max(3 * ampB, 6 * ringDv), LT = Math.max(3 * ampT, 6 * ringDv);
+          if (LB + LT > 0.9 * width) break rework;
+          // All interior rings use ANGLE-UNIFORM columns. Inside a rim's transition zone the
+          // column count is raised until the waveform changes by at most half a ring step per
+          // column (an oblique rim like a spring's ground end has metric slopes of hundreds to
+          // one — at the mid-band column count the waveform would jump millimetres per column
+          // and the rim stitch fans crossed needles; using the rim's own arc-spaced points as
+          // columns instead bunches them 7× tighter than the wire needs and every zone quad
+          // degenerates to a hairline). The rim stitch then pairs two locally-parallel rings by
+          // angular fraction — clean trapezoids — and the zone→mid handoff happens where the
+          // waveform is exactly zero: a fraction-paired fan between two constant-v circles.
+          const vMid = (h0 + h1) / 2;
+          let circ = 0;
+          for (let j = 0; j < 32; j++) {
+            circ += d3(evalAt(c, angs[0]! + (j / 32) * period, vMid), evalAt(c, angs[0]! + ((j + 1) / 32) * period, vMid));
+          }
+          const nP = Math.max(8, Math.min(bottom.length, Math.ceil(circ / target)));
+          const fracB = fracOf(progB, bottom), fracT = fracOf(progT, top);
+          const dir = band.bWind !== 0 ? Math.sign(band.bWind) : wrap(angleOf(bottom[1]!) - angleOf(bottom[0]!)) >= 0 ? 1 : -1;
+          const totAng = progB[progB.length - 1]! + Math.abs(wrap(angleOf(bottom[0]!) - angleOf(bottom[bottom.length - 1]!)));
+          const slopeOf = (prog: number[], hh: number[]): number => {
+            let s = 0;
+            for (let j = 0; j + 1 < hh.length; j++) {
+              const da = prog[j + 1]! - prog[j]!;
+              if (da > 1e-9) s = Math.max(s, Math.abs(hh[j + 1]! - hh[j]!) / da);
+            }
+            return s;
+          };
+          const zoneCols = (slope: number): number =>
+            Math.max(nP, Math.min(4 * Math.max(bottom.length, top.length), Math.ceil((totAng * slope) / (0.5 * ringDv))));
+          const nZB = zoneCols(slopeOf(progB, hB)), nZT = zoneCols(slopeOf(progT, hT));
+          const sampleAt = (frac: number[], hh: number[], s: number): number => {
+            let lo = 0;
+            while (lo + 1 < frac.length && frac[lo + 1]! <= s) lo++;
+            if (lo + 1 >= frac.length) {
+              const d = 1 - frac[frac.length - 1]!;
+              const f = d > 1e-12 ? (s - frac[frac.length - 1]!) / d : 0;
+              return hh[hh.length - 1]! + (hh[0]! - hh[hh.length - 1]!) * Math.max(0, Math.min(1, f));
+            }
+            const d = frac[lo + 1]! - frac[lo]!;
+            const f = d > 1e-12 ? (s - frac[lo]!) / d : 0;
+            return hh[lo]! + (hh[lo + 1]! - hh[lo]!) * f;
+          };
+          const colSet = (n: number, frac: number[] | null, hh: number[] | null): { a: number[]; w: number[]; frac: number[] } => {
+            const a: number[] = [], w: number[] = [], fr: number[] = [];
+            const vm = hh ? mean(hh) : 0;
+            for (let j = 0; j < n; j++) {
+              const s = j / n;
+              a.push(angs[0]! + dir * s * totAng);
+              fr.push(s);
+              w.push(frac && hh ? sampleAt(frac, hh, s) - vm : 0);
+            }
+            return { a, w, frac: fr };
+          };
+          const colsB = colSet(nZB, fracB, hB), colsU = colSet(nP, null, null), colsT = colSet(nZT, fracT, hT);
+          const ss = (x: number): number => { const t = Math.max(0, Math.min(1, x)); return t * t * (3 - 2 * t); };
+          const zoneB = ampB > 0.05 * ringDv, zoneT = ampT > 0.05 * ringDv;
+          // Ring stations, graded: a full ring step against a steep oblique rim makes needles
+          // (the rim tangent there runs ALONG the wire, so the first band's quads are 1mm long
+          // and a rim-segment wide) — start each waveform zone at ringDv/8 and grow geometrically
+          // to the uniform mid-band spacing, so the rings peel away from the rim gradually.
+          const fs: number[] = [];
+          {
+            const gradeIn = (active: boolean): number[] => {
+              const g: number[] = [];
+              if (!active) return g;
+              let s = ringDv / 8, v = 0;
+              while (s < ringDv && v + s < 0.45 * width) { v += s; g.push(v); s *= 1.45; }
+              return g;
+            };
+            const gB = gradeIn(zoneB), gT = gradeIn(zoneT);
+            for (const v of gB) fs.push(v / width);
+            const lo = gB.length ? gB[gB.length - 1]! : 0;
+            const hi = width - (gT.length ? gT[gT.length - 1]! : 0);
+            const nMid = Math.max(1, Math.round((hi - lo) / ringDv));
+            for (let k = 1; k < nMid; k++) fs.push((lo + ((hi - lo) * k) / nMid) / width);
+            if (gT.length) fs.push(hi / width);
+            for (let i = gT.length - 1; i > 0; i--) fs.push((width - gT[i - 1]!) / width);
+          }
+          let prev = bottom, prevFrac: number[] = fracB;
+          for (const f of fs) {
+            const vf = vb + (vt - vb) * f;
+            const lB = zoneB ? ss(1 - (width * f) / LB) : 0;
+            const lT = zoneT ? ss(1 - (width * (1 - f)) / LT) : 0;
+            const cols = lB > 0 ? colsB : lT > 0 ? colsT : colsU;
+            const l = lB > 0 ? lB : lT;
+            const ring = cols.a.map((a, j) => evalAt(c, a, vf + cols.w[j]! * l));
+            if (prev.length === ring.length && prevFrac === cols.frac) {
+              // Same columns: emit quads directly, split along the SHORTER diagonal. In a waveform
+              // zone the quads are tall parallelograms slanted nearly along the wire; the fixed
+              // index-march diagonal of stitchRings picks the long diagonal on half of them, which
+              // caps the strip with near-degenerate slivers whose normals are noise.
+              const n = ring.length;
+              for (let j = 0; j < n; j++) {
+                const j1 = (j + 1) % n;
+                const A = prev[j]!, B = prev[j1]!, C = ring[j]!, D = ring[j1]!;
+                if (d3(A, D) <= d3(B, C)) {
+                  emitTri(verts, faceIds, A, B, D, fid, surface, sign);
+                  emitTri(verts, faceIds, A, D, C, fid, surface, sign);
+                } else {
+                  emitTri(verts, faceIds, A, B, C, fid, surface, sign);
+                  emitTri(verts, faceIds, B, D, C, fid, surface, sign);
+                }
+              }
+            } else stitchRings(verts, faceIds, prev, ring, fid, surface, sign, prevFrac, cols.frac);
+            prev = ring; prevFrac = cols.frac;
+          }
+          stitchRings(verts, faceIds, prev, top, fid, surface, sign, prevFrac, fracT);
+          if (DBG) console.error(`[band] fid=${fid} curved-column rework: arc=${arc.toFixed(1)} (chord ${span.toFixed(1)}) rings=${fs.length}×${nP} zoneCols B:${zoneB ? nZB : "-"} T:${zoneT ? nZT : "-"} ampB=${ampB.toExponential(1)} ampT=${ampT.toExponential(1)}`);
+          continue;
+        }
+      }
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
         ti = 0;

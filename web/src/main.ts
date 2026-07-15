@@ -154,7 +154,8 @@ let featEdges: EdgeSet | null = null; // current feature/crease overlay segments
 let measureData: ConvertResult["measure"] | null = null;
 let explodeInfo: ExplodeInfo | null = null; // per-model explode offsets (all styles)
 let explodeStyle: ExplodeStyle = "hierarchical"; // session preference, survives model loads
-let explodeAxis: ExplodeAxis = "auto";
+let explodeAxis: ExplodeAxis = "auto"; // stack direction for the "axis" style
+let layoutAxis: ExplodeAxis = "z"; // flat-lay plane normal ("up"); no auto — z is the ground plane
 
 let reference: ReferenceSurface | null = null;
 let dev: DeviationResult | null = null;
@@ -438,7 +439,7 @@ function applySmoothing(angleDeg: number): void {
   // selection, so the dropdown swaps offset functions without touching the viewer's state.
   viewer.setExplode(explodeInfo && {
     instanceOfTri: explodeInfo.instanceOfTri,
-    offsetsAt: (f: number) => explodeInfo!.offsetsAt(f, explodeStyle, explodeAxis),
+    offsetsAt: (f: number) => explodeInfo!.offsetsAt(f, explodeStyle, explodeStyle === "layout" ? layoutAxis : explodeAxis),
   });
   viewer.setShowColors(tColors.checked); // the flag persists across loads; match the checkbox
   // After setMesh (which clears measurements). Distance measuring works on bare surface points
@@ -1004,16 +1005,38 @@ explodeBtn.addEventListener("click", () => setExplodeOn(!explodeOn));
 explodeRange.addEventListener("input", () => {
   if (explodeOn) viewer.setExplodeFactor(parseFloat(explodeRange.value) || 0);
 });
-// Style dropdown + stack-axis picker. Switching while exploded cross-blends between the two
+// Style dropdown + axis picker. Switching while exploded cross-blends between the two
 // arrangements (restyleExplode); collapsed, the next explode simply uses the new style.
+// The axis segment is shared by two styles with independent selections: Stacked (direction to
+// stack along, incl. Auto) and Flat lay (plane normal / "up" — Auto is hidden, z is default).
+const axisTips: Record<string, Record<string, string>> = {
+  axis: {
+    auto: "Stack along the dominant assembly direction",
+    x: "Stack along X", y: "Stack along Y", z: "Stack along Z",
+  },
+  layout: {
+    x: "Lay out on the YZ plane (X up)", y: "Lay out on the XZ plane (Y up)", z: "Lay out on the XY plane (Z up)",
+  },
+};
+function syncExplodeAxisSeg(): void {
+  explodeAxisSeg.hidden = explodeStyle !== "axis" && explodeStyle !== "layout";
+  if (explodeAxisSeg.hidden) return;
+  const current = explodeStyle === "layout" ? layoutAxis : explodeAxis;
+  for (const b of explodeAxisSeg.querySelectorAll<HTMLButtonElement>("[data-axis]")) {
+    b.hidden = explodeStyle === "layout" && b.dataset.axis === "auto";
+    b.classList.toggle("active", b.dataset.axis === current);
+    b.title = axisTips[explodeStyle]?.[b.dataset.axis!] ?? b.title;
+  }
+}
 explodeStyleSel.addEventListener("change", () => {
   explodeStyle = explodeStyleSel.value as ExplodeStyle;
-  explodeAxisSeg.hidden = explodeStyle !== "axis";
+  syncExplodeAxisSeg();
   viewer.restyleExplode();
 });
 for (const b of explodeAxisSeg.querySelectorAll<HTMLButtonElement>("[data-axis]")) {
   b.addEventListener("click", () => {
-    explodeAxis = b.dataset.axis as ExplodeAxis;
+    if (explodeStyle === "layout") layoutAxis = b.dataset.axis as ExplodeAxis;
+    else explodeAxis = b.dataset.axis as ExplodeAxis;
     for (const x of explodeAxisSeg.querySelectorAll<HTMLButtonElement>("[data-axis]")) {
       x.classList.toggle("active", x === b);
     }
