@@ -2131,7 +2131,22 @@ function reorientSphere(s: Sphere, loops: BLoop[], sampled: Map<number, Vec3[]>)
   }
   const mL = Math.hypot(mx, my, mz);
   if (dirs.length < 3 || mL < 1e-9 * dirs.length) return s; // no privileged centre (band-like patch)
-  const m: Vec3 = [mx / mL, my / mL, mz / mL];
+  // The plain sample mean is DENSITY-weighted: densifying one boundary edge (the sag-adaptive
+  // B-spline resampling) drags the centre toward that edge and pushes the far corner of a wide
+  // patch past the gate below — a face that used to reorient snaps back to the pole-cornered
+  // frame and dies in the CDT (ABC 00000113: bearing ball-pocket wedges whose apex IS the pole).
+  // Refine toward the minimum-enclosing-cap centre (Badoiu–Clarkson), which depends only on the
+  // patch outline, so the gate reads geometry, not sampling.
+  let m: Vec3 = [mx / mL, my / mL, mz / mL];
+  for (let it = 1; it <= 32; it++) {
+    let w = dirs[0]!, wd = 2;
+    for (const d of dirs) { const t = dot(d, m); if (t < wd) { wd = t; w = d; } }
+    const st = 1 / (it + 1);
+    const nx = m[0] + st * (w[0] - m[0]), ny = m[1] + st * (w[1] - m[1]), nz = m[2] + st * (w[2] - m[2]);
+    const nL = Math.hypot(nx, ny, nz);
+    if (nL < 1e-12) break;
+    m = [nx / nL, ny / nL, nz / nL];
+  }
   let minDot = 1;
   for (const d of dirs) minDot = Math.min(minDot, dot(d, m));
   if (minDot < Math.cos(1.31)) return s; // a point sits > ~75° from the centre — can't clear the poles
