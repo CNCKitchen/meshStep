@@ -3814,6 +3814,180 @@ function tessellatePeriodicRegion(
     sLowEnd = sDom[0]; sHighEnd = sDom[1];
   }
 
+  // POLE PATCH PULL-BACK. A synthetic S-end whose ring collapses to a point (sphere pole,
+  // axis-touching revolution profile) breaks the band CDT two ways: the end row is 8+ parameter
+  // points welding to ONE 3D point (a full-period fan), and the CDT's metric uses the MID-band
+  // circumference, so param-space-nice triangles near the pole are 3D darts — a starburst of
+  // slivers (SKF bearing balls, Midea dome). Pull the band boundary back to the latitude where the
+  // local ring circumference reaches half the mid-band one (u-metric error ≤2× inside the band)
+  // and mesh the polar zone as its OWN patch in an azimuthal chart (ρ·cos u, ρ·sin u; ρ = meridian
+  // arc from the pole) — near-isometric where the band chart degenerates — seeded with concentric
+  // interior rings, the same structure that keeps a full sphere's poles clean. The band's
+  // synthetic chain at the pulled-back latitude doubles as the patch's outer ring, so the join
+  // welds point-for-point. Holes fully on the pole side move INTO the patch (SKF cage-pocket
+  // ellipses hug the ball's poles); a hole straddling the cut pushes the cut toward the pole until
+  // it lands in the band; rims are hard limits. No room -> no patch (the old to-the-pole band).
+  const holeExt = holes.map((h) => {
+    let mn = Infinity, mx = -Infinity;
+    for (const q of h.p2) { const sv = q[S]!; if (sv < mn) mn = sv; if (sv > mx) mx = sv; }
+    return [mn, mx] as [number, number];
+  });
+  let rimLoS = Infinity, rimHiS = -Infinity;
+  for (const r of rims) for (const q of r.p2) { const sv = q[S]!; if (sv < rimLoS) rimLoS = sv; if (sv > rimHiS) rimHiS = sv; }
+  type Cap = { sPole: number; sCap: number; holeIdxs: Set<number> };
+  const capAt = (sEnd: number): Cap | null => {
+    if (arcOver(P, p0, p0 + period, sEnd) > Math.max(1e-9, 1e-3 * circMid)) return null; // real ring, not a pole
+    const dir = Math.sign(sMid - sEnd) || 1;
+    const mS = arcOver(S, sEnd, sMid, p0) / Math.max(Math.abs(sMid - sEnd), 1e-12);
+    const marginS = target / Math.max(mS, 1e-12);
+    const lim = dir > 0 ? Math.min(sMid - marginS, rimLoS - marginS) : Math.max(sMid + marginS, rimHiS + marginS);
+    if ((lim - sEnd) * dir <= 0) return null;
+    let sCap = lim;
+    for (let i = 1; i <= 32; i++) {
+      const s = sEnd + ((lim - sEnd) * i) / 32;
+      if (arcOver(P, p0, p0 + period, s) >= 0.5 * circMid) { sCap = s; break; }
+    }
+    // Assign holes: pole side of the cut -> patch; band side -> band; straddling the cut (within
+    // one target) -> shrink the patch until the hole is banded. Shrinking is monotone toward the
+    // pole, so this terminates.
+    const holeIdxs = new Set<number>();
+    for (let guard = 0; guard <= holes.length; guard++) {
+      let moved = false;
+      holeIdxs.clear();
+      for (let hi = 0; hi < holes.length; hi++) {
+        const [mn, mx] = holeExt[hi]!;
+        const poleSide = dir > 0 ? mx <= sCap - marginS : mn >= sCap + marginS;
+        const bandSide = dir > 0 ? mn >= sCap + marginS : mx <= sCap - marginS;
+        if (poleSide) holeIdxs.add(hi);
+        else if (!bandSide) { sCap = dir > 0 ? mn - marginS : mx + marginS; moved = true; break; }
+      }
+      if (!moved) break;
+      if ((sCap - sEnd) * dir <= 0) return null; // a hole rides the pole — no room
+    }
+    if (arcOver(S, sEnd, sCap, p0) < 1.5 * target) return null; // patch thinner than a ring — not worth it
+    if (DBG) console.error(`[tess] fid=${fid} region: pole patch sEnd=${sEnd.toFixed(3)} sCap=${sCap.toFixed(3)} holes=${holeIdxs.size}`);
+    return { sPole: sEnd, sCap, holeIdxs };
+  };
+  let capLow = sLowEnd !== null ? capAt(sLowEnd) : null;
+  let capHigh = sHighEnd !== null ? capAt(sHighEnd) : null;
+
+  // CDT a polar zone in the azimuthal chart around a pole: x = ρ·cos u, y = ρ·sin u with ρ the
+  // meridian arc from the pole — near-isometric there (a sphere compresses tangentially by only
+  // sin θ/θ), so the CDT's Delaunay quality IS 3D quality, and the chart has no period: every
+  // u-branch collapses via cos/sin, no seam corridor needed. `outer` is the zone boundary in (P,S)
+  // (shared samples — welds watertight); holes are punched as CDT holes; interior points come as
+  // concentric rings at the target spacing plus the pole itself.
+  const polarCDT = (outer: { p2: P2[]; p3: Vec3[] }, holeList: LL[], sPole: number): boolean => {
+    let sFar = sPole;
+    for (const q of outer.p2) if (Math.abs(q[S]! - sPole) > Math.abs(sFar - sPole)) sFar = q[S]!;
+    if (Math.abs(sFar - sPole) < 1e-12) return false;
+    const u0 = outer.p2[0]![P]!;
+    // Meridian arc LUT pole -> sFar: ρ(s), monotone (cumulative), sampled once.
+    const M = 48;
+    const cum: number[] = [0];
+    let prevQ = evalPS(u0, sPole);
+    for (let i = 1; i <= M; i++) {
+      const s = sPole + ((sFar - sPole) * i) / M;
+      const q = evalPS(u0, s);
+      cum.push(cum[i - 1]! + dd(prevQ, q)); prevQ = q;
+    }
+    const rhoMax = cum[M]!;
+    if (!(rhoMax > 1e-9)) return false;
+    // Distortion gate: past ~110° colatitude the tangential compression makes Delaunay meaningless.
+    if (arcOver(P, p0, p0 + period, sFar) < 0.35 * TWO_PI * rhoMax) return false;
+    const rhoOf = (s: number): number => {
+      const t = Math.max(0, Math.min(M, ((s - sPole) / (sFar - sPole)) * M));
+      const i = Math.min(M - 1, Math.floor(t));
+      return cum[i]! + (cum[i + 1]! - cum[i]!) * (t - i);
+    };
+    const sOf = (rho: number): number => {
+      let i = 0;
+      while (i < M - 1 && cum[i + 1]! < rho) i++;
+      const f = Math.max(0, Math.min(1, (rho - cum[i]!) / Math.max(cum[i + 1]! - cum[i]!, 1e-30)));
+      return sPole + ((sFar - sPole) * (i + f)) / M;
+    };
+    const cPts2: P2[] = [], cPts3: (Vec3 | null)[] = [], cPS: P2[] = [];
+    const push = (u: number, s: number, p3: Vec3 | null): number => {
+      const rho = rhoOf(s);
+      cPts2.push([rho * Math.cos(u), rho * Math.sin(u)]);
+      cPts3.push(p3); cPS.push([u, s]);
+      return cPts2.length - 1;
+    };
+    const oIdx: number[] = [];
+    for (let i = 0; i < outer.p2.length; i++) oIdx.push(push(outer.p2[i]![P]!, outer.p2[i]![S]!, outer.p3[i]!));
+    const hIdx: number[][] = [];
+    for (const h of holeList) {
+      const base = cPts2.length;
+      for (let i = 0; i < h.p2.length; i++) push(h.p2[i]![P]!, h.p2[i]![S]!, h.p3[i]!);
+      hIdx.push(h.p2.map((_, i) => base + i));
+    }
+    // Interior seeds keep clear of every constraint segment; segments binned by x-column so big
+    // zones stay O(points + segs).
+    const cSegs: [P2, P2][] = [];
+    const ringSegs = (idx: number[]): void => { for (let i = 0; i < idx.length; i++) cSegs.push([cPts2[idx[i]!]!, cPts2[idx[(i + 1) % idx.length]!]!]); };
+    ringSegs(oIdx); for (const h of hIdx) ringSegs(h);
+    const nCol = Math.max(1, Math.min(2048, Math.ceil((2 * rhoMax) / target)));
+    const colW = (2 * rhoMax) / nCol;
+    const colOf = (x: number): number => Math.max(0, Math.min(nCol - 1, Math.floor((x + rhoMax) / colW)));
+    const colBins: number[][] = Array.from({ length: nCol }, () => []);
+    for (let si = 0; si < cSegs.length; si++) {
+      const [a, b] = cSegs[si]!;
+      const i0 = colOf(Math.min(a[0]!, b[0]!) - target), i1 = colOf(Math.max(a[0]!, b[0]!) + target);
+      for (let i = i0; i <= i1; i++) colBins[i]!.push(si);
+    }
+    const clear = (x: number, y: number): boolean => {
+      for (const si of colBins[colOf(x)]!) {
+        const [a, b] = cSegs[si]!;
+        const bx = b[0]! - a[0]!, by = b[1]! - a[1]!;
+        const l2 = bx * bx + by * by;
+        let t = l2 > 0 ? ((x - a[0]!) * bx + (y - a[1]!) * by) / l2 : 0;
+        t = t < 0 ? 0 : t > 1 ? 1 : t;
+        const dx = x - a[0]! - t * bx, dy = y - a[1]! - t * by;
+        if (dx * dx + dy * dy < 0.36 * target * target) return false;
+      }
+      return true;
+    };
+    // Ring step grows if the zone would blow the seed budget (same rescue sizing as the band grid).
+    const step = target * Math.max(1, Math.sqrt((Math.PI * rhoMax * rhoMax) / (target * target) / 20000));
+    const iIdx: number[] = [];
+    if (clear(0, 0)) iIdx.push(push(u0, sPole, null)); // the pole itself
+    for (let rho = step; rho < rhoMax - 0.5 * target; rho += step) {
+      const nu = Math.max(6, Math.round((TWO_PI * rho) / step));
+      const s = sOf(rho);
+      for (let i = 0; i < nu; i++) {
+        const u = u0 + (TWO_PI * i) / nu;
+        if (!clear(rho * Math.cos(u), rho * Math.sin(u))) continue;
+        iIdx.push(push(u, s, null));
+      }
+    }
+    const cOut = { missing: 0 } as { missing: number; rescue?: string };
+    const cTris = constrainedTriangulate(cPts2, [oIdx, ...hIdx], iIdx, cOut);
+    if (cOut.missing > 0 || cTris.length === 0) {
+      if (DBG) console.error(`[tess] fid=${fid} region: polar CDT missing=${cOut.missing} tris=${cTris.length}`);
+      return false;
+    }
+    const startP = verts.length;
+    for (const [a, b, c] of cTris) {
+      const A3 = cPts3[a] ?? evalPS(cPS[a]![0]!, cPS[a]![1]!);
+      const B3 = cPts3[b] ?? evalPS(cPS[b]![0]!, cPS[b]![1]!);
+      const C3 = cPts3[c] ?? evalPS(cPS[c]![0]!, cPS[c]![1]!);
+      emitTri(verts, faceIds, A3, B3, C3, fid, surface, sign); // normal from the 3D centroid — chart angles wrap
+    }
+    return verts.length > startP;
+  };
+
+  // WHOLE-FACE POLAR CHART: one rim enclosing a pole with no room for a ring cap (the rim climbs
+  // to within a target of the pole — Midea dome, where the dart-stripped rim grazes the apex).
+  // The azimuthal chart meshes rim-to-pole in one CDT with no seam and no metric collapse.
+  if (rims.length === 1 && (sLowEnd !== null) !== (sHighEnd !== null) && !capLow && !capHigh) {
+    const sPole = (sLowEnd ?? sHighEnd)!;
+    if (arcOver(P, p0, p0 + period, sPole) <= Math.max(1e-9, 1e-3 * circMid)
+      && polarCDT(rims[0]!, holes, sPole)) {
+      if (DBG) console.error(`[tess] fid=${fid} region: whole-face polar chart (rim + ${holes.length} holes)`);
+      return true;
+    }
+  }
+
   // After orientation flips a chain's window can sit one period off; re-anchor: the ascending low
   // chain STARTS near u*, the descending high chain ENDS near u*.
   const anchor = (c: { p2: P2[]; p3: Vec3[] }, uStar: number, byEnd: boolean): { p2: P2[]; p3: Vec3[] } => {
@@ -3823,9 +3997,11 @@ function tessellatePeriodicRegion(
     return { p2: c.p2.map((q) => { const r: P2 = [q[0]!, q[1]!]; r[P] = r[P]! + k * period; return r; }), p3: c.p3 };
   };
   let cdtFails = 0; // an expensive CDT-missing failure rarely improves with another corridor — cap at 2
-  for (const uStar of candidates.slice(0, 4)) {
-    const low = anchor(ascending(rimLow ? chainFrom(rimLow, uStar) : syntheticChain(sLowEnd!, uStar, true)), uStar, false);
-    const high = anchor(descending(rimHigh ? chainFrom(rimHigh, uStar) : syntheticChain(sHighEnd!, uStar, false)), uStar, true);
+  const cands = candidates.slice(0, 4);
+  for (let ci = 0; ci < cands.length; ci++) {
+    const uStar = cands[ci]!;
+    const low = anchor(ascending(rimLow ? chainFrom(rimLow, uStar) : syntheticChain(capLow?.sCap ?? sLowEnd!, uStar, true)), uStar, false);
+    const high = anchor(descending(rimHigh ? chainFrom(rimHigh, uStar) : syntheticChain(capHigh?.sCap ?? sHighEnd!, uStar, false)), uStar, true);
     // Right seam: from low's end straight (in parameter) to high's start; left seam = same points
     // one period down. Subdivided by metric length so the two identical 3D copies weld shut.
     const A = low.p2[low.p2.length - 1]!, B = high.p2[0]!;
@@ -3852,9 +4028,12 @@ function tessellatePeriodicRegion(
     if (outerP2.length > 40000) { if (DBG) console.error(`[tess] fid=${fid} region: band boundary too dense (${outerP2.length})`); return false; }
     if (outerP2.length < 3 || countSelfIntersections(outerP2, 1) > 0) { if (DBG) console.error(`[tess] fid=${fid} region: band polygon self-intersects at u*=${uStar.toFixed(3)}`); continue; }
     // Holes: shift each into the band window, verify it lands inside the outer polygon.
+    // Holes assigned to a pole patch are the patch CDT's business — they sit outside the band.
     const holeP2: P2[][] = [], holeP3: Vec3[][] = [];
     let holesOk = true;
-    for (const h of holes) {
+    for (let hi = 0; hi < holes.length; hi++) {
+      if (capLow?.holeIdxs.has(hi) || capHigh?.holeIdxs.has(hi)) continue;
+      const h = holes[hi]!;
       let hp = h.p2.map((q) => [q[0]!, q[1]!] as P2);
       let cen: P2 = [0, 0];
       const centroid = (): void => { cen = [0, 0]; for (const q of hp) { cen[0] += q[0]!; cen[1] += q[1]!; } cen[0] /= hp.length; cen[1] /= hp.length; };
@@ -3980,7 +4159,7 @@ function tessellatePeriodicRegion(
       if (++cdtFails >= 2) return false;
       continue;
     }
-    const start = verts.length;
+    const start = verts.length, startF = faceIds.length;
     for (const [a, b, c] of tris) {
       const A3 = pts3[a] ?? evalPS(pts2[a]![P]!, pts2[a]![S]!);
       const B3 = pts3[b] ?? evalPS(pts2[b]![P]!, pts2[b]![S]!);
@@ -3989,8 +4168,20 @@ function tessellatePeriodicRegion(
       const mv = (pts2[a]![1]! + pts2[b]![1]! + pts2[c]![1]!) / 3;
       emitTri(verts, faceIds, A3, B3, C3, fid, surface, sign, surface.normal(mu, mv));
     }
-    if (DBG) console.error(`[tess] fid=${fid} region: rims=${rims.length} holes=${holes.length} tris=${tris.length} nU=${nU} nV=${nV}`);
-    if (verts.length > start) return true;
+    if (DBG) console.error(`[tess] fid=${fid} region: rims=${rims.length} holes=${holes.length} tris=${tris.length} nU=${nU} nV=${nV}${capLow ? " capLow" : ""}${capHigh ? " capHigh" : ""}`);
+    if (verts.length <= start) continue;
+    // Close each pulled-back pole with a polar-chart CDT seeded from the band chain (identical 3D
+    // points — the weld seals the join), with its pole-hugging holes punched in.
+    const patch = (chain: { p2: P2[]; p3: Vec3[] }, cap: Cap): boolean =>
+      polarCDT({ p2: chain.p2.slice(0, -1), p3: chain.p3.slice(0, -1) }, [...cap.holeIdxs].map((hi) => holes[hi]!), cap.sPole);
+    if ((capLow && !patch(low, capLow)) || (capHigh && !patch(high, capHigh))) {
+      // A failed patch leaves its pole open — roll the band back and redo this corridor with the
+      // plain to-the-pole band (the old behaviour) rather than leak.
+      verts.length = start; faceIds.length = startF;
+      capLow = capHigh = null;
+      ci--; continue;
+    }
+    return true;
   }
   return false;
 }
