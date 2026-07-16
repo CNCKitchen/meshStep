@@ -729,20 +729,20 @@ function tessellateParamGrid(
   // region never got the face).
   const outerWinds = (!!surface.periodicU && Math.abs(projected[oi]!.lp.windU) >= 1)
     || (!!surface.periodicV && Math.abs(projected[oi]!.lp.windV) >= 1);
-  // TWO winding loops = a band between bare rims, never a disk-with-holes: the outer's parity
-  // region is the sliver between the rim and its period-closing chord, and the other rim is a
-  // zero-area slit "hole" whose constraints the CDT happily realises as collinear chains — so the
+  // A WINDING non-outer loop = a band between bare rims, never a disk-with-holes: a genuine hole
+  // is contractible, so a "hole" that winds a periodic axis is really a rim, and its lift is a
+  // zero-area slit whose constraints the CDT happily realises as collinear chains — so the
   // requireClosed gate below passes while the fill covers the wrong region entirely (SLARP's
-  // helical-spring tube: the whole coil collapsed to a wisp at one end). Structurally the face
-  // belongs to the band/unroll meshers — decline instead of emitting a plausible-looking leak.
-  if (outerWinds) {
-    for (let i = 0; i < projected.length; i++) {
-      if (i === oi) continue;
-      const lp = projected[i]!.lp;
-      if ((!!surface.periodicU && Math.abs(lp.windU) >= 1) || (!!surface.periodicV && Math.abs(lp.windV) >= 1)) {
-        if (DBG) console.error(`[grid] fid=${fid} bail: outer AND loop ${i} both wind a periodic axis (band between rims)`);
-        return false;
-      }
+  // helical-spring tube: the whole coil collapsed to a wisp at one end; GA193's handle tube: a
+  // contractible attachment cutout wins the extent vote as "outer", both mouth rims become slit
+  // holes, and the rescue fill leaves every rim segment open). Structurally the face belongs to
+  // the band/unroll meshers — decline instead of emitting a plausible-looking leak.
+  for (let i = 0; i < projected.length; i++) {
+    if (i === oi) continue;
+    const lp = projected[i]!.lp;
+    if ((!!surface.periodicU && Math.abs(lp.windU) >= 1) || (!!surface.periodicV && Math.abs(lp.windV) >= 1)) {
+      if (DBG) console.error(`[grid] fid=${fid} bail: non-outer loop ${i} winds a periodic axis (band between rims)`);
+      return false;
     }
   }
   const v0 = verts.length, f0 = faceIds.length;

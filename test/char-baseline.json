@@ -406,6 +406,26 @@
     },
     "skipped": {}
   },
+  "newtestmodels/Hydraulic Pressure Relief Valve GA193": {
+    "hash": "519a320530ab37044e0915696c450358bacb8f12e46c49e0904aa03117e3c789",
+    "verts": 2744331,
+    "tris": 5488778,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 426505.363,
+    "dispatch": {
+      "band": 425,
+      "cone": 3,
+      "coneCap": 10,
+      "coneSlice": 1,
+      "grid": 4120,
+      "sphereCap": 1,
+      "thinFace": 19,
+      "thinRing": 1,
+      "unroll": 41
+    },
+    "skipped": {}
+  },
   "newtestmodels/insect_water_station_impr": {
     "hash": "33ec3b733d38fe0d70d9c651426d1011087b28f58456cd694f55ef4ca00567a4",
     "verts": 257443,
