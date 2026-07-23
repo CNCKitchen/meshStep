@@ -607,6 +607,30 @@ export function sampleEdgePolyline(
     // ~4·chordTol of sag, well over ε.
     pts = dpSimplify(pts, chordTol / 2, maxSegLen);
     pts = mergeShortSegs(pts, chordTol, maxSegLen);
+    // FULL-CYCLE edge on a nearly-closed curve: the edge's own vertices coincide (one vertex, a
+    // ring boundary) but the curve's seam gap — exporter noise, µm scale — exceeds the 1e-6
+    // closed-ring gate above, so a v0..v1 cut would find both cut points at the same place and
+    // collapse the whole ring to a 2-point polyline (ABC 00014671: an 18-dome family whose apex
+    // rings all sampled to a single point, faces dropped). The edge demonstrably covers the
+    // whole curve — return the full ring rotated to start at the vertex.
+    if (dist(v0, v1) < Math.max(1e-7, Math.min(1e-5, chordTol * 1e-3)) && pts.length > 3) {
+      let lo0 = Infinity, lo1 = Infinity, lo2 = Infinity, hi0 = -Infinity, hi1 = -Infinity, hi2 = -Infinity;
+      for (const p of pts) {
+        if (p[0] < lo0) lo0 = p[0]; if (p[0] > hi0) hi0 = p[0];
+        if (p[1] < lo1) lo1 = p[1]; if (p[1] > hi1) hi1 = p[1];
+        if (p[2] < lo2) lo2 = p[2]; if (p[2] > hi2) hi2 = p[2];
+      }
+      const extent = Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2);
+      if (dist(pts[0]!, pts[pts.length - 1]!) < 0.05 * extent) {
+        const ring = pts.slice(0, -1);
+        if (!sameSense) ring.reverse();
+        let i0 = 0, bd = Infinity;
+        for (let i = 0; i < ring.length; i++) { const d = dist(ring[i]!, v0); if (d < bd) { bd = d; i0 = i; } }
+        const out = [...ring.slice(i0), ...ring.slice(0, i0), v1];
+        out[0] = v0;
+        return out;
+      }
+    }
     // The edge may cover only PART of the curve (exporters share one curve between edges) — cut the
     // whole-domain polyline to the v0..v1 span instead of blindly snapping the domain endpoints.
     const cut = cutOpenPolyline(pts, v0, v1);
@@ -619,7 +643,19 @@ export function sampleEdgePolyline(
     const c = makeCurve(t, curveId, s, aRad);
     if (c) {
       let pts = mergeShortSegs(sampleCurve(c, chordTol, maxSegLen, c.t0, c.t1, normalDev), chordTol, maxSegLen);
-      const ringClosed = pts.length > 3 && dist(pts[0]!, pts[pts.length - 1]!) < Math.max(1e-9, chordTol * 1e-3);
+      // Nearly-closed counts as closed when the EDGE itself is a full cycle (its vertices
+      // coincide): a µm seam gap from exporter noise must not push a ring boundary into the
+      // open-curve cut below, which would collapse it to nothing (see the B-spline block above).
+      let ringClosed = pts.length > 3 && dist(pts[0]!, pts[pts.length - 1]!) < Math.max(1e-9, chordTol * 1e-3);
+      if (!ringClosed && pts.length > 3 && dist(v0, v1) < Math.max(1e-7, Math.min(1e-5, chordTol * 1e-3))) {
+        let lo0 = Infinity, lo1 = Infinity, lo2 = Infinity, hi0 = -Infinity, hi1 = -Infinity, hi2 = -Infinity;
+        for (const p of pts) {
+          if (p[0] < lo0) lo0 = p[0]; if (p[0] > hi0) hi0 = p[0];
+          if (p[1] < lo1) lo1 = p[1]; if (p[1] > hi1) hi1 = p[1];
+          if (p[2] < lo2) lo2 = p[2]; if (p[2] > hi2) hi2 = p[2];
+        }
+        ringClosed = dist(pts[0]!, pts[pts.length - 1]!) < 0.05 * Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2);
+      }
       if (ringClosed) {
         // Closed curve (full circle/intersection ring): its seam start is unrelated to the edge's
         // vertices, so blind endpoint-snapping would fold the polyline back on itself and destroy

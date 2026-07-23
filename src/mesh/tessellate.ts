@@ -2824,7 +2824,12 @@ function tessellateSliverLoop(
     const poly = oe.orient ? base : base.slice().reverse();
     for (let i = 0; i < poly.length - 1; i++) p.push(poly[i]!);
   }
-  const m = p.length; if (m < 4) return false;
+  const m = p.length;
+  // A 3-point boundary has exactly one tessellation — the triangle itself. By the time the
+  // dispatch reaches this last-resort mesher every richer path has declined (ABC 00012547:
+  // ×117 three-edge nm-wide plane slivers, each its own sheet solid, sampled to 3 points).
+  if (m === 3) { emitTri(verts, faceIds, p[0]!, p[1]!, p[2]!, fid, surface, sign); return true; }
+  if (m < 4) return false;
   let cx = 0, cy = 0, cz = 0; for (const q of p) { cx += q[0]; cy += q[1]; cz += q[2]; }
   cx /= m; cy /= m; cz /= m;
   let ax = 0, ay = 0, az = 0, per = 0;
@@ -4568,6 +4573,23 @@ function readTessellated(brep: BrepModel): { verts: number[]; faceIds: number[];
   return { verts, faceIds, solidIds, faces };
 }
 
+/** True when every sampled point of every edge in the loop is one weld-equal 3D point — a
+ * VERTEX-LOOP apex (a closed surface pinching shut at a pole arrives as a zero-length edge).
+ * Tolerance matches the weld quantum (1e-6), so a stripped loop's samples all merge to one
+ * vertex downstream regardless of who references them. */
+function isPointLoop(lp: BLoop, sampled: Map<number, Vec3[]>): boolean {
+  let p0: Vec3 | null = null;
+  for (const oe of lp.edges) {
+    const s = sampled.get(oe.edgeId);
+    if (!s) continue;
+    for (const p of s) {
+      if (!p0) p0 = p;
+      else if (Math.abs(p[0] - p0[0]) > 1e-6 || Math.abs(p[1] - p0[1]) > 1e-6 || Math.abs(p[2] - p0[2]) > 1e-6) return false;
+    }
+  }
+  return p0 !== null;
+}
+
 export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult {
   const chordTol = opts.chordTol ?? 0.01;
   const targetEdge = opts.targetEdge ?? 1.0;
@@ -4674,7 +4696,20 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       // 12 open under a blind version; Ontos' tangent letter engravings never become simple).
       const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * chordTol;
       let nonLocal = false;
+      // A COLLAPSED loop — fewer than 3 weld-distinct sampled points — cannot form a polygon at
+      // all: a sub-tolerance face's boundary can legally lose every interior sample to the
+      // merge/DP floors (a 0.4 mm lens face on a 1.4 m assembly at 0.7 mm chordTol — ABC
+      // 00018177's ×10 fillet slivers), and the face is then unmeshable by anything. Densifying
+      // is provably safe there: the loop currently contributes no geometry whatsoever.
+      const distinct3 = (lp: BLoop, s: Map<number, Vec3[]>): number => {
+        const seen = new Set<string>();
+        for (const oe of lp.edges) for (const p of s.get(oe.edgeId) ?? []) {
+          seen.add(`${Math.round(p[0] / 1e-6)},${Math.round(p[1] / 1e-6)},${Math.round(p[2] / 1e-6)}`);
+        }
+        return seen.size;
+      };
       const tangledLoops = face.loops.filter((lp) => {
+        if (lp.edges.length > 0 && distinct3(lp, sampled) < 3) return true;
         const p2 = loopParam(surface, lp, sampled).p2;
         if (p2.length < 4) return false;
         const pairs: [number, number][] = [];
@@ -4694,6 +4729,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         for (const lp of tangledLoops) for (const oe of lp.edges) ids.add(oe.edgeId);
         for (const id of ids) probe.set(id, resample(id, f));
         const stillBad = tangledLoops.some((lp) => {
+          if (lp.edges.length > 0 && distinct3(lp, probe) < 3) return true; // still collapsed
           const p2 = loopParam(surface, lp, probe).p2;
           return p2.length >= 4 && countSelfIntersections(p2, 1) > 0;
         });
@@ -4805,15 +4841,30 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         // ordinary trimmed patches are untouched, and before the rail ribbon, whose straight loft
         // cut that dome's bulge 4.5mm deep.
         const per = !!(surface.periodicU || surface.periodicV);
+        // VERTEX-LOOP apexes: a loop whose whole sampled polyline is one weld-equal point (a
+        // closed surface pinching shut at a pole exports a zero-length edge). The point imposes
+        // no boundary constraint the weld doesn't already enforce, but its LOOP COUNT hides the
+        // face from every single-loop mesher — a rim + apex dome reads as loops=2, so capDome
+        // (the mesher built for exactly that shape) never runs and the face drops
+        // (ABC 00014671-74: 18 dome faces each). Strip point loops for dispatch; pole-fanning
+        // meshers reach the same point through the surface's own collapsed stack end, and if
+        // EVERY loop is a point the face is a full closed surface. Only when something was
+        // stripped does the dispatch below diverge from the untouched chain.
+        const bLoops = per ? face.loops.filter((lp) => !isPointLoop(lp, sampled)) : face.loops;
+        const bOuter = bLoops.length === face.loops.length ? outer : (bLoops.find((l) => l.outer) ?? bLoops[0]);
         ok = (solid.faces.length === 1 && (surface.closedU || surface.closedV))
           ? mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds))
-          : (!!outer && (mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || (per && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (per && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (per && face.loops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-            || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign))
-            || (per && mark(face.faceId, "region", tessellatePeriodicRegion(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (face.loops.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, outer, sampled, face.faceId, verts, faceIds, sign, chordTol)))));
+          : bLoops.length === 0 && face.loops.length > 0
+            ? ((surface.closedU || surface.closedV)
+              && mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)))
+              || mark(face.faceId, "fullPeriodic", tessellateFullPeriodic(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds, brep, sampled))
+            : (!!bOuter && (mark(face.faceId, "grid", tessellateParamGrid(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+              || (per && mark(face.faceId, "band", tessellateRevolutionBand(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+              || (per && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+              || (per && bLoops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, bOuter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+              || mark(face.faceId, "ribbon", tessellateRibbon(surface, bLoops, sampled, face.faceId, verts, faceIds, sign))
+              || (per && mark(face.faceId, "region", tessellatePeriodicRegion(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+              || (bLoops.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, bOuter, sampled, face.faceId, verts, faceIds, sign, chordTol)))));
       } else if (outer) {
         // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
         //  1. band: rims are bare full-period circles (no seam edges, e.g. Onshape) with NO other

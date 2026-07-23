@@ -630,9 +630,9 @@
     "skipped": {}
   },
   "newtestmodels/SLARP ASSEMBLY": {
-    "hash": "acdd72b50ea2f98e83c02f77f10b05f7dfeece9af0237ea250a0f17838cc7b21",
-    "verts": 2578904,
-    "tris": 5158248,
+    "hash": "4534e44ac3ea971ba02868b7baa0201f3204a0bec19460c03966e7ddb368576b",
+    "verts": 2579016,
+    "tris": 5158472,
     "openEdges": 0,
     "nonManifoldEdges": 2,
     "volume": 2025009.896,
@@ -642,23 +642,21 @@
       "coneSlice": 14,
       "fullPeriodic": 6,
       "grid": 7437,
-      "ribbon": 2,
-      "thinFace": 11,
+      "thinFace": 13,
       "unroll": 59
     },
     "skipped": {}
   },
   "newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2": {
-    "hash": "0446626c04b854dd76bee1a58353e54a9b24034e8b7e5d26e31c5b2174d7face",
-    "verts": 1726081,
-    "tris": 3452566,
+    "hash": "0f02ef65c1baa22c457cac52dbebd7d8035e8c806ce65c2e186c6c206ba67dd7",
+    "verts": 1726095,
+    "tris": 3452594,
     "openEdges": 0,
     "nonManifoldEdges": 2,
     "volume": 1258861.307,
     "dispatch": {
       "grid": 5880,
-      "ribbon": 2,
-      "thinFace": 23
+      "thinFace": 25
     },
     "skipped": {}
   },
