@@ -316,21 +316,74 @@ function earClip(pts: P2[], ring: number[], out: [number, number, number][]): bo
 function boundaryFillWithInterior(pts: P2[], ring: number[], interior: number[]): [number, number, number][] | null {
   const out: [number, number, number][] = [];
   if (!earClip(pts, ring, out) || out.length === 0) return null;
+  // Point location: a linear scan of `out` per interior point is O(interior × triangles) and alone
+  // consumed ~95% of a whole-model profile (ABC 00015249: 480k interior points, 580 s). Locate
+  // instead via (a) a uniform grid over the INITIAL ear-clip triangles only — that set is static,
+  // so its long-fan triangles register their bbox cells exactly once — and (b) a history tree
+  // through the splits: each split records its three children, and a later point walks down by
+  // strict containment. Children tile their parent disjointly under the strict margin, so the
+  // located leaf is the unique strict container — the same triangle the linear first-match scan
+  // found. The `out` array itself is built exactly as before.
+  const na: number[] = [], nb: number[] = [], nc: number[] = [], oIdx: number[] = [];
+  const k0: number[] = [], k1: number[] = [], k2: number[] = [];
+  const addNode = (a: number, b: number, c: number, outIdx: number): number => {
+    na.push(a); nb.push(b); nc.push(c); oIdx.push(outIdx); k0.push(-1); k1.push(-1); k2.push(-1);
+    return na.length - 1;
+  };
+  const strictIn = (nd: number, p: P2): boolean => {
+    const A = pts[na[nd]!]!, B = pts[nb[nd]!]!, C = pts[nc[nd]!]!;
+    const m = 1e-3 * Math.abs(orient(A, B, C));
+    return orient(A, B, p) > m && orient(B, C, p) > m && orient(C, A, p) > m;
+  };
+  // Descent test: OPEN containment, no margin. The strict margin scales with triangle area, so a
+  // point far inside a small leaf can still fail its large ANCESTOR's margin — descending on the
+  // strict test would drop points the linear scan accepted. Open interiors of siblings are
+  // disjoint and a leaf's interior nests inside every ancestor's, so the loose walk reaches the
+  // unique candidate leaf; the strict test then decides at the leaf exactly as the scan did.
+  const looseIn = (nd: number, p: P2): boolean => {
+    const A = pts[na[nd]!]!, B = pts[nb[nd]!]!, C = pts[nc[nd]!]!;
+    return orient(A, B, p) > 0 && orient(B, C, p) > 0 && orient(C, A, p) > 0;
+  };
+  const initN = out.length;
+  let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
+  for (const v of ring) { const p = pts[v]!; if (p[0] < minx) minx = p[0]; if (p[0] > maxx) maxx = p[0]; if (p[1] < miny) miny = p[1]; if (p[1] > maxy) maxy = p[1]; }
+  const gN = Math.max(1, Math.min(256, Math.ceil(Math.sqrt(initN))));
+  const gw = Math.max(maxx - minx, 1e-300) / gN, gh = Math.max(maxy - miny, 1e-300) / gN;
+  const gx = (x: number): number => Math.min(gN - 1, Math.max(0, Math.floor((x - minx) / gw)));
+  const gy = (y: number): number => Math.min(gN - 1, Math.max(0, Math.floor((y - miny) / gh)));
+  const cells = new Map<number, number[]>();
+  for (let k = 0; k < initN; k++) {
+    addNode(out[k]![0], out[k]![1], out[k]![2], k);
+    const A = pts[out[k]![0]]!, B = pts[out[k]![1]]!, C = pts[out[k]![2]]!;
+    const x0 = gx(Math.min(A[0], B[0], C[0])), x1 = gx(Math.max(A[0], B[0], C[0]));
+    const y0 = gy(Math.min(A[1], B[1], C[1])), y1 = gy(Math.max(A[1], B[1], C[1]));
+    for (let ix = x0; ix <= x1; ix++) for (let iy = y0; iy <= y1; iy++) {
+      const key = ix * gN + iy;
+      const arr = cells.get(key); if (arr) arr.push(k); else cells.set(key, [k]);
+    }
+  }
   for (const pi of interior) {
     const p = pts[pi]!;
     // Split only the triangle that STRICTLY contains pi (a clear margin from every edge). A point on
     // (or hugging) a shared edge would split one side only and leave a T-junction = non-manifold; such
     // points are simply skipped, costing a little interior density, never watertightness.
-    let found = -1;
-    for (let k = 0; k < out.length; k++) {
-      const [a, b, c] = out[k]!, A = pts[a]!, B = pts[b]!, C = pts[c]!;
-      const m = 1e-3 * Math.abs(orient(A, B, C));
-      if (orient(A, B, p) > m && orient(B, C, p) > m && orient(C, A, p) > m) { found = k; break; }
+    // (min initial-node id = min out index = the linear scan's first match)
+    let nd = -1;
+    for (const k of cells.get(gx(p[0]) * gN + gy(p[1])) ?? []) {
+      if (nd >= 0 && k >= nd) continue;
+      if (looseIn(k, p)) nd = k;
     }
-    if (found < 0) continue;
+    while (nd >= 0 && k0[nd]! >= 0) {
+      nd = looseIn(k0[nd]!, p) ? k0[nd]! : looseIn(k1[nd]!, p) ? k1[nd]! : looseIn(k2[nd]!, p) ? k2[nd]! : -1;
+    }
+    if (nd < 0 || !strictIn(nd, p)) continue;
+    const found = oIdx[nd]!;
     const [a, b, c] = out[found]!;
     out[found] = [a, b, pi];
     out.push([b, c, pi], [c, a, pi]);
+    k0[nd] = addNode(a, b, pi, found);
+    k1[nd] = addNode(b, c, pi, out.length - 2);
+    k2[nd] = addNode(c, a, pi, out.length - 1);
   }
   return out;
 }
@@ -730,14 +783,35 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     return true;
   };
   let unrealized = 0, chainRealized = 0;
-  for (const ck of constraints) {
-    if (present.has(ck)) continue;
-    unrealized++;
-    const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
-    // Cavity enforcement first — it realises the constraint EXACTLY whenever a cavity exists.
-    // Only when it can't (crossed=0: nothing to flip, no cavity to fill) fall back to accepting a
-    // geometrically-identical realisation (duplicate pair / collinear chain).
-    if (!enforceByRetriangulation(m, pts, a, b, constraints) && chainSplit(ck)) chainRealized++;
+  for (const ck of constraints) if (!present.has(ck)) unrealized++;
+  // Cavity enforcement is a repair for a FEW stuck constraints (non-convex quads the flip pass
+  // couldn't turn). A boundary whose lift is systemically degenerate (a collapsed param domain)
+  // arrives with HUNDREDS of unrealisable constraints, every attempt pays a full O(triangles)
+  // crossed-scan plus two O(points) chainSplit scans, and even the attempts that "succeed" cannot
+  // save the face — ABC 00011952 spent 90 s repairing 450 of 1,134 unrealised constraints on a
+  // 628k-point CDT and still ended 687 missing (face untriangulated regardless). When a large
+  // absolute AND relative share of the boundary failed the flip pass, skip enforcement wholesale
+  // and let the missing count route the face to its rescue. Healthy repair cases are single
+  // digits; the streak backstop below cuts off the long-tail in between.
+  const bulkDegenerate = unrealized > 64 && unrealized > 0.25 * constraints.size;
+  if (!bulkDegenerate) {
+    // Consecutive-failure streak: after enough attempts fail in a row with not one success, the
+    // rest are lost causes too. Any success resets the streak, so a large-but-repairable
+    // boundary is never cut off.
+    let failStreak = 0;
+    for (const ck of constraints) {
+      if (present.has(ck)) continue;
+      if (failStreak >= 48) continue;
+      const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
+      // Cavity enforcement first — it realises the constraint EXACTLY whenever a cavity exists.
+      // Only when it can't (crossed=0: nothing to flip, no cavity to fill) fall back to accepting
+      // a geometrically-identical realisation (duplicate pair / collinear chain).
+      if (enforceByRetriangulation(m, pts, a, b, constraints)) failStreak = 0;
+      else if (chainSplit(ck)) { chainRealized++; failStreak = 0; }
+      else failStreak++;
+    }
+  } else if (DBG) {
+    console.error(`[cdt] enforcement skipped: ${unrealized}/${constraints.size} constraints unrealised after flips — systemically degenerate boundary`);
   }
   if (DBG && Date.now() - dbgT0 > 500) {
     console.error(`[cdt] SLOW n=${n} constraints=${constraints.size} unrealized=${unrealized}: insert=${dbgT1 - dbgT0}ms force=${dbgT2 - dbgT1}ms enforce=${Date.now() - dbgT2}ms`);

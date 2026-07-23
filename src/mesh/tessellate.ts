@@ -1109,6 +1109,13 @@ function gridCDT(
   const hkey = (ix: number, iy: number): number => Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663);
   const segHash = new Map<number, number[]>();
   for (let i = 0; i < sseg.length; i++) { const k = hkey(Math.floor((sseg[i]![0] + sseg[i]![2]) / 2 / csz), Math.floor((sseg[i]![1] + sseg[i]![3]) / 2 / csz)); (segHash.get(k) ?? segHash.set(k, []).get(k)!).push(i); }
+  // Flat copy for the hot scan below: sizeDist is the single most-queried function on large
+  // models (a query per base-grid cell, per candidate circumcentre per refinement iteration), and
+  // tuple-array destructuring plus an unconditional Math.hypot per segment dominated whole-model
+  // profiles. Distances compare in SQUARED form; the hypot is taken only for the winning segment
+  // and for the rare segments fine enough to tighten the size bound, so results are unchanged.
+  const segF = new Float64Array(sseg.length * 5);
+  for (let i = 0; i < sseg.length; i++) { const s = sseg[i]!; const o = i * 5; segF[o] = s[0]; segF[o + 1] = s[1]; segF[o + 2] = s[2]; segF[o + 3] = s[3]; segF[o + 4] = s[4]; }
   const floor = target / 40;
   const sizeDist = (sx: number, sy: number): [number, number] => {
     // Out-of-range query = a degenerate triangle's circumcenter blew up. Without this guard the
@@ -1119,18 +1126,24 @@ function gridCDT(
     // refined where it actually bends, not just at the patch midpoint — and (b) the boundary-graded
     // size, growing from each edge's own length outward. Capped at the face target, floored to bound.
     let size = faceTarget(surface, targetEdge, chordTol, normalDev, sx / uSc, sy / vSc);
-    let dist = Infinity, cx = Math.floor(sx / csz), cy = Math.floor(sy / csz);
+    let d2min = Infinity, dxMin = 0, dyMin = 0;
+    const cx = Math.floor(sx / csz), cy = Math.floor(sy / csz);
     for (let gx = cx - 2; gx <= cx + 2; gx++) for (let gy = cy - 2; gy <= cy + 2; gy++) {
       const arr = segHash.get(hkey(gx, gy)); if (!arr) continue;
-      for (const i of arr) {
-        const [ax, ay, bx, by, ln] = sseg[i]!, ex = bx - ax, ey = by - ay, l2 = ex * ex + ey * ey;
+      for (let k = 0; k < arr.length; k++) {
+        const o = arr[k]! * 5;
+        const ax = segF[o]!, ay = segF[o + 1]!, ex = segF[o + 2]! - ax, ey = segF[o + 3]! - ay, ln = segF[o + 4]!;
+        const l2 = ex * ex + ey * ey;
         let tt = l2 > 0 ? ((sx - ax) * ex + (sy - ay) * ey) / l2 : 0; tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
-        const d = Math.hypot(sx - (ax + tt * ex), sy - (ay + tt * ey));
-        if (d < dist) dist = d;
-        const s = ln + 0.45 * d; if (s < size) size = s;
+        const dx = sx - (ax + tt * ex), dy = sy - (ay + tt * ey), d2 = dx * dx + dy * dy;
+        if (d2 < d2min) { d2min = d2; dxMin = dx; dyMin = dy; }
+        if (ln < size) { // s = ln + 0.45·d can only tighten when ln alone is under the bound
+          const lim = size - ln;
+          if (0.2025 * d2 < lim * lim) { const s = ln + 0.45 * Math.hypot(dx, dy); if (s < size) size = s; }
+        }
       }
     }
-    return [Math.max(floor, size), dist];
+    return [Math.max(floor, size), d2min === Infinity ? Infinity : Math.hypot(dxMin, dyMin)];
   };
   // Base interior: a uniform grid at the (coarse) face target. Refinement adds the fine detail.
   const interiorIdx: number[] = [];
@@ -1362,40 +1375,59 @@ function gridCDT(
     return false;
   };
   for (const p of cdtPts) dupSeen.add(dupKey(p[0], p[1]));
+  // Points never move during refinement (they are only appended), so a triangle that survives a
+  // re-triangulation reaches the identical verdict every iteration — memoize the stable skips
+  // (degenerate, small-enough, out-of-region, boundary-hugging, already-seen duplicate) so later
+  // iterations pay one Set lookup instead of a sizeDist scan per surviving triangle.
+  const memo = maxIter > 1; // a single-pass refinement has no later iteration to reuse verdicts
+  const skipTri = new Set<string>();
+  const triKey = (a: number, b: number, c: number): string => {
+    const lo = a < b ? (a < c ? a : c) : (b < c ? b : c);
+    const hi = a > b ? (a > c ? a : c) : (b > c ? b : c);
+    return `${lo},${a + b + c - lo - hi},${hi}`;
+  };
   for (let iter = 0; iter < maxIter && interiorIdx.length < cap; iter++) {
-    const fresh: [number, number, number][] = []; // (px, py, local size) — sizeDist carried to the dedup pass
+    const fresh: [number, number, number, string][] = []; // (px, py, local size, tri key) — sizeDist carried to the dedup pass
     for (const [a, b, c] of tris) {
+      let key = "";
+      if (memo) { key = triKey(a, b, c); if (iter > 0 && skipTri.has(key)) continue; }
       const A = cdtPts[a]!, B = cdtPts[b]!, C = cdtPts[c]!;
       const d = 2 * (A[0] * (B[1] - C[1]) + B[0] * (C[1] - A[1]) + C[0] * (A[1] - B[1]));
-      if (Math.abs(d) < 1e-12) continue;
+      if (Math.abs(d) < 1e-12) { if (memo) skipTri.add(key); continue; }
       const a2 = A[0] * A[0] + A[1] * A[1], b2 = B[0] * B[0] + B[1] * B[1], c2 = C[0] * C[0] + C[1] * C[1];
       let px = (a2 * (B[1] - C[1]) + b2 * (C[1] - A[1]) + c2 * (A[1] - B[1])) / d;
       let py = (a2 * (C[0] - B[0]) + b2 * (A[0] - C[0]) + c2 * (B[0] - A[0])) / d;
       // Degenerate (near-zero-area) triangle: the circumcenter blows up. Beyond ~2^53 the integer
       // cell loops in sizeDist/dupHas cannot terminate (x+1 === x), so bound the magnitude — 1e12
       // in metric-scaled units is far beyond any real face.
-      if (!(Math.abs(px) < 1e12 && Math.abs(py) < 1e12)) continue;
+      if (!(Math.abs(px) < 1e12 && Math.abs(py) < 1e12)) { if (memo) skipTri.add(key); continue; }
       const r = Math.hypot(px - A[0], py - A[1]);
+      // sizeDist never returns below `floor`, so a circumradius under 0.65·floor can never refine —
+      // skip without paying the boundary-segment scan at all.
+      if (r <= 0.65 * floor) { if (memo) skipTri.add(key); continue; }
       let [sz, dist] = sizeDist(px, py);
       // Refine where the circumradius exceeds 0.65× the local size: fills the graded band near a
       // fine boundary (fillet-into-chamfer), follows intra-face curvature the base grid under-sampled,
       // and improves Delaunay quality generally. The remesh later coarsens over-dense flat regions.
-      if (r <= sz * 0.65) continue;
+      if (r <= sz * 0.65) { if (memo) skipTri.add(key); continue; }
       let u = px / uSc, v = py / vSc;
       if (!inRegion([u, v])) {
         px = (A[0] + B[0] + C[0]) / 3; py = (A[1] + B[1] + C[1]) / 3; u = px / uSc; v = py / vSc;
-        if (!inRegion([u, v])) continue;
+        if (!inRegion([u, v])) { if (memo) skipTri.add(key); continue; }
         [sz, dist] = sizeDist(px, py); // moved to the centroid — re-query there
       }
-      if (dist < 0.5 * sz) continue;
-      fresh.push([px, py, sz]);
+      if (dist < 0.5 * sz) { if (memo) skipTri.add(key); continue; }
+      fresh.push([px, py, sz, key]);
     }
     if (!fresh.length) break;
     // Dedup new points that fall within ~half a local size of each other (avoid over-insertion).
     const acc = new Map<number, [number, number][]>();
     let added = false;
-    for (const [px, py, sz] of fresh) {
-      if (dupHas(px, py)) continue;
+    for (const [px, py, sz, key] of fresh) {
+      // dupSeen only ever grows, so a duplicate-rejected proposal is rejected forever — the
+      // proposing triangle (if it survives) need never be reconsidered. An acc-proximity
+      // rejection below is NOT stable (acc resets each iteration) and stays unmemoized.
+      if (dupHas(px, py)) { if (memo) skipTri.add(key); continue; }
       const hx = Math.floor(px / sz), hy = Math.floor(py / sz);
       let ok = true;
       for (let gx = hx - 1; gx <= hx + 1 && ok; gx++) for (let gy = hy - 1; gy <= hy + 1 && ok; gy++) {
