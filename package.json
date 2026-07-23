@@ -32,13 +32,17 @@
     "build": "tsc -p tsconfig.build.json",
     "test": "node test/convert.ts",
     "test:stl": "node test/stl-roundtrip.ts",
+    "test:units": "node test/units.ts",
+    "test:faces": "node test/face-info.ts",
+    "test:attrs": "node test/attributes.ts",
+    "test:abort": "node test/abort.ts",
     "test:3mf": "node test/threemf.ts",
     "char": "node --max-old-space-size=16384 test/char.ts",
     "inspect": "node test/inspect.ts",
     "entities": "node test/step-inspect.ts",
     "gapcheck": "node test/gapcheck.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run build && npm run test:stl"
+    "prepublishOnly": "npm run typecheck && npm run build && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort"
   },
   "keywords": [
     "step",

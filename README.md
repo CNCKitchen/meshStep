@@ -52,7 +52,15 @@ meshStep starts from the opposite end: **the mesh is the product.**
   `STYLED_ITEM` chains into a palette plus per-face / per-body indices, so a viewer can render
   the CAD colors and tools can group surfaces by shared color. And `structure` exposes the
   product tree (part names, assembly hierarchy, occurrence counts) keyed to the same body ids,
-  so per-part selection and hiding work straight off the mesh.
+  so per-part selection and hiding work straight off the mesh. `faces` adds per-face metadata —
+  normalized surface class (plane/cylinder/sphere/…), analytic origin/axis/radius, mesh area and
+  mean normal — so "select this whole CAD face" or "mask every planar face" are one lookup, no
+  dihedral-angle heuristics.
+- **Analytic attributes on demand.** `vertexNormals: true` evaluates exact per-vertex normals
+  from the B-rep surfaces (a coarse cylinder still displaces/shades with perfectly radial
+  normals — no faceting bands), and `parameterUVs: true` exports each face's own parameter-space
+  (u,v) per triangle corner, so textures can wrap a periodic surface seamlessly in its native
+  parameterization.
 - **The true surface stays available.** The optional isotropic remesh (`remesh: true`)
   splits/collapses/flips/smooths toward uniform, near-equilateral triangles and reprojects every
   vertex onto the exact analytic/NURBS surface (feature edges frozen) — quality passes converge
@@ -186,14 +194,38 @@ const walk = (node, depth = 0) => {
   node.children.forEach((c) => walk(c, depth + 1));
 };
 walk(result.structure);
+
+// Per-face metadata: surface class + analytic identity + area/normal, keyed by faceOfTri ids.
+const info = result.faces.get(result.faceOfTri[t]);
+// info.type: "plane" | "cylinder" | "cone" | "sphere" | "torus" | "bspline" | ...
+// info.surface: { kind, origin?, axis?, radius?, semiAngle? }  (part-local, mm / radians)
+// info.area (mm²), info.meanNormal (unit, outward), info.triangleCount
+```
+
+Analytic attributes (both opt-in, computed by projecting the finished mesh back onto the exact
+B-rep surfaces — repair-fill triangles that lie off-surface get honest fallbacks):
+
+```ts
+const r = importStep(stepText, { vertexNormals: true, parameterUVs: true });
+r.normals; // Float32Array, unit xyz per vertex — analytic on curved faces, crease-averaged at edges
+r.uv;      // Float32Array, (u,v) per triangle CORNER (welded vertices have one (u,v) per face;
+           // NaN where no analytic surface exists). Corners are seam-unwrapped per triangle.
+r.faceUV;  // Map<faceId, { uRange, vRange, uPeriod?, vPeriod? }> for normalizing into texture space
 ```
 
 Options mirror Fusion's mesh-export dialog: `surfaceDeviation` (mm), `normalDeviation` (deg),
 `maxEdge` (mm), plus `remesh: true` for uniform-isotropic output (default off — the raw
 tessellation is watertight and shades cleaner). `onProgress` reports parse / tessellate /
-finalize progress for long imports, and `measureGeometry: true` additionally collects exact
-per-edge curve identity (circle centers/radii/axes, boundary polylines coincident with the mesh)
-into `result.measure`, so a viewer can offer CAD-style measuring on the tessellation.
+finalize progress for long imports; `signal` (an `AbortSignal`) cancels a running import at the
+next work-unit boundary — in a worker UI, abort first and keep `terminate()` as the hard stop.
+`measureGeometry: true` additionally collects exact per-edge curve identity (circle
+centers/radii/axes, boundary polylines coincident with the mesh) into `result.measure`, so a
+viewer can offer CAD-style measuring on the tessellation.
+
+**Units:** `mesh.positions` — and every derived length (areas, radii, measure geometry) — are
+**always millimetres**, whatever length unit the STEP file declares (inch, metre, mixed-unit
+assemblies with per-part contexts included). `result.units` is the detected label ("mm", "in",
+…) for display only; nothing downstream needs to rescale. Locked by `test/units.ts`.
 
 The tolerances are absolute, so one default can't fit both a 5 mm clip and a 3 m assembly.
 `estimateStepSize(src)` measures the model without tessellating (parse + point scan, sub-second

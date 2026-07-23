@@ -99,7 +99,7 @@ function censusOne(path: string): object {
 
   // Surface cache for the seam test.
   const surfOf = new Map<number, { s: unknown; kind: string } | null>();
-  const faceInfo = new Map<number, { surfaceId: number; scale: number | undefined; kind: string }>();
+  const faceInfo = new Map<number, { surfaceId: number; scale: number; kind: string }>();
   for (const solid of brep.solids) for (const f of solid.faces) faceInfo.set(f.faceId, { surfaceId: f.surfaceId, scale: solid.scale ?? brep.scale, kind: f.surfaceKind });
   const getSurf = (fid: number): { s: { project(p: Vec3): [number, number]; periodicU?: boolean; periodicV?: boolean; uSeam?: number; vSeam?: number; uPeriod?: number; vPeriod?: number } | null; kind: string } | null => {
     if (surfOf.has(fid)) return surfOf.get(fid) as never;
