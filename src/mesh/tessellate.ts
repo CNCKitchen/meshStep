@@ -5393,7 +5393,14 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
     return mx;
   };
   const MAXN = 24;   // patch-ring vertex cap (biggest observed defect ring: 20)
+  // Longer rings qualify only when ULTRA-planar: a coarse chord facing a fine polyline of the
+  // same boundary stretch (unshared duplicate edges in the source file) leaves a crescent lens
+  // that is flat to fp noise but can carry 25-40 vertices on its fine side (ABC 00019384:
+  // len=27, dev 1e-14 on a 99.7 perimeter). A genuinely missing 3D region never measures flat
+  // at 1e-3·perimeter, so the tighter gate cannot mask dropped geometry.
+  const MAXN_FLAT = 48;
   const FLAT = 0.15; // patch-ring planar-deviation cap, as a fraction of ring perimeter
+  const FLAT_STRICT = 1e-3;
   const perCap = big ? 64 * big.edge : tol;
   const outI: number[] = [], outF: number[] = [];
   const seen = new Set<number>();
@@ -5417,7 +5424,10 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
       continue;
     }
     const micro = per <= tol;
-    const patch = !micro && !!big && ring.length <= MAXN && (ring.length === 3 || planarDev(ring) <= Math.max(FLAT * per, big.dev));
+    const rdev = ring.length === 3 ? 0 : planarDev(ring);
+    const patch = !micro && !!big && (
+      (ring.length <= MAXN && (ring.length === 3 || rdev <= Math.max(FLAT * per, big.dev)))
+      || (ring.length <= MAXN_FLAT && rdev <= Math.max(FLAT_STRICT * per, big.dev)));
     if (!micro && !patch) {
       if (DBG) console.error(`[fill] ring not filled: len=${ring.length} per=${per.toFixed(3)} dev=${planarDev(ring).toExponential(2)}`);
       continue;
@@ -5484,7 +5494,10 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
           P[ring[i]! * 3]! - P[ring[(i + 1) % n]! * 3]!,
           P[ring[i]! * 3 + 1]! - P[ring[(i + 1) % n]! * 3 + 1]!,
           P[ring[i]! * 3 + 2]! - P[ring[(i + 1) % n]! * 3 + 2]!);
-        const okFill = per <= tol || (n <= MAXN && per <= perCap && (n === 3 || planarDev(ring) <= Math.max(FLAT * per, big.dev)));
+        const cdev = n === 3 ? 0 : planarDev(ring);
+        const okFill = per <= tol || (per <= perCap && (
+          (n <= MAXN && (n === 3 || cdev <= Math.max(FLAT * per, big.dev)))
+          || (n <= MAXN_FLAT && cdev <= Math.max(FLAT_STRICT * per, big.dev))));
         if (!okFill) {
           if (DBG) console.error(`[fill] undirected cycle not filled: len=${n} per=${per.toFixed(3)} dev=${planarDev(ring).toExponential(2)}`);
           continue;

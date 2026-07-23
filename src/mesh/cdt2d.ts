@@ -688,9 +688,23 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   };
   let hint = 0;
   const dbgT0 = DBG ? Date.now() : 0;
-  // Insert boundary loop points first, then interior points.
-  for (const loop of loops) for (const pi of loop) hint = insertPoint(m, pts, pi, hint, scratch);
-  for (const pi of interior) hint = insertPoint(m, pts, pi, hint, scratch);
+  // Insert boundary loop points first, then interior points. Each point index at most ONCE: a
+  // tangent-pinch loop legitimately lists the same index twice (weldPinches aliases the second
+  // visit), and re-inserting a vertex already in the triangulation splits a triangle incident to
+  // ITSELF — a degenerate (v,x,v) triangle that surfaces as a non-manifold edge plus a ring of
+  // open edges at the pinch (ABC 00013472 family: notched cylinder flaps meeting the rim row at
+  // a point).
+  const insertedPt = new Uint8Array(pts.length);
+  for (const loop of loops) for (const pi of loop) {
+    if (insertedPt[pi]) continue;
+    insertedPt[pi] = 1;
+    hint = insertPoint(m, pts, pi, hint, scratch);
+  }
+  for (const pi of interior) {
+    if (insertedPt[pi]) continue;
+    insertedPt[pi] = 1;
+    hint = insertPoint(m, pts, pi, hint, scratch);
+  }
   const dbgT1 = DBG ? Date.now() : 0;
 
   // Force the constraint (boundary) edges.

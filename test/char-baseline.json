@@ -557,7 +557,7 @@
     "skipped": {}
   },
   "newtestmodels/Pool_Nozzle": {
-    "hash": "1bd38222fb23bf871d279c8b9ecf4aad2e6fcd7d40a36ee407b605dd933b2f96",
+    "hash": "87e920b0bd57bd6ee5e2addce1823a7812ff2c63325b36f447f855ed4bf6e91e",
     "verts": 75713,
     "tris": 151450,
     "openEdges": 0,
@@ -630,7 +630,7 @@
     "skipped": {}
   },
   "newtestmodels/SLARP ASSEMBLY": {
-    "hash": "4534e44ac3ea971ba02868b7baa0201f3204a0bec19460c03966e7ddb368576b",
+    "hash": "55aee5f49d71ef424ded2b37c43136aecede1b13cc195087dcf57b94e1073d2c",
     "verts": 2579016,
     "tris": 5158472,
     "openEdges": 0,
@@ -1100,7 +1100,7 @@
     "skipped": {}
   },
   "sourcemodels/Pool_Nozzle (1)": {
-    "hash": "73f45f2e4b1ec2398aa5cc64171d840b9e006fd44f86b3755cec27ab8535f65e",
+    "hash": "0890d60065857b97f789715ecf14b04208b75b1d84106881198220a1b95dd54b",
     "verts": 73994,
     "tris": 148012,
     "openEdges": 0,
