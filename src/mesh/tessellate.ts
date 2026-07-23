@@ -68,6 +68,19 @@ export interface MeshResult {
 
 const bump = (o: Record<string, number>, k: string): void => { o[k] = (o[k] ?? 0) + 1; };
 
+/** Per-face triangle budget for the SYNTHETIC full-face meshers (sphereFull / bsplineFull /
+ * fullPeriodic). Those faces have no shared-edge boundary to honour, so coarsening both grid axes
+ * proportionally stays watertight — while an unbudgeted grid on a pathological tolerance/size
+ * combination (a metre-unit bare torus under absolute default tolerances, ABC 00011425) stitches
+ * for minutes and then dies on V8's ~2^27-element array ceiling. 2M triangles for one untrimmed
+ * body face is already far denser than any legitimate output. */
+const FULL_FACE_TRI_BUDGET = 2_000_000;
+
+/** Hard per-solid capacity backstop for every other mesher path: V8 packed-double arrays refuse to
+ * grow past ~134M elements (≈14.9M triangles), surfacing as a cryptic "Invalid array length" deep
+ * in a push. Checked between faces so the failure is a clear, actionable error instead. */
+const SOLID_VERTS_LIMIT = 120_000_000;
+
 /** Emit a triangle, oriented so its normal points outward (surface normal × same_sense sign).
  * `refN` short-circuits the orientation reference: callers that know the triangle's (u,v) pass
  * surface.normal(u,v) directly — without it the 3D centroid is inverse-mapped first, which on a
@@ -3574,12 +3587,26 @@ function tessellateFullPeriodic(
     vArc = Math.max(vArc, arc);
   }
   if (vArc < 1e-9) return false;
-  const nV = Math.max(4, Math.min(2000, Math.ceil(vArc / Math.max(tMin, 1e-9))));
+  let nV = Math.max(4, Math.min(2000, Math.ceil(vArc / Math.max(tMin, 1e-9))));
+  // Joint budget: estimate the mid-ring column count and, when nV·nu would blow past the per-face
+  // triangle budget, coarsen BOTH axes by the same factor (aspect ratio preserved).
+  let coarsen = 1;
+  {
+    let circ = 0, prevQ = surface.evaluate(u0, v0 + vP / 2);
+    for (let i = 1; i <= K; i++) { const q = surface.evaluate(u0 + (uP * i) / K, v0 + vP / 2); circ += dd(prevQ, q); prevQ = q; }
+    const nuEst = Math.max(4, Math.min(4000, Math.round(circ / Math.max(tMin, 1e-9))));
+    const k = Math.sqrt(FULL_FACE_TRI_BUDGET / (2 * nV * nuEst));
+    if (k < 1) {
+      coarsen = 1 / k;
+      nV = Math.max(4, Math.floor(nV * k));
+      if (DBG) console.error(`[tess] fid=${fid} fullPeriodic: budget coarsen x${coarsen.toFixed(2)} -> nV=${nV}`);
+    }
+  }
   const ringAt = (v: number): Vec3[] => {
     let circ = 0, prev = surface.evaluate(u0, v);
     for (let i = 1; i <= K; i++) { const q = surface.evaluate(u0 + (uP * i) / K, v); circ += dd(prev, q); prev = q; }
     const t = faceTarget(surface, targetEdge, chordTol, normalDev, u0 + uP / 2, v);
-    const nu = Math.max(4, Math.min(4000, Math.round(circ / Math.max(t, 1e-9))));
+    const nu = Math.max(4, Math.min(4000, Math.round(circ / (coarsen * Math.max(t, 1e-9)))));
     const r: Vec3[] = [];
     for (let i = 0; i < nu; i++) r.push(surface.evaluate(u0 + (uP * i) / nu, v));
     return r;
@@ -4303,8 +4330,14 @@ function tessellateSphere(
   const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - chordTol / R)));
   const dEdge = targetEdge / R;
   const dTheta = Math.max(1e-4, Math.min(dChord, dEdge, 2 * normalDev));
-  const target = R * dTheta; // arc-length target on the sphere
-  const nV = Math.max(4, Math.min(2000, Math.ceil(Math.PI / dTheta)));
+  let target = R * dTheta; // arc-length target on the sphere
+  let nV = Math.max(4, Math.min(2000, Math.ceil(Math.PI / dTheta)));
+  // Joint per-face triangle budget: coarsen rows and columns by the same factor when over.
+  {
+    const nuMax = Math.max(1, Math.min(4000, Math.round(TWO_PI * R / target)));
+    const k = Math.sqrt(FULL_FACE_TRI_BUDGET / (2 * nV * nuMax));
+    if (k < 1) { nV = Math.max(4, Math.floor(nV * k)); target /= k; }
+  }
   const ringAt = (v: number): Vec3[] => {
     const circ = TWO_PI * R * Math.cos(v);
     const nu = Math.max(1, Math.min(4000, Math.round(circ / target)));
@@ -4412,9 +4445,15 @@ function tessellateBSplineFull(
     return len;
   };
   const Rc = s.rc; // global min — the full-patch grid is sized uniformly, so no local lookup
-  const target = Number.isFinite(Rc) // floor only the chord term (see faceTarget)
+  let target = Number.isFinite(Rc) // floor only the chord term (see faceTarget)
     ? Math.min(targetEdge, Math.max(targetEdge / 40, Math.sqrt(8 * Rc * chordTol)), Rc * normalDev) : targetEdge;
-  const nU = Math.max(2, Math.min(2000, Math.ceil(arcLen("u") / target)));
+  let nU = Math.max(2, Math.min(2000, Math.ceil(arcLen("u") / target)));
+  // Joint per-face triangle budget: coarsen rows and columns by the same factor when over.
+  {
+    const nvEst = Math.max(1, Math.min(4000, Math.round(arcLen("v") / target)));
+    const k = Math.sqrt(FULL_FACE_TRI_BUDGET / (2 * nU * nvEst));
+    if (k < 1) { nU = Math.max(2, Math.floor(nU * k)); target /= k; }
+  }
   // Build each u-ring at a resolution matching ITS OWN circumference, so rings shrinking toward a
   // pole don't keep a high v-count (which makes pole-fan slivers). A vanishing ring becomes a point.
   const rings: Vec3[][] = [];
@@ -4653,6 +4692,12 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     for (const face of solid.faces) {
       facesTotal++;
       tick(W_FACE);
+      if (verts.length > SOLID_VERTS_LIMIT) {
+        throw new Error(
+          `meshStep: one body already holds ${Math.round(verts.length / 9 / 1e6)}M triangles with faces `
+          + `still to mesh — surfaceDeviation/maxEdge are far too fine for this model's size. `
+          + `Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them.`);
+      }
       const surface = faceSurf.get(face.faceId) ?? null;
       if (!surface) {
         bump(skipped, face.surfaceKind);

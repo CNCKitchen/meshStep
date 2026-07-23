@@ -12,22 +12,16 @@ import { createInterface } from "node:readline";
 import { buildBrep, type BrepModel } from "../src/brep/build.ts";
 import { tessellate } from "../src/mesh/tessellate.ts";
 import { orientConsistent } from "../src/mesh/orient.ts";
+import { estimateBrepSize } from "../src/step/measure.ts";
 
 const SENT = "@@ABC@@";
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
-// --- model scale from B-rep edge endpoints (free; already parsed) -> scale-relative tolerances,
-// so a 500 mm part and a 5 mm part get comparably fine meshes and neither explodes nor coarsens. ---
-function brepDiag(brep: BrepModel): number {
-  let mnx = Infinity, mny = Infinity, mnz = Infinity, mxx = -Infinity, mxy = -Infinity, mxz = -Infinity;
-  for (const e of brep.edges.values()) {
-    for (const p of [e.v0, e.v1]) {
-      if (p[0]! < mnx) mnx = p[0]!; if (p[1]! < mny) mny = p[1]!; if (p[2]! < mnz) mnz = p[2]!;
-      if (p[0]! > mxx) mxx = p[0]!; if (p[1]! > mxy) mxy = p[1]!; if (p[2]! > mxz) mxz = p[2]!;
-    }
-  }
-  return Number.isFinite(mnx) ? Math.hypot(mxx - mnx, mxy - mny, mxz - mnz) : 0;
-}
+// --- model scale from the library's geometric size estimate -> scale-relative tolerances, so a
+// 500 mm part and a 5 mm part get comparably fine meshes and neither explodes nor coarsens.
+// (An edge-ENDPOINT bbox is not enough: closed circles hide their radius, edge-less solids hide
+// everything — chunk-1 had 18 false timeouts and one array-overflow crash from exactly that.) ---
+const brepDiag = (brep: BrepModel): number => estimateBrepSize(brep)?.diag ?? 0;
 
 interface WT { open: number; nm: number; openEdgesOfFace: Map<number, number> }
 function watertight(m: { positions: Float64Array; indices: Uint32Array }, faceOfTri: Uint32Array, skip?: (t: number) => boolean): WT {

@@ -891,7 +891,7 @@
     "volume": 0,
     "dispatch": {},
     "skipped": {},
-    "error": "Invalid array length"
+    "error": "meshStep: one body already holds 13M triangles with faces still to mesh — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/nist_ctc_03_asme1_ap242-e2": {
     "hash": "05e2a0563affed7ce076b25250a61e3069911074d2029205d3b27c2b993d993b",

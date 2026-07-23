@@ -8,9 +8,10 @@
 // may sit anywhere along it — CATIA parks "Line Origine" points kilometers out), which inflated
 // a 77 mm board to a 500 m estimate. Circle/ellipse edges additionally contribute their full
 // circle box, so a lone cylinder's diameter isn't missed when its rim is one closed edge.
-import { buildBrep } from "../brep/build.ts";
+import { buildBrep, type BrepModel } from "../brep/build.ts";
 import { ref, num } from "./entities.ts";
 import { readPlacement, type Frame } from "../geom/placement.ts";
+import { makeSurface } from "../geom/surfaces.ts";
 import type { Vec3 } from "../geom/vec.ts";
 
 export interface SizeEstimate {
@@ -43,7 +44,19 @@ const applyFrame = (f: Frame, x: number, y: number, z: number): Vec3 => [
  * yields no measurable topology (e.g. pure AP242 tessellated geometry) or does not parse. */
 export function estimateStepSize(src: string): SizeEstimate | null {
   try {
-    const brep = buildBrep(src);
+    return estimateBrepSize(buildBrep(src));
+  } catch {
+    return null;
+  }
+}
+
+/** Same estimate for an already-built B-rep (no re-parse) — the safe way to derive scale-relative
+ * tessellation tolerances from a brep in hand. Never measure edge ENDPOINTS yourself: a closed
+ * circle's two vertices coincide, so a lone cylinder's whole diameter is invisible to an
+ * endpoint bbox, and a fully edge-less solid (bare torus/sphere body) has no endpoints at all —
+ * tolerances derived that way come out orders of magnitude too fine. */
+export function estimateBrepSize(brep: BrepModel): SizeEstimate | null {
+  try {
     const table = brep.table;
     const world = new Box();
     for (const solid of brep.solids) {
@@ -77,6 +90,26 @@ export function estimateStepSize(src: string): SizeEstimate | null {
             local.add(f.o[0] + r, f.o[1] + r, f.o[2] + r);
           }
         } catch { /* malformed curve — endpoints already counted */ }
+      }
+      // Loop-less faces (a bare full torus / sphere / closed B-spline body) contribute no edges at
+      // all — an edge-only bbox misses them entirely (an edge-less solid measures EMPTY and falls
+      // back to absolute defaults, which on a metre-unit giant is catastrophic). Sample the surface
+      // itself over its bounded/periodic domain; unbounded directions (infinite cylinder axis)
+      // can't belong to a loop-less closed face, so skipping them loses nothing.
+      for (const face of solid.faces) {
+        if (face.loops.length > 0) continue;
+        try {
+          const s = makeSurface(table, face.surfaceId, solid.scale ?? brep.scale, brep.units.radPerAngle);
+          if (!s) continue;
+          const uR = s.periodicU ? [s.uSeam ?? 0, (s.uSeam ?? 0) + (s.uPeriod ?? 2 * Math.PI)] : s.uDomain;
+          const vR = s.periodicV ? [s.vSeam ?? 0, (s.vSeam ?? 0) + (s.vPeriod ?? 2 * Math.PI)] : s.vDomain;
+          if (!uR || !vR) continue;
+          const N = 8;
+          for (let i = 0; i <= N; i++) for (let j = 0; j <= N; j++) {
+            const p = s.evaluate(uR[0]! + ((uR[1]! - uR[0]!) * i) / N, vR[0]! + ((vR[1]! - vR[0]!) * j) / N);
+            if (Number.isFinite(p[0]) && Number.isFinite(p[1]) && Number.isFinite(p[2])) local.add(p[0], p[1], p[2]);
+          }
+        } catch { /* malformed surface — nothing to add */ }
       }
       if (local.empty) continue;
       const frames = solid.instances ?? (solid.transform ? [solid.transform] : null);
