@@ -48,4 +48,10 @@ jobs:
             exit 1
           fi
       - name: Publish (prepublishOnly gate runs first)
-        run: npm publish
+        run: |
+          PKG="$(node -p "require('./package.json').version")"
+          if npm view "meshstep@$PKG" version >/dev/null 2>&1; then
+            echo "meshstep@$PKG is already on the registry — nothing to publish (re-tag/re-run is a no-op)."
+            exit 0
+          fi
+          npm publish
