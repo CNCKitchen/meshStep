@@ -131,12 +131,12 @@
     "skipped": {}
   },
   "GoProHandlePod": {
-    "hash": "c14d0b3ba46e6ea205d02b9ec84262b688932d40be61544640e2742dda7da92a",
-    "verts": 326264,
-    "tris": 652536,
+    "hash": "1651d2f9764fd61f46ffa0218e76cda4928342cf90d534f1e9c77a9929a9d933",
+    "verts": 331984,
+    "tris": 663976,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 34353.955,
+    "volume": 34354.523,
     "dispatch": {
       "grid": 121
     },
