@@ -359,10 +359,11 @@ export function buildExplode(args: {
     return out;
   };
 
-  // ---- layout: shelf-pack every part onto a flat grid in front of the assembly ----
-  // The axis is the plane's NORMAL ("up"): z lays parts on the ground (XY) plane in front of
-  // the assembly (-Y side), x/y pick the other two coordinate planes with the same convention
-  // (grid along the first remaining axis, rows advancing toward negative on the second).
+  // ---- layout: shelf-pack every part onto a flat grid centered under the assembly ----
+  // The axis is the plane's NORMAL ("up"): z lays parts on the ground (XY) plane, x/y pick the
+  // other two coordinate planes. The packed grid is re-centered on the assembly's own footprint
+  // center, so exploding spreads the parts AROUND where the assembly sits (and the collapse
+  // animation converges back into the middle) instead of migrating off to one side.
   let layoutTarget: Float64Array | null = null; // per-leaf target centroid (x, y, z)
   let layoutNormal = -1; // axis the cached targets were built for
   const layoutAt = (f: number, axis: ExplodeAxis): Float64Array => {
@@ -385,8 +386,8 @@ export function buildExplode(args: {
       for (const it of order) cellArea += it.w * it.d;
       const W = Math.max(GB[uAx + 3]! - GB[uAx]!, Math.sqrt(cellArea) * 1.25);
       order.sort((a, b) => Math.max(b.w, b.d) - Math.max(a.w, a.d));
-      const x0 = GB[uAx]!;
-      let cx = x0, rowY = GB[vAx]! - pad * 3, rowDepth = 0;
+      const x0 = 0;
+      let cx = x0, rowY = 0, rowDepth = 0, uMax = x0;
       for (const it of order) {
         if (cx > x0 && cx + it.w > x0 + W) { cx = x0; rowY -= rowDepth; rowDepth = 0; }
         const n = leaves[it.k]!;
@@ -396,7 +397,15 @@ export function buildExplode(args: {
         layoutTarget[it.k * 3 + vAx] = rowY - it.d + (n.c[vAx]! - n.bb[vAx]!);
         layoutTarget[it.k * 3 + nAx] = GB[nAx]! + (n.c[nAx]! - n.bb[nAx]!);
         cx += it.w;
+        if (cx > uMax) uMax = cx;
         if (it.d > rowDepth) rowDepth = it.d;
+      }
+      // Re-center the packed grid on the assembly's footprint center in both in-plane axes.
+      const du = (GB[uAx]! + GB[uAx + 3]!) / 2 - (x0 + uMax) / 2;
+      const dv = (GB[vAx]! + GB[vAx + 3]!) / 2 - (rowY - rowDepth) / 2;
+      for (let k = 0; k < leaves.length; k++) {
+        layoutTarget[k * 3 + uAx] += du;
+        layoutTarget[k * 3 + vAx] += dv;
       }
     }
     const fac = Math.min(1, f);

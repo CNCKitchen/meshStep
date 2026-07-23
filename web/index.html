@@ -75,25 +75,9 @@
           <p class="filename" id="stepName">No file loaded</p>
         </section>
 
-        <section class="panel" id="infoPanel" hidden>
-          <h2>File info</h2>
-          <div id="watertight" class="badge" hidden></div>
-          <dl class="info">
-            <div><dt>CAD program</dt><dd id="iSystem">—</dd></div>
-            <div><dt>Schema</dt><dd id="iSchema">—</dd></div>
-            <div><dt>Units</dt><dd id="iUnits">—</dd></div>
-            <div><dt>Dimensions</dt><dd id="iDims">—</dd></div>
-            <div><dt>Bodies</dt><dd id="iBodies">—</dd></div>
-            <div><dt>Faces</dt><dd id="iFaces">—</dd></div>
-            <div><dt>Triangles</dt><dd id="iTris">—</dd></div>
-            <div id="iEdgesRow" hidden><dt>Open edges</dt><dd id="iEdges" class="warn">—</dd></div>
-            <div><dt>Exported</dt><dd id="iDate">—</dd></div>
-          </dl>
-        </section>
-
         <section class="panel">
           <h2>2 · Convert to mesh</h2>
-          <button id="convertBtn" class="primary" disabled>Convert</button>
+          <button id="convertBtn" class="primary" disabled title="Conversion starts automatically — use this to re-convert after changing the refinement settings">Convert</button>
           <button id="exportBtn" class="secondary" disabled>Export STL…</button>
           <p class="status" id="status"></p>
           <details class="advanced">
@@ -116,12 +100,28 @@
           </details>
         </section>
 
+        <section class="panel" id="infoPanel" hidden>
+          <h2>File info</h2>
+          <div id="watertight" class="badge" hidden></div>
+          <dl class="info">
+            <div><dt>CAD program</dt><dd id="iSystem">—</dd></div>
+            <div><dt>Schema</dt><dd id="iSchema">—</dd></div>
+            <div><dt>Units</dt><dd id="iUnits">—</dd></div>
+            <div><dt>Dimensions</dt><dd id="iDims">—</dd></div>
+            <div><dt>Bodies</dt><dd id="iBodies">—</dd></div>
+            <div><dt>Faces</dt><dd id="iFaces">—</dd></div>
+            <div><dt>Triangles</dt><dd id="iTris">—</dd></div>
+            <div id="iEdgesRow" hidden><dt>Open edges</dt><dd id="iEdges" class="warn">—</dd></div>
+            <div><dt>Exported</dt><dd id="iDate">—</dd></div>
+          </dl>
+        </section>
+
         <section class="panel">
           <h2>3 · Appearance</h2>
           <div class="seg" id="styleSeg" role="radiogroup" aria-label="Render style">
             <button type="button" class="seg-btn active" data-style="shaded" title="Opaque shaded surfaces">Shaded</button>
             <button type="button" class="seg-btn" data-style="transparent" title="See-through surfaces">Transparent</button>
-            <button type="button" class="seg-btn" data-style="wireframe" title="Show the triangle mesh">Wireframe</button>
+            <button type="button" class="seg-btn" data-style="wireframe" title="Show the triangle mesh">Mesh</button>
             <button type="button" class="seg-btn" data-style="edges" title="Hide surfaces, show only the CAD edges">Edges</button>
           </div>
           <label class="toggle"><input type="checkbox" id="tSmooth" checked /> Smooth shading</label>
@@ -261,12 +261,21 @@
           </div>
         </div>
 
-        <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p><div id="progressBar" class="progress" hidden><div id="progressFill"></div></div></div>
+        <div id="overlay" class="overlay" hidden><div class="spinner"></div><p id="overlayText">Working…</p><div id="progressBar" class="progress" hidden><div id="progressFill"></div></div><button id="stopBtn" class="overlay-stop" title="Abort the import — e.g. to pick coarser refinement settings for a big file">Stop</button></div>
 
         <!-- right-click context menu + part-info popup (filled by main.ts) -->
         <div id="ctxMenu" class="ctx-menu" hidden></div>
         <div id="partPop" class="ctx-menu part-pop" hidden></div>
       </main>
+    </div>
+
+    <!-- Full-window drop target shown while a file is dragged over the page (main.ts). -->
+    <div id="dropZone" class="drop-zone" hidden>
+      <div class="drop-box">
+        <span class="drop-icon">⬇</span>
+        <p>Drop your model to open it</p>
+        <p class="drop-formats">.step · .stp · .stl · .3mf</p>
+      </div>
     </div>
 
     <!-- Shown once per session while the first file tessellates — the "look while you wait" moment. -->

@@ -40,6 +40,7 @@ const overlay = $("overlay");
 const overlayText = $("overlayText");
 const progressBar = $("progressBar");
 const progressFill = $("progressFill");
+const stopBtn = $<HTMLButtonElement>("stopBtn");
 
 const tSmooth = $<HTMLInputElement>("tSmooth");
 const tColors = $<HTMLInputElement>("tColors");
@@ -178,12 +179,18 @@ function applyAutoDefaults(diag: number): void {
   autoNote.hidden = false;
 }
 
-stepFile.addEventListener("change", async () => {
+stepFile.addEventListener("change", () => {
   const f = stepFile.files?.[0];
   if (!f) return;
   stepFile.value = ""; // so re-picking the same file fires change again (the name lives in #stepName)
+  void loadModelFile(f);
+});
+
+/** Load a model file (STEP / STL / 3MF) — shared by the file picker and drag & drop. */
+async function loadModelFile(f: File): Promise<void> {
   stepName.textContent = f.name;
   tessEdited = false;
+  autoConvertPending = false;
   autoNote.hidden = true;
   setStatus("");
   worker?.terminate();
@@ -216,9 +223,52 @@ stepFile.addEventListener("change", async () => {
   stepBaseName = f.name.replace(/\.(step|stp)$/i, "") || "mesh";
   convertBtn.disabled = false;
   showHeaderInfo(stepText);
-  // Measure in the background; Convert terminates this worker, so a click before the estimate
-  // lands simply keeps the current field values.
+  // Size pre-pass, then convert automatically once the size-adaptive defaults are in the
+  // fields (the "size" reply triggers it). A Convert click before the estimate lands starts
+  // right away with the current field values.
+  autoConvertPending = true;
+  showOverlay("Reading file…");
   worker.postMessage({ type: "measure", stepText });
+}
+
+// ---- input: drag & drop ----
+// Dropping a model anywhere on the page loads it exactly like the file picker. dragenter/leave
+// fire per element as the cursor crosses children, so a depth counter distinguishes a real
+// window exit from element-to-element moves (the overlay itself is pointer-events: none).
+const dropZone = $("dropZone");
+let dragDepth = 0;
+
+function isFileDrag(e: DragEvent): boolean {
+  return !!e.dataTransfer && Array.from(e.dataTransfer.types).includes("Files");
+}
+
+window.addEventListener("dragenter", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth++;
+  dropZone.hidden = false;
+});
+window.addEventListener("dragover", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault(); // required, or the browser navigates to the file on drop
+  if (e.dataTransfer) e.dataTransfer.dropEffect = "copy";
+});
+window.addEventListener("dragleave", (e) => {
+  if (!isFileDrag(e)) return;
+  if (--dragDepth <= 0) { dragDepth = 0; dropZone.hidden = true; }
+});
+window.addEventListener("drop", (e) => {
+  if (!isFileDrag(e)) return;
+  e.preventDefault();
+  dragDepth = 0;
+  dropZone.hidden = true;
+  const files = Array.from(e.dataTransfer?.files ?? []);
+  const f = files.find((x) => /\.(step|stp|stl|3mf)$/i.test(x.name));
+  if (!f) {
+    setStatus("Unsupported file — drop a .step, .stp, .stl or .3mf file", true);
+    return;
+  }
+  void loadModelFile(f);
 });
 
 // ---- input: reference STL ----
@@ -244,8 +294,15 @@ refFile.addEventListener("change", async () => {
 });
 
 // ---- convert ----
-convertBtn.addEventListener("click", () => {
+// Conversion starts automatically when a STEP file is picked (once the size pre-pass has
+// filled in the adaptive defaults); the button re-converts with edited refinement settings.
+let autoConvertPending = false;
+
+convertBtn.addEventListener("click", startConvert);
+
+function startConvert(): void {
   if (!stepText) return;
+  autoConvertPending = false;
   const opts = {
     surfaceDeviation: num("surfaceDeviation", 0.01),
     normalDeviation: num("normalDeviation", 15),
@@ -265,11 +322,24 @@ convertBtn.addEventListener("click", () => {
     setStatus(`Worker error: ${e.message}`, true);
   };
   worker.postMessage({ type: "convert", stepText, opts });
+}
+
+// Abort a running import/tessellation — everything heavy runs in the worker, so terminate()
+// stops it instantly. The last displayed model stays; for a STEP file the Convert button
+// re-enables so the user can pick coarser refinement settings and try again.
+stopBtn.addEventListener("click", () => {
+  worker?.terminate();
+  worker = null;
+  autoConvertPending = false;
+  hideOverlay();
+  convertBtn.disabled = !stepText;
+  setStatus(stepText ? "Stopped — adjust the refinement settings and press Convert" : "Import stopped");
 });
 
 function onWorkerMessage(msg: WorkerOut): void {
   if (msg.type === "size") {
     if (msg.estimate) applyAutoDefaults(msg.estimate.diag);
+    if (autoConvertPending) startConvert();
     return;
   }
   if (msg.type === "progress") {
@@ -990,6 +1060,11 @@ function setExplodeOn(on: boolean, animate = true): void {
   if (on) {
     if (measureOn) setMeasureOn(false);
     if (sectionOn) setSectionOn(false);
+    // Flat lay is a "show me every part" view — entering it partially laid out (stale slider)
+    // reads as broken, so it always opens fully exploded. Any style entering at 0 would be an
+    // invisible no-op mode, so that also snaps to full.
+    if (explodeStyle === "layout" || !(parseFloat(explodeRange.value) > 0)) explodeRange.value = "1";
+    syncExplodeCollapseBtn();
     viewer.setExplodeFactor(parseFloat(explodeRange.value) || 0, animate);
   } else {
     viewer.setExplodeFactor(0, animate);
@@ -1004,7 +1079,16 @@ function resetExplodeUi(): void {
 explodeBtn.addEventListener("click", () => setExplodeOn(!explodeOn));
 explodeRange.addEventListener("input", () => {
   if (explodeOn) viewer.setExplodeFactor(parseFloat(explodeRange.value) || 0);
+  syncExplodeCollapseBtn();
 });
+/** The Collapse/Explode toggle mirrors the slider: exploded => offer Collapse, and vice versa. */
+function syncExplodeCollapseBtn(): void {
+  const exploded = parseFloat(explodeRange.value) > 0;
+  explodeCollapse.textContent = exploded ? "Collapse" : "Explode";
+  explodeCollapse.title = exploded
+    ? "Animate the assembly back together"
+    : "Animate the assembly apart";
+}
 // Style dropdown + axis picker. Switching while exploded cross-blends between the two
 // arrangements (restyleExplode); collapsed, the next explode simply uses the new style.
 // The axis segment is shared by two styles with independent selections: Stacked (direction to
@@ -1032,6 +1116,13 @@ explodeStyleSel.addEventListener("change", () => {
   explodeStyle = explodeStyleSel.value as ExplodeStyle;
   syncExplodeAxisSeg();
   viewer.restyleExplode();
+  // Flat lay never shows up half-done: switching to it mid-session rides the style
+  // cross-blend up to the full grid.
+  if (explodeOn && explodeStyle === "layout" && parseFloat(explodeRange.value) < 1) {
+    explodeRange.value = "1";
+    viewer.setExplodeFactor(1, true);
+    syncExplodeCollapseBtn();
+  }
 });
 for (const b of explodeAxisSeg.querySelectorAll<HTMLButtonElement>("[data-axis]")) {
   b.addEventListener("click", () => {
@@ -1044,8 +1135,10 @@ for (const b of explodeAxisSeg.querySelectorAll<HTMLButtonElement>("[data-axis]"
   });
 }
 explodeCollapse.addEventListener("click", () => {
-  explodeRange.value = "0";
-  viewer.setExplodeFactor(0, true);
+  const explodeTo = parseFloat(explodeRange.value) > 0 ? 0 : 1;
+  explodeRange.value = String(explodeTo);
+  viewer.setExplodeFactor(explodeTo, true);
+  syncExplodeCollapseBtn();
 });
 
 // ---- viewport toolbar: camera ----

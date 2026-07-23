@@ -7,6 +7,7 @@ import { MeshBVH } from "three-mesh-bvh";
 import { filterTriangles, filterSegments, wireframeIndex, type EdgeSet } from "./mesh-utils.ts";
 import { SectionController } from "./section.ts";
 import { MeasureController, type MeasureMode } from "./measure.ts";
+import { RulerOverlay } from "./ruler.ts";
 import { SCHEMES, MMB, RMB, type ControlScheme, type NavAction } from "./nav-schemes.ts";
 import type { MeasureGeometry } from "../../src/index.ts";
 
@@ -147,6 +148,8 @@ export class Viewer {
   // DOM elements through a CSS2DRenderer overlay pass (theme-aware, never section-clipped).
   private measure: MeasureController;
   private labelRenderer: CSS2DRenderer;
+  // Left-edge mm ruler, orthographic views only (ruler.ts).
+  private ruler: RulerOverlay;
   // Lazy BVH over the FULL (unfiltered) triangle index for measurement raycasts: built on first
   // use (multi-million-tri builds would jank every conversion otherwise), survives part hiding
   // (hits are filtered by solidOfTri instead), invalidated when the model changes.
@@ -223,6 +226,8 @@ export class Viewer {
     lr.style.inset = "0";
     lr.style.pointerEvents = "none";
     container.appendChild(lr);
+
+    this.ruler = new RulerOverlay(container);
 
     this.measure = new MeasureController({
       scene: this.scene,
@@ -468,14 +473,29 @@ export class Viewer {
     return list;
   }
 
+  /** Aim `this.raycaster` through the given client point. Ortho trap: setFromCamera puts the
+   *  ray origin on the CAMERA plane, but our ortho near plane is negative (updateClipPlanes
+   *  brackets the whole model), so geometry between the two — exploded parts especially, since
+   *  ortho zoom/pan never dolly the camera back — is visible yet BEHIND the ray start and can
+   *  never be hit. Recast the origin back until the entire model sphere is in front of it. */
+  private setPickRay(clientX: number, clientY: number): void {
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    if (this.orthoOn) {
+      const ray = this.raycaster.ray;
+      const along = this._oTmp.copy(this.clipSphere.center).sub(ray.origin).dot(ray.direction);
+      const back = along - this.clipSphere.radius * 1.01;
+      if (back < 0) ray.recast(back);
+    }
+  }
+
   /** Nearest surface point under the cursor, or null if the ray misses. */
   private pickPoint(ev: PointerEvent): THREE.Vector3 | null {
     const targets = this.orbitTargets();
     if (!targets.length) return null;
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointerNdc.x = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointerNdc.y = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    this.setPickRay(ev.clientX, ev.clientY);
     const hits = this.raycaster.intersectObjects(targets, false);
     // Section view: the raycaster still hits clipped-away (invisible) surface —
     // pivot on the first hit on the KEPT side (n·p + c ≥ 0) instead.
@@ -492,10 +512,7 @@ export class Viewer {
   private pickSolid(clientX: number, clientY: number): number | null {
     const c = this.content;
     if (!c.solid || !this.drawnSolidOfTri) return null;
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    this.setPickRay(clientX, clientY);
     const hits = this.raycaster.intersectObject(c.solid, false);
     const hit = this.section.enabled
       ? hits.find((h) => this.section.plane.distanceToPoint(h.point) > -1e-6)
@@ -533,10 +550,7 @@ export class Viewer {
   private raycastSurface(clientX: number, clientY: number): THREE.Vector3 | null {
     const bvh = this.ensurePickBvh();
     if (!bvh) return null;
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    this.setPickRay(clientX, clientY);
     const hits = bvh.raycast(this.raycaster.ray, THREE.DoubleSide);
     hits.sort((a, b) => a.distance - b.distance);
     for (const h of hits) {
@@ -554,10 +568,7 @@ export class Viewer {
   pickSolidsThrough(clientX: number, clientY: number): number[] {
     const bvh = this.ensurePickBvh();
     if (!bvh || !this.solidOfTri) return [];
-    const rect = this.renderer.domElement.getBoundingClientRect();
-    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-    this.raycaster.setFromCamera(this.pointerNdc, this.camera);
+    this.setPickRay(clientX, clientY);
     const hits = bvh.raycast(this.raycaster.ray, THREE.DoubleSide);
     hits.sort((a, b) => a.distance - b.distance);
     const seen = new Set<number>();
@@ -861,7 +872,7 @@ export class Viewer {
         this.explodePending = this.explodeTarget;
         this.explodeTarget = null;
       } else {
-        this.explodePending = this.explodeFactor + d * 0.18;
+        this.explodePending = this.explodeFactor + d * 0.09; // ~1s ease at 60fps
       }
     }
     if (this.explodePending !== null) {
@@ -877,6 +888,12 @@ export class Viewer {
     this.renderer.render(this.scene, this.camera);
     this.viewHelper.render(this.renderer);
     this.labelRenderer.render(this.scene, this.camera);
+    const rh = this.container.clientHeight;
+    this.ruler.update(
+      this.orthoOn,
+      this.orthoOn && rh > 0 ? (this.ortho.top - this.ortho.bottom) / this.ortho.zoom / rh : 0,
+      rh
+    );
   };
 
   /** Push/remove the section clipping plane on every content material. */
@@ -1296,6 +1313,7 @@ export class Viewer {
   setTheme(mode: "light" | "dark"): void {
     this.scene.background = new THREE.Color(mode === "light" ? 0xe9edf2 : 0x14181d);
     this.measure.setTheme(mode);
+    this.ruler.setTheme(mode);
   }
   setReferenceVisible(v: boolean): void { this.showReference = v; this.applyVisibility(); }
   setDeviation(v: boolean): void { this.deviationOn = v; this.applyVisibility(); }
