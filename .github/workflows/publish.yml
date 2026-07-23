@@ -1,0 +1,51 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Stefan Hermann (CNC Kitchen) <stefan@cnckitchen.com>
+#
+# Publishes the library to npm when a version tag is pushed. The release ritual is:
+#
+#     npm version patch|minor|major     # bumps package.json, commits, creates tag vX.Y.Z
+#     git push --follow-tags            # push commit + tag -> this workflow publishes
+#
+# Publishing uses npm "trusted publishing" (OIDC): npmjs.com is told to trust THIS
+# workflow file in THIS repo, so no token/secret is stored anywhere. One-time setup on
+# npmjs.com (after the first manual publish): package Settings -> Trusted Publisher ->
+# GitHub Actions -> repo CNCKitchen/meshStep, workflow publish.yml.
+#
+# `npm publish` automatically runs the prepublishOnly gate first (typecheck, dist build,
+# stl/units/faces/attrs/abort test suites) — a red test means nothing is published.
+# The fixture models these tests need (cube/cylinder/sphere/everything.step) are
+# committed via .gitignore exceptions.
+name: Publish to npm
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for npm trusted publishing
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24 # tests run .ts directly — needs native type-stripping (>=22.18)
+          registry-url: "https://registry.npmjs.org"
+          cache: npm
+      - name: Update npm (trusted publishing needs npm >= 11.5.1)
+        run: npm install -g npm@latest
+      - name: Install dev dependencies
+        run: npm ci
+      - name: Tag must match package.json version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag v$TAG does not match package.json version $PKG — run 'npm version', don't tag by hand"
+            exit 1
+          fi
+      - name: Publish (prepublishOnly gate runs first)
+        run: npm publish

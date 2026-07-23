@@ -10,7 +10,8 @@ function check(name: string, cond: boolean, detail = ""): void {
   else console.log(`ok   ${name}`);
 }
 
-const src = readFileSync(new URL("../tool.step", import.meta.url), "utf8");
+// everything.step: committed fixture, enough faces for >25 progress ticks before abort.
+const src = readFileSync(new URL("../everything.step", import.meta.url), "utf8");
 
 // --- abort after N progress ticks → AbortError, and no further progress observed.
 {

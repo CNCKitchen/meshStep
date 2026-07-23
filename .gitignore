@@ -13,3 +13,10 @@ dist/
 *.stl
 *.STL
 *.3mf
+
+# — except the small own-made fixtures the publish test gate needs (test/units.ts,
+#   test/face-info.ts, test/attributes.ts, test/abort.ts run in CI via prepublishOnly)
+!/cube.step
+!/cylinder.step
+!/sphere.step
+!/everything.step
