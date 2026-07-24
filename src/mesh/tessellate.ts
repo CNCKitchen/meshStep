@@ -52,8 +52,16 @@ export interface TessOptions {
 
 export interface MeshResult {
   mesh: IndexedMesh;
+  /** Source B-rep face per triangle. Ids are the STEP file's OWN entity record numbers (the
+   * `#123` of the ADVANCED_FACE), not meshStep-assigned indices — so for byte-identical input
+   * they are stable across meshStep versions by construction; only the triangulation under each
+   * id changes between releases. Repair passes (T-junction zips, micro-hole fills) tag their
+   * triangles with an adjacent real face id; no synthetic ids are ever fabricated. Persist these
+   * ids (never triangle/vertex indices) to make selections survive re-import. */
   faceOfTri: Uint32Array;
-  /** STEP solid (body) id per triangle; bodies are welded independently and kept disjoint. */
+  /** STEP solid (body) id per triangle; bodies are welded independently and kept disjoint.
+   * Same identity contract as faceOfTri (ids are the solid's STEP entity record numbers), with
+   * one exception: the AP203 CURVE_BOUNDED_SURFACE sheet-model fallback synthesizes body id 0. */
   solidOfTri: Uint32Array;
   /** Ids of surface bodies built from OPEN_SHELLs: their boundary edges are open by design, so
    * watertightness checks must exclude their triangles rather than report defects. */

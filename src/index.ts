@@ -129,6 +129,7 @@ function buildDiagnostics(result: MeshResult, mesh: IndexedMesh, solidOfTri: Uin
   return { ok, openEdges, nonManifoldEdges, facesDropped, facesSkipped, warnings: result.warnings };
 }
 
+export { VERSION } from "./version.ts";
 export { writeBinarySTL, readSTL, isBinarySTL, indexSoup, type IndexedMesh, type TriSoup } from "./io/stl.ts";
 export { read3MF, type ThreeMFModel, type ThreeMFItem, type RGB3MF } from "./io/threemf.ts";
 export { parseStepHeader, type StepHeader } from "./step/header.ts";

@@ -41,8 +41,10 @@
     "inspect": "node test/inspect.ts",
     "entities": "node test/step-inspect.ts",
     "gapcheck": "node test/gapcheck.ts",
+    "test:version": "node test/version.ts",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run typecheck && npm run build && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort"
+    "version": "node scripts/sync-version.mjs && git add src/version.ts",
+    "prepublishOnly": "npm run typecheck && npm run build && npm run test:version && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort"
   },
   "keywords": [
     "step",

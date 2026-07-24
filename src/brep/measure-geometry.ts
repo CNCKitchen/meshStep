@@ -11,6 +11,8 @@ import { analyzeEdgeCurve } from "../geom/curves.ts";
 import { analyzeSurface } from "../geom/surfaces.ts";
 
 export interface MeasureEdge {
+  /** STEP EDGE_CURVE entity record number — stable across meshStep versions for the same file,
+   * like faceOfTri ids (see MeshResult.faceOfTri); persist this to re-find an edge on re-import. */
   edgeId: number;
   solidId: number;
   /** Assembly occurrence index (0-based) this record is placed for — matches SolidInstance.instance. */
@@ -36,6 +38,7 @@ export interface MeasureEdge {
 }
 
 export interface MeasureFace {
+  /** Same ids as faceOfTri — STEP ADVANCED_FACE entity record numbers (see MeshResult.faceOfTri). */
   faceId: number;
   solidId: number;
   /** Assembly occurrence index (0-based) this record is placed for — matches SolidInstance.instance. */

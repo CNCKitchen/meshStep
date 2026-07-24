@@ -244,6 +244,32 @@ viewer can offer CAD-style measuring on the tessellation.
 assemblies with per-part contexts included). `result.units` is the detected label ("mm", "in",
 …) for display only; nothing downstream needs to rescale. Locked by `test/units.ts`.
 
+### Identity & versioning — the stability contract
+
+Applications that persist references into an imported model (face selections, edge
+measurements, cached meshes) can rely on the following:
+
+- **Entity ids come from the STEP file, not from meshStep.** `faceOfTri` / `solidOfTri`
+  values, `MeasureEdge.edgeId`, and every id-keyed map (`faces`, `colors`, `structure`
+  bodies) use the STEP file's own entity record numbers (the `#123` of the
+  `ADVANCED_FACE`, `EDGE_CURVE`, or solid record). For byte-identical input they are
+  stable across meshStep versions by construction — persisted selections survive a
+  meshStep upgrade. Repair passes (T-junction zips, micro-hole fills) tag their triangles
+  with an adjacent real face id; meshStep never fabricates ids. (One exception: the AP203
+  `CURVE_BOUNDED_SURFACE` sheet-model fallback synthesizes body id 0.)
+- **The triangulation itself is NOT stable across releases.** Meshing improvements change
+  vertex positions, counts, and triangle layout in nearly every version (bit-for-bit
+  stability is enforced only *within* a version, by the characterization suite). Never
+  persist triangle or vertex indices — persist entity ids (plus `SolidInstance.instance`
+  for a placed occurrence) and re-resolve after re-import. Pin an exact `meshstep`
+  version, and record the exported `VERSION` constant alongside any cached mesh so it can
+  be invalidated on upgrade.
+- **Ids are stable per file, not per design.** Re-exporting the same part from CAD
+  renumbers every entity; hash the STEP file to detect that and re-bind selections.
+- **Face coverage can grow between versions.** A face that failed to tessellate in an
+  older version may succeed in a newer one (and `diagnostics` improve accordingly) — ids
+  are never renumbered, but tolerate ids appearing in or dropping out of the meshed set.
+
 The tolerances are absolute, so one default can't fit both a 5 mm clip and a 3 m assembly.
 `estimateStepSize(src)` measures the model without tessellating (parse + point scan, sub-second
 even on large assemblies) and `autoTessellation(diagMm)` turns that into size-adaptive defaults —

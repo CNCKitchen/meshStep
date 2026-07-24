@@ -13,7 +13,8 @@ export type FaceSurfaceType =
   | "bspline" | "revolution" | "extrusion" | "offset" | "other";
 
 export interface FaceInfo {
-  /** B-rep face id — the values stored in `faceOfTri`. */
+  /** B-rep face id — the values stored in `faceOfTri`; the STEP file's own ADVANCED_FACE entity
+   * record number, stable across meshStep versions for the same file (see MeshResult.faceOfTri). */
   faceId: number;
   /** Owning body id — the values stored in `solidOfTri`. */
   solidId: number;
