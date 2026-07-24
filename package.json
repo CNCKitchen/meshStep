@@ -1,6 +1,6 @@
 {
   "name": "meshstep",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "STEP -> watertight process-grade mesh importer (analytic + NURBS surfaces, assemblies). Pure TypeScript, zero runtime dependencies, no WASM.",
   "type": "module",
   "license": "AGPL-3.0-only",
