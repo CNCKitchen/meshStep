@@ -18,6 +18,23 @@ Worker, and in Node ≥ 22.18. Built to feed
 [infeall](https://github.com/CNCKitchen/smartInfillGenerator) (smart infill), where mesh defects
 aren't cosmetic — they break the algorithm.
 
+## Install
+
+```sh
+npm install meshstep
+```
+
+[![npm](https://img.shields.io/npm/v/meshstep)](https://www.npmjs.com/package/meshstep)
+
+Plain ESM with TypeScript types included, zero dependencies. Works in Node ≥ 22.18 and in any
+modern browser via a bundler — the import is synchronous and CPU-bound, so in a UI run it inside
+a Web Worker (wire up `onProgress` and `signal`, as the [web viewer](web/) does).
+
+```ts
+import { importStep } from "meshstep";
+const result = importStep(stepFileText); // positions always in mm — see Quick start below
+```
+
 ## Why another STEP importer?
 
 Because every existing route from "STEP file" to "triangles" optimizes for **rendering**, and

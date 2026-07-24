@@ -81,6 +81,35 @@ dependency tree must match the allowlist
 - Test CAD models (`*.step` / `*.stl` / `*.3mf`) are deliberately **not
   committed** — they include third-party downloads (Printables, Voron) whose
   licenses don't belong in this repo. Keep them local; don't add exceptions
-  to `.gitignore` for them.
+  to `.gitignore` for them. The one carve-out: the four small **own-made**
+  fixtures the publish test gate needs in CI (`cube/cylinder/sphere/
+  everything.step`, exported from the maintainer's own CAD designs) are
+  committed via explicit `.gitignore` exceptions. Anything added to that list
+  must be original work covered by the CLA — never a downloaded model.
 - New source files carry the SPDX header:
   `// SPDX-License-Identifier: AGPL-3.0-only`
+
+## Releasing (maintainers)
+
+Publishing to npm is automated by
+[.github/workflows/publish.yml](.github/workflows/publish.yml): pushing a
+version tag builds, runs the full test gate (`prepublishOnly`), and publishes
+via npm [trusted publishing](https://docs.npmjs.com/trusted-publishers)
+(OIDC — no tokens stored anywhere). The whole ritual is:
+
+```sh
+npm version patch   # or minor / major — bumps package.json, commits, tags vX.Y.Z
+git push --follow-tags
+```
+
+Notes:
+
+- `npm version` requires a clean working tree — commit or stash first.
+- The workflow refuses a tag that doesn't match `package.json` (don't tag by
+  hand), and green-skips if that version is already on the registry, so
+  re-tagging and re-runs are harmless.
+- Version semantics: patch = fixes, minor = backward-compatible features,
+  major = breaking API changes. While on `0.x`, treat minor as "may break".
+- Manual fallback (`npm publish` from the repo root) works but needs
+  `npm login` + 2FA; the tag/workflow route is preferred so npm always ships
+  exactly what's on GitHub.
