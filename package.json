@@ -1,6 +1,6 @@
 {
   "name": "meshstep",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "STEP -> watertight process-grade mesh importer (analytic + NURBS surfaces, assemblies). Pure TypeScript, zero runtime dependencies, no WASM.",
   "type": "module",
   "license": "AGPL-3.0-only",
@@ -36,6 +36,7 @@
     "test:faces": "node test/face-info.ts",
     "test:attrs": "node test/attributes.ts",
     "test:abort": "node test/abort.ts",
+    "test:overrides": "node test/face-overrides.ts",
     "test:3mf": "node test/threemf.ts",
     "char": "node --max-old-space-size=16384 test/char.ts",
     "inspect": "node test/inspect.ts",
@@ -44,7 +45,7 @@
     "test:version": "node test/version.ts",
     "typecheck": "tsc --noEmit",
     "version": "node scripts/sync-version.mjs && git add src/version.ts",
-    "prepublishOnly": "npm run typecheck && npm run build && npm run test:version && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort"
+    "prepublishOnly": "npm run typecheck && npm run build && npm run test:version && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort && npm run test:overrides"
   },
   "keywords": [
     "step",

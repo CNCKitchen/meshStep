@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // meshStep — public API.
 import { buildBrep } from "./brep/build.ts";
-import { tessellate, type MeshResult, type TessOptions } from "./mesh/tessellate.ts";
+import { tessellate, type FaceTol, type MeshResult, type TessOptions } from "./mesh/tessellate.ts";
 import { remesh } from "./mesh/remesh.ts";
 import { orientConsistent } from "./mesh/orient.ts";
 import { makeSurface, type Surface } from "./geom/surfaces.ts";
@@ -133,7 +133,7 @@ export { VERSION } from "./version.ts";
 export { writeBinarySTL, readSTL, isBinarySTL, indexSoup, type IndexedMesh, type TriSoup } from "./io/stl.ts";
 export { read3MF, type ThreeMFModel, type ThreeMFItem, type RGB3MF } from "./io/threemf.ts";
 export { parseStepHeader, type StepHeader } from "./step/header.ts";
-export type { MeshResult, TessOptions } from "./mesh/tessellate.ts";
+export type { FaceTol, MeshResult, TessOptions } from "./mesh/tessellate.ts";
 export type { BrepModel } from "./brep/build.ts";
 export { meshDefects, type ImportDiagnostics, type MeshWarning, type WarningCode, type WarningSeverity, type EdgeDefects } from "./mesh/diag.ts";
 export { extractColors, type ModelColors, type RGB } from "./step/styles.ts";
@@ -188,6 +188,22 @@ export interface ImportOptions {
    * into `ImportResult.faceUV` (default false). Lets a consumer map textures in each CAD face's
    * own parameterization (e.g. seamlessly around a cylinder) instead of projecting externally. */
   parameterUVs?: boolean;
+  /** Per-face tessellation overrides, keyed by face id (the ids `faceOfTri` reports: the STEP
+   * ADVANCED_FACE record numbers). A listed face is meshed with its own `surfaceDeviation` /
+   * `normalDeviation` / `maxEdge` (each falls back to the global value when omitted); the edges it
+   * shares are sampled at the finest values of the faces they bound, so the mesh stays watertight
+   * and the neighbours grade into it. Use it to refine a few faces (a fillet under a stress probe)
+   * without re-meshing the whole part finely. Faces are per PART: an override applies to every
+   * instance of that part. Not applied by the optional `remesh` pass. Default: none (output
+   * bit-identical to an import without the option). */
+  faceOverrides?: Record<number, FaceOverride> | Map<number, FaceOverride>;
+}
+
+/** One face's tessellation override (`ImportOptions.faceOverrides`); same units as the globals. */
+export interface FaceOverride {
+  surfaceDeviation?: number;
+  normalDeviation?: number;
+  maxEdge?: number;
 }
 
 export interface ImportResult extends MeshResult {
@@ -230,6 +246,29 @@ export interface ImportResult extends MeshResult {
   instanceOfTri: Uint32Array;
 }
 
+/** `faceOverrides` to internal per-face tolerances (undefined when there are none). */
+function resolveFaceOverrides(
+  fo: ImportOptions["faceOverrides"], surfaceDev: number, maxEdge: number, normalDevRad: number,
+): Map<number, FaceTol> | undefined {
+  if (!fo) return undefined;
+  const entries: [number, FaceOverride][] = fo instanceof Map
+    ? [...fo.entries()]
+    : Object.entries(fo).map(([k, v]) => [Number(k), v] as [number, FaceOverride]);
+  if (entries.length === 0) return undefined;
+  const pos = (v: number | undefined, d: number): number => (v !== undefined && Number.isFinite(v) && v > 0 ? v : d);
+  const out = new Map<number, FaceTol>();
+  for (const [fid, o] of entries) {
+    if (!Number.isFinite(fid) || !o) continue;
+    out.set(fid, {
+      chordTol: pos(o.surfaceDeviation, surfaceDev),
+      targetEdge: pos(o.maxEdge, maxEdge),
+      normalDev: o.normalDeviation !== undefined && Number.isFinite(o.normalDeviation) && o.normalDeviation > 0
+        ? o.normalDeviation * Math.PI / 180 : normalDevRad,
+    });
+  }
+  return out.size > 0 ? out : undefined;
+}
+
 /** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
 export function importStep(src: string, opts: ImportOptions = {}): ImportResult {
   const surfaceDev = opts.surfaceDeviation ?? 0.01;
@@ -257,6 +296,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
       onProgress?.({ phase: "tessellate", done, total });
     }),
     collectEdgePolylines: opts.measureGeometry,
+    faceTol: resolveFaceOverrides(opts.faceOverrides, surfaceDev, maxEdge, normalDevRad),
   };
   const result = tessellate(brep, tess);
   signal?.throwIfAborted();

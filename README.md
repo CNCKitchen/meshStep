@@ -239,6 +239,19 @@ next work-unit boundary — in a worker UI, abort first and keep `terminate()` a
 centers/radii/axes, boundary polylines coincident with the mesh) into `result.measure`, so a
 viewer can offer CAD-style measuring on the tessellation.
 
+**Per-face overrides:** `faceOverrides` refines (or coarsens) individual CAD faces, keyed by the
+face ids `faceOfTri` reports, each with its own `surfaceDeviation` / `normalDeviation` /
+`maxEdge` (an omitted value falls back to the global one). Every B-rep edge is still sampled
+once, at the finest values of the faces it bounds, so the mesh stays watertight and the
+neighbours grade into the refined face; faces that share nothing with it come out unchanged.
+Typical use: a few faces under a stress probe at 2–4° without meshing the whole part that fine.
+An empty map is the same as no option (bit-identical output). Not applied by `remesh`. Locked by
+`test/face-overrides.ts`.
+
+```ts
+const fine = importStep(stepText, { ...opts, faceOverrides: { 55: { normalDeviation: 3, maxEdge: 1.2 } } });
+```
+
 **Units:** `mesh.positions` — and every derived length (areas, radii, measure geometry) — are
 **always millimetres**, whatever length unit the STEP file declares (inch, metre, mixed-unit
 assemblies with per-part contexts included). `result.units` is the detected label ("mm", "in",

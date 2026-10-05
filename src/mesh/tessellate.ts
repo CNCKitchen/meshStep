@@ -48,6 +48,18 @@ export interface TessOptions {
    * These are the exact samplings the mesh was built from, so measurement/snap geometry derived
    * from them is coincident with rendered feature edges — resampling outside tessellate is not. */
   collectEdgePolylines?: boolean;
+  /** Per-face tolerances keyed by face id (`ImportOptions.faceOverrides`, resolved to internal
+   * units). A listed face is meshed with its own values; every B-rep edge is still sampled ONCE,
+   * at the finest values of the faces it bounds, so the mesh stays watertight. Absent faces (and
+   * an absent map) use the global options: the same numbers, so the output is bit-identical. */
+  faceTol?: Map<number, FaceTol>;
+}
+
+/** One face's tessellation tolerances (internal units: mm, mm, radians). */
+export interface FaceTol {
+  chordTol: number;
+  targetEdge: number;
+  normalDev: number;
 }
 
 export interface MeshResult {
@@ -4602,6 +4614,9 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const chordTol = opts.chordTol ?? 0.01;
   const targetEdge = opts.targetEdge ?? 1.0;
   const normalDev = opts.normalDev ?? (15 * Math.PI / 180);
+  const globalTol: FaceTol = { chordTol, targetEdge, normalDev };
+  const faceTol = opts.faceTol;
+  const tolOf = (fid: number): FaceTol => faceTol?.get(fid) ?? globalTol;
   const trace = opts.trace;
   /** Tag a dispatch outcome: report which mesher took the face (on success) to the trace hook
    * and the MESHSTEP_DEBUG log, and pass the result through unchanged. */
@@ -4643,18 +4658,30 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // analytic neighbours and opens more of their seams; with the 1-ring flip pass the visual result
   // is identical, so the conservative isotropic rule stays.)
   const edgeMaxLen = new Map<number, number>();
+  // Per-face overrides also tighten the edge's OWN curve criteria (chord, turn) to the finest
+  // face it bounds. Only filled when overrides exist, so the default path reads the globals.
+  const edgeTol = new Map<number, { chordTol: number; normalDev: number }>();
   for (const solid of brep.solids) for (const face of solid.faces) {
     const surface = faceSurf.get(face.faceId);
-    const t = surface ? faceTarget(surface, targetEdge, chordTol, normalDev, 0, 0, true) : targetEdge;
+    const ft = tolOf(face.faceId);
+    const t = surface ? faceTarget(surface, ft.targetEdge, ft.chordTol, ft.normalDev, 0, 0, true) : ft.targetEdge;
     for (const lp of face.loops) for (const oe of lp.edges) {
       const cur = edgeMaxLen.get(oe.edgeId);
       if (cur === undefined || t < cur) edgeMaxLen.set(oe.edgeId, t);
+      if (faceTol) {
+        const et = edgeTol.get(oe.edgeId);
+        edgeTol.set(oe.edgeId, et
+          ? { chordTol: Math.min(et.chordTol, ft.chordTol), normalDev: Math.min(et.normalDev, ft.normalDev) }
+          : { chordTol: ft.chordTol, normalDev: ft.normalDev });
+      }
     }
   }
+  const edgeChord = (id: number): number => edgeTol.get(id)?.chordTol ?? chordTol;
+  const edgeNdev = (id: number): number => edgeTol.get(id)?.normalDev ?? normalDev;
   const sampled = new Map<number, Vec3[]>();
   for (const [id, e] of brep.edges) {
     const te = edgeMaxLen.get(id) ?? targetEdge;
-    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, chordTol, te, brep.units.radPerAngle, normalDev));
+    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
     tick(1);
   }
   // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
@@ -4675,8 +4702,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     const level = new Map<number, number>(); // edgeId -> finest committed refinement factor
     const resample = (id: number, f: number): Vec3[] => {
       const e = brep.edges.get(id)!;
-      const te = Math.max((edgeMaxLen.get(id) ?? targetEdge) / f, chordTol);
-      return sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, chordTol / f, te, brep.units.radPerAngle, normalDev);
+      const te = Math.max((edgeMaxLen.get(id) ?? targetEdge) / f, edgeChord(id));
+      return sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id) / f, te, brep.units.radPerAngle, edgeNdev(id));
     };
     for (const solid of brep.solids) for (const face of solid.faces) {
       const surface = faceSurf.get(face.faceId);
@@ -4702,7 +4729,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       // the pinch/genuine-overlap class where densifying perturbs the neighbours' pinch handling
       // for nothing (OpenVessel's 6mm counterbore rims at 0.002mm tolerance went watertight ->
       // 12 open under a blind version; Ontos' tangent letter engravings never become simple).
-      const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * chordTol;
+      const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * tolOf(face.faceId).chordTol;
       let nonLocal = false;
       // A COLLAPSED loop — fewer than 3 weld-distinct sampled points — cannot form a polygon at
       // all: a sub-tolerance face's boundary can legally lose every interior sample to the
@@ -4781,6 +4808,10 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         continue;
       }
       const sign = face.sameSense ? 1 : -1;
+      // This face's tolerances: its override, or the globals (the same numbers when none is set,
+      // so the dispatch below is untouched by default). Shadows the function-level values for the
+      // meshers only; the per-solid stitch passes after this loop keep the globals.
+      const { chordTol, targetEdge, normalDev } = tolOf(face.faceId);
 
       let ok = false;
       const outer = face.loops.find((l) => l.outer) ?? face.loops[0];

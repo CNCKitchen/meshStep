@@ -5,4 +5,4 @@
  * selections: entity ids are stable across versions (see README "Identity & versioning"), but
  * the triangulation under them changes between releases, so cached geometry must be keyed to
  * the version that produced it. */
-export const VERSION = "0.1.1";
+export const VERSION = "0.1.2";
