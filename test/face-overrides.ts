@@ -62,9 +62,12 @@ const farFaces = (r: ImportResult, fid: number): number[] => {
   return [...r.faces.keys()].filter((f) => !touching.has(f));
 };
 
+// This suite runs in the publish gate (CI), so it may only read the COMMITTED fixtures
+// (cube/cylinder/sphere/everything.step) — local corpus models don't exist on the runner.
+
 // --- An empty override set is no override at all: bit-identical output.
 {
-  const src = readFileSync(new URL("../roundedCube.step", import.meta.url), "utf8");
+  const src = readFileSync(new URL("../everything.step", import.meta.url), "utf8");
   const a = importStep(src);
   const b = importStep(src, { faceOverrides: {} });
   const c = importStep(src, { faceOverrides: new Map() });
@@ -75,8 +78,9 @@ const farFaces = (r: ImportResult, fid: number): number[] => {
   check("empty overrides (Map) bit-identical", same(a, c));
 }
 
-// --- One curved face of the rounded cube refined to 2°.
-for (const model of ["roundedCube.step", "chamferFillet.step"]) {
+// --- One curved face refined to 2°: a trimmed cylinder/torus among many faces (everything.step,
+// 25 of 34 faces share nothing with it) and a full seamed tube (cylinder.step).
+for (const model of ["everything.step", "cylinder.step"]) {
   const src = readFileSync(new URL(`../${model}`, import.meta.url), "utf8");
   const r0 = importStep(src);
   const curved = [...r0.faces.entries()].filter(([, f]) => f.type === "cylinder" || f.type === "torus");
