@@ -1192,5 +1192,17 @@
       "grid": 233
     },
     "skipped": {}
+  },
+  "WN1452 K25x10 TX7 screw": {
+    "hash": "63ed56c25a53f5012464be3aba898408c83b1bdc1239f331674b7b72be8f5558",
+    "verts": 6869,
+    "tris": 13734,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 41.421,
+    "dispatch": {
+      "grid": 35
+    },
+    "skipped": {}
   }
 }

@@ -18,7 +18,7 @@ import type { IndexedMesh } from "../io/stl.ts";
 import type { Surface } from "../geom/surfaces.ts";
 import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
 import { sampleEdgePolyline } from "../geom/curves.ts";
-import { constrainedTriangulate } from "./cdt2d.ts";
+import { constrainedTriangulate, type CdtOut } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
 import { beginWarnings, takeWarnings, warn, type MeshWarning } from "./diag.ts";
@@ -1297,14 +1297,15 @@ function gridCDT(
   if (DBG && Number(process.env.MESHSTEP_DUMPCDT) === fid) {
     console.error(`@@CDTDUMP@@${JSON.stringify({ fid, outerIdx, holeIdx, cdtPts, p3: allP3 })}@@END@@`);
   }
-  const cdtOut: { missing: number; rescue?: string } = { missing: 0 };
+  const cdtOut: CdtOut = { missing: 0 };
   let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
   // OUTCOME-VERIFIED DE-SLIT. Adopt the keyhole candidate only when the original loops
   // demonstrably fail: count boundary segments absent from the triangulation's edges (the exact
-  // signature of a leaking face — the mate samples the same shared polyline and finds no twin).
-  // Z Bearing Block's slit ring covers all its boundary via the equivalence machinery (0 defects
-  // -> candidate discarded); Meanwell's keyhole caps leave 7+ segments uncovered -> the de-slit
-  // variant, which covers everything, wins.
+  // signature of a leaking face — the mate samples the same shared polyline and finds no twin),
+  // or cover their corridor only by equivalence (see `challenged` below).
+  // Z Bearing Block's slit ring covers all its boundary via the equivalence machinery (0 defects;
+  // its de-slit variant leaves 86 segments uncovered -> discarded); Meanwell's keyhole caps leave
+  // 7+ segments uncovered -> the de-slit variant, which covers everything, wins.
   if (altOuter) {
     // Coverage is judged by 3D IDENTITY, not point index: an equivalence-realised constraint is
     // covered by its duplicate twin's edge (same 3D points, different indices — Z Bearing Block's
@@ -1333,15 +1334,27 @@ function gridCDT(
       return bad;
     };
     const d0 = forceDeslit ? Infinity : coverDefects(tris, [outerIdx, ...holeIdx]);
-    if (d0 > 0) {
-      const altOut: { missing: number; rescue?: string } = { missing: 0 };
+    // Full coverage is not proof of a sound mesh when the CDT could NOT realise the doubled
+    // corridor and accepted it only by EQUIVALENCE (cdtOut.equiv): whichever classification then
+    // wins — parity flood, or a geom/rescue fill over the broken Delaunay mesh — covers every
+    // segment yet leaves needles running along the corridor (OCC-exported sphere head of a Torx
+    // screw: the pole-encircling seam becomes a keyhole corridor in the reoriented chart -> 239
+    // slivers up to 11× the target edge). The same face exported by Fusion happened to leave 2
+    // segments uncovered and got the clean de-slit. So an equivalence-realised original is also
+    // challenged, and loses to a variant that triangulates NATIVELY (nothing missing, nothing
+    // equivalence-realised, no rescue) and covers all of its boundary.
+    const challenged = !forceDeslit && d0 === 0 && (cdtOut.equiv !== undefined || cdtOut.rescue !== undefined);
+    if (d0 > 0 || challenged) {
+      const altOut: CdtOut = { missing: 0 };
       const altTris = constrainedTriangulate(cdtPts, [altOuter, ...altHoles], interiorIdx, altOut);
       // Adopt only a FULLY clean alternative: a seam-straddling slit ring's de-slit variant is
       // always partially uncovered (the ring lands outside the outer on the cover), while a
       // genuine keyhole's variant covers everything.
       const d1 = forceDeslit ? 0 : coverDefects(altTris, [altOuter, ...altHoles]);
-      if (DBG) console.error(`[deslit] fid=${fid} outcome: original defects=${d0}, de-slit defects=${d1} -> ${d1 === 0 && d1 < d0 ? "ADOPT" : "keep original"}`);
-      if (d1 === 0 && d1 < d0) {
+      const native = altOut.missing === 0 && altOut.equiv === undefined && altOut.rescue === undefined;
+      const adopt = d1 === 0 && (challenged ? native : d1 < d0);
+      if (DBG) console.error(`[deslit] fid=${fid} outcome: original defects=${d0}${challenged ? ` (equiv=${cdtOut.equiv ?? 0} rescue=${cdtOut.rescue ?? "-"})` : ""}, de-slit defects=${d1}${native ? "" : ` (non-native: missing=${altOut.missing} equiv=${altOut.equiv ?? 0} rescue=${altOut.rescue ?? "-"})`} -> ${adopt ? "ADOPT" : "keep original"}`);
+      if (adopt) {
         outerIdx.length = 0;
         outerIdx.push(...altOuter);
         holeIdx.length = 0;
@@ -1349,6 +1362,7 @@ function gridCDT(
         tris = altTris;
         cdtOut.missing = altOut.missing;
         cdtOut.rescue = altOut.rescue;
+        cdtOut.equiv = altOut.equiv;
       }
     }
   }

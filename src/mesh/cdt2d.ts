@@ -656,14 +656,22 @@ function enforceByRetriangulation(m: Cdt, pts: P2[], a: number, b: number, const
 }
 
 /**
+ * Side-channel report of one triangulation. `missing`: boundary constraints left unrealised.
+ * `rescue`: set when a fallback, not the parity flood, produced the region. `equiv`: constraints
+ * the flip/cavity passes could not realise and that were accepted only by EQUIVALENCE (duplicate
+ * pair / collinear chain) — the signature of a doubled zero-width corridor in the boundary.
+ */
+export interface CdtOut { missing: number; rescue?: string; equiv?: number }
+
+/**
  * Triangulate the region bounded by loops[0] (outer) minus loops[1..] (holes), using all listed
  * points (loop vertices + interior). Returns triangle index triples into `points`.
  */
-export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: { missing: number; rescue?: string }): [number, number, number][] {
+export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: CdtOut): [number, number, number][] {
   const n = points.length;
-  // Reset BOTH out fields: callers reuse one out object across refinement re-runs, and a stale
+  // Reset ALL out fields: callers reuse one out object across refinement re-runs, and a stale
   // rescue label from a previous run would mis-flag a clean triangulation.
-  if (out) { out.missing = 0; out.rescue = undefined; }
+  if (out) { out.missing = 0; out.rescue = undefined; out.equiv = undefined; }
   if (n < 3) return [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
   for (const p of points) {
@@ -827,6 +835,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   } else if (DBG) {
     console.error(`[cdt] enforcement skipped: ${unrealized}/${constraints.size} constraints unrealised after flips — systemically degenerate boundary`);
   }
+  if (out && chainRealized > 0) out.equiv = chainRealized;
   if (DBG && Date.now() - dbgT0 > 500) {
     console.error(`[cdt] SLOW n=${n} constraints=${constraints.size} unrealized=${unrealized}: insert=${dbgT1 - dbgT0}ms force=${dbgT2 - dbgT1}ms enforce=${Date.now() - dbgT2}ms`);
   }
