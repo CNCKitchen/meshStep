@@ -426,4 +426,3 @@ button.secondary:disabled { color: var(--muted); border-color: var(--line); curs
 .ctx-ray-item .ctx-ray-tag { margin-left: auto; flex: none; font-size: 10.5px; color: var(--muted); }
 .part-pop { min-width: 220px; }
 .part-pop .info { padding: 4px 6px 3px; }
-.sm-btn { flex: none; }

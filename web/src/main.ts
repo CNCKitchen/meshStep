@@ -1179,13 +1179,8 @@ autoRange.addEventListener("click", () => {
 $<HTMLButtonElement>("fitBtn").addEventListener("click", () => viewer.fit());
 
 // ---- SpaceMouse (3Dconnexion driver) ----
-// Tries to connect once at startup (silently idle when no driver answers); the button reconnects.
-const smBtn = $<HTMLButtonElement>("smBtn");
-viewer.spaceMouse.onStatus = (msg, connected) => {
-  smBtn.classList.toggle("active", connected);
-  smBtn.title = `SpaceMouse: ${msg} — click to reconnect`;
-};
-smBtn.addEventListener("click", () => void viewer.spaceMouse.connect());
+// Connects silently once at page load, like Onshape: no UI. Status goes to the console only.
+viewer.spaceMouse.onStatus = (msg) => console.info(`[SpaceMouse] ${msg}`);
 void viewer.spaceMouse.connect();
 
 // ---- mouse control scheme (bottom bar) ----
