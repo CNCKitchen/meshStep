@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-// SpaceMouse support through the 3Dconnexion driver's local navigation server
+// SpaceMouse support through the 3Dconnexion software's local navigation server (3DxNLServer)
 // (3DxNLServer, the route Onshape uses). No WebHID permission is needed, it works in any
-// browser, and the driver's own settings (speed, object / camera mode, buttons such as Fit)
+// browser, and the 3Dconnexion settings (speed, object / camera mode, buttons such as Fit)
 // apply.
 //
 // Protocol: WAMP v1 over wss://127.51.68.120:<port> (subprotocol "wamp"; the port comes from
 // https://127.51.68.120:8181/3dconnexion/nlproxy). The server asks this page for the camera,
 // the model box and hit points ("self:read" calls inside its events) and writes the new camera
-// back ("self:update"); the driver does the navigation. Matrices are column-major
+// back ("self:update"); the 3Dconnexion software does the navigation. Matrices are column-major
 // camera-to-world. Needs the 3DxWare helper running and the 3Dconnexion CA trusted.
 import * as THREE from "three";
 
@@ -18,7 +18,7 @@ export interface SpaceMouseHost {
   isOrtho(): boolean;
   /** Camera apparent size is driven by ortho.zoom; fov is ignored there. */
   setFov(fovDeg: number): void;
-  /** Ortho only: world height the view should show (driver zoom). */
+  /** Ortho only: world height the view should show (zoom from the 3Dconnexion software). */
   setOrthoHeight(h: number): void;
   /** Orbit target (kept on the view axis so mouse orbit/pan continue sensibly). */
   target(): THREE.Vector3;
@@ -27,7 +27,7 @@ export interface SpaceMouseHost {
   modelBox(): THREE.Box3 | null;
   /** First surface hit along a ray, or null. */
   hit(ray: THREE.Ray): THREE.Vector3 | null;
-  /** Camera moved by the driver: sync derived state (up vector etc. is handled here). */
+  /** Camera moved by the 3Dconnexion software: sync derived state (up vector etc. is handled here). */
   onCameraWritten(): void;
 }
 
@@ -106,14 +106,14 @@ export class SpaceMouse {
     try {
       port = (await (await fetch(`https://${NL}:8181/3dconnexion/nlproxy`)).json()).port;
     } catch {
-      this.setStatus("no 3Dconnexion driver found (is 3DxWare running and its certificate trusted?)");
+      this.setStatus("3Dconnexion software not found (is it running and its certificate trusted?)");
       return;
     }
     let ws: WebSocket;
     try {
       ws = new WebSocket(`wss://${NL}:${port}`, "wamp");
     } catch {
-      this.setStatus("cannot open the driver socket");
+      this.setStatus("cannot open the WebSocket to the 3Dconnexion software");
       return;
     }
     this.ws = ws;
@@ -122,9 +122,9 @@ export class SpaceMouse {
       if (this.ws !== ws) return;
       this.ws = null;
       this.ctrl = null;
-      this.setStatus("disconnected from the driver");
+      this.setStatus("disconnected from the 3Dconnexion software");
     };
-    ws.onerror = () => this.setStatus("cannot open the driver socket (certificate not trusted?)");
+    ws.onerror = () => this.setStatus("cannot open the WebSocket to the 3Dconnexion software (certificate not trusted?)");
   }
 
   private async onMessage(ws: WebSocket, m: any[]): Promise<void> {
@@ -141,9 +141,9 @@ export class SpaceMouse {
         this.send([5, this.ctrl]);
         await this.update({ focus: document.hasFocus() });
         await this.update({ frame: { timingSource: 1 } });
-        this.setStatus("connected through the 3Dconnexion driver");
+        this.setStatus("connected through the 3Dconnexion software");
       } catch (err) {
-        this.setStatus("driver refused: " + (err as Error).message);
+        this.setStatus("3Dconnexion software refused: " + (err as Error).message);
       }
     } else if (m[0] === 3 || m[0] === 4) {
       const c = this.calls.get(m[1]);
@@ -154,7 +154,7 @@ export class SpaceMouse {
     }
   }
 
-  // ---- properties the driver reads ----
+  // ---- properties the 3Dconnexion software reads ----
   private frustum(): [number, number, number, number, number, number] {
     const c = this.host.camera();
     if (c instanceof THREE.OrthographicCamera) {
@@ -225,8 +225,8 @@ export class SpaceMouse {
     throw new Error(prop + " unknown property");
   }
 
-  /** After a move, put the mouse orbit centre on the new view axis at the driver pivot's depth;
-   *  the camera itself stays exactly as the driver left it. */
+  /** After a move, put the mouse orbit centre on the new view axis at the depth of the pivot it reports;
+   *  the camera itself stays exactly as the 3Dconnexion software left it. */
   private retarget(): void {
     const c = this.host.camera();
     const d = new THREE.Vector3(0, 0, -1).applyQuaternion(c.quaternion);

@@ -1178,7 +1178,7 @@ autoRange.addEventListener("click", () => {
 
 $<HTMLButtonElement>("fitBtn").addEventListener("click", () => viewer.fit());
 
-// ---- SpaceMouse (3Dconnexion driver) ----
+// ---- SpaceMouse (3Dconnexion software) ----
 // Connects silently once at page load, like Onshape: no UI. Status goes to the console only.
 viewer.spaceMouse.onStatus = (msg) => console.info(`[SpaceMouse] ${msg}`);
 void viewer.spaceMouse.connect();
