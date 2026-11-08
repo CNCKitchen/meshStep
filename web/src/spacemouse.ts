@@ -50,7 +50,6 @@ export class SpaceMouse {
   private pivot = new THREE.Vector3();
   private pivotSet = false;
   private ray = new THREE.Ray();
-  private focusHandlers: (() => void)[] = [];
 
   constructor(private host: SpaceMouseHost, pointerEl: HTMLElement) {
     pointerEl.addEventListener("pointermove", (e) => {
