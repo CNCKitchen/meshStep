@@ -1178,6 +1178,11 @@ autoRange.addEventListener("click", () => {
 
 $<HTMLButtonElement>("fitBtn").addEventListener("click", () => viewer.fit());
 
+// ---- SpaceMouse (3Dconnexion software) ----
+// Connects silently once at page load, like Onshape: no UI. Status goes to the console only.
+viewer.spaceMouse.onStatus = (msg) => console.info(`[SpaceMouse] ${msg}`);
+void viewer.spaceMouse.connect();
+
 // ---- mouse control scheme (bottom bar) ----
 // Emulates the pan/orbit/zoom buttons of common CAD tools; persisted per browser.
 const navSchemeSel = $<HTMLSelectElement>("navScheme");
