@@ -1178,6 +1178,16 @@ autoRange.addEventListener("click", () => {
 
 $<HTMLButtonElement>("fitBtn").addEventListener("click", () => viewer.fit());
 
+// ---- SpaceMouse (3Dconnexion driver) ----
+// Tries to connect once at startup (silently idle when no driver answers); the button reconnects.
+const smBtn = $<HTMLButtonElement>("smBtn");
+viewer.spaceMouse.onStatus = (msg, connected) => {
+  smBtn.classList.toggle("active", connected);
+  smBtn.title = `SpaceMouse: ${msg} — click to reconnect`;
+};
+smBtn.addEventListener("click", () => void viewer.spaceMouse.connect());
+void viewer.spaceMouse.connect();
+
 // ---- mouse control scheme (bottom bar) ----
 // Emulates the pan/orbit/zoom buttons of common CAD tools; persisted per browser.
 const navSchemeSel = $<HTMLSelectElement>("navScheme");

@@ -8,6 +8,7 @@ import { filterTriangles, filterSegments, wireframeIndex, type EdgeSet } from ".
 import { SectionController } from "./section.ts";
 import { MeasureController, type MeasureMode } from "./measure.ts";
 import { RulerOverlay } from "./ruler.ts";
+import { SpaceMouse } from "./spacemouse.ts";
 import { SCHEMES, MMB, RMB, type ControlScheme, type NavAction } from "./nav-schemes.ts";
 import type { MeasureGeometry } from "../../src/index.ts";
 
@@ -56,6 +57,8 @@ export class Viewer {
   private keyLight!: THREE.DirectionalLight;
   private fillLight!: THREE.DirectionalLight;
   private controls: OrbitControls;
+  /** 3Dconnexion SpaceMouse bridge (connect() / disconnect() driven from the UI). */
+  readonly spaceMouse: SpaceMouse;
   private content: Content;
   private container: HTMLElement;
 
@@ -242,6 +245,42 @@ export class Viewer {
     });
 
     this.installNavigation(this.renderer.domElement);
+    this.spaceMouse = new SpaceMouse(
+      {
+        camera: () => this.camera,
+        isOrtho: () => this.orthoOn,
+        setFov: (deg) => {
+          this.persp.fov = deg;
+          this.persp.updateProjectionMatrix();
+        },
+        setOrthoHeight: (h) => {
+          this.ortho.zoom = Math.max(0.05, Math.min(200, (this.ortho.top - this.ortho.bottom) / Math.max(h, 1e-6)));
+          this.ortho.updateProjectionMatrix();
+        },
+        target: () => this.controls.target,
+        setTarget: (p) => this.controls.target.copy(p),
+        modelBox: () => {
+          const b = new THREE.Box3().expandByObject(this.content.group);
+          return b.isEmpty() ? null : b;
+        },
+        hit: (ray) => {
+          const targets = this.orbitTargets();
+          if (!targets.length) return null;
+          this.raycaster.ray.copy(ray);
+          this.raycaster.near = 0;
+          this.raycaster.far = Infinity;
+          const hits = this.raycaster.intersectObjects(targets, false);
+          const h = this.section.enabled
+            ? hits.find((x) => this.section.plane.distanceToPoint(x.point) > -1e-6)
+            : hits[0];
+          return h ? h.point.clone() : null;
+        },
+        onCameraWritten: () => {
+          this.lastOrbitPivot = null;
+        },
+      },
+      this.renderer.domElement
+    );
 
     window.addEventListener("resize", () => this.resize());
     this.resize();
@@ -881,6 +920,7 @@ export class Viewer {
       this.applyExplode(f);
     }
     this.controls.update();
+    this.spaceMouse.frame();
     this.updateClipPlanes();
     this.updateLights();
     this.measure.update(); // process queued hover + keep markers a constant apparent size
