@@ -1233,6 +1233,20 @@ function gridCDT(
     for (let guard = 0; guard < 8; guard++) {
       const n = cur.length;
       if (n < 8) break;
+      // The scan below grows a corridor LINEARLY, so a loop that STARTS inside a corridor (on a
+      // doubled vertex — e.g. at the mouth where an annulus' seam meets its inner ring) splits it
+      // across the array wrap: the pair (mouth, last) is never matched and the "hole" piece keeps a
+      // dangling zero-width spike (INDX M3 Torx button-head dome: inner ring + seam out and back,
+      // starting at the ring's seam vertex -> de-slit variant 6 defects, original kept -> needles).
+      // Rotate such a loop to start at a vertex it visits only once, which can never lie in a leg.
+      {
+        const cnt = new Map<string, number>();
+        for (const v of cur) cnt.set(key3(v), (cnt.get(key3(v)) ?? 0) + 1);
+        if (cnt.get(key3(cur[0]!))! > 1) {
+          const s0 = cur.findIndex((v) => cnt.get(key3(v)) === 1);
+          if (s0 > 0) cur = [...cur.slice(s0), ...cur.slice(0, s0)];
+        }
+      }
       const firstAt = new Map<string, number>();
       let done = true;
       for (let jj = 0; jj < n && done; jj++) {
@@ -1295,7 +1309,7 @@ function gridCDT(
   for (const idx of [outerIdx, ...holeIdx]) weldPinches(idx);
   if (altOuter) { weldPinches(altOuter); for (const h of altHoles) weldPinches(h); }
   if (DBG && Number(process.env.MESHSTEP_DUMPCDT) === fid) {
-    console.error(`@@CDTDUMP@@${JSON.stringify({ fid, outerIdx, holeIdx, cdtPts, p3: allP3 })}@@END@@`);
+    console.error(`@@CDTDUMP@@${JSON.stringify({ fid, outerIdx, holeIdx, cdtPts, p3: allP3, altOuter, altHoles, interiorIdx })}@@END@@`);
   }
   const cdtOut: CdtOut = { missing: 0 };
   let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
@@ -4973,6 +4987,13 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // pair, so closed bodies in a genuine assembly are never bridged.
   if (brep.solids.length > 1) {
     const openIds = new Set(brep.solids.filter((s) => s.open).map((s) => s.id));
+    // Harmonize sheet-body orientations BEFORE sewing: the ribbons inherit their rails' windings.
+    if (openIds.size > 1) {
+      const frameKey = new Map<number, string>();
+      for (const s of brep.solids) if (s.open) frameKey.set(s.id, JSON.stringify([s.instances ?? s.transform ?? null, s.scale ?? null]));
+      const flipped = orientSheets(positions, indices, solidOfTri, frameKey, Math.max(0.02, 2 * chordTol));
+      if (DBG && flipped > 0) console.error(`[tess] orientSheets: flipped ${flipped} sheet(s)`);
+    }
     const unsewn = new Set<number>();
     const sewnSolids = new Set<number>();
     const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds, unsewn, sewnSolids);
@@ -5234,6 +5255,304 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
  * while the min-area triangulation stitches rail-to-rail like the ribbon meshers. Fill triangles
  * are wound opposite the directed ring so they pair manifold-consistently with their neighbours.
  */
+/**
+ * SHEET-BODY ORIENTATION HARMONIZATION. A part exported as many SHELL_BASED_SURFACE_MODEL bodies
+ * (Fusion's INDX XT30 connector: 818 one-face OPEN_SHELLs that jointly enclose the part) carries no
+ * orientation contract BETWEEN bodies — each sheet's ADVANCED_FACE sense is whatever the source
+ * surface happened to be, so ~40% of the connector's faces pointed inward (back faces in a viewer,
+ * wrong-signed winding for a voxelizer). Faces of one solid are oriented by their shell; only
+ * whole sheets need fixing, and the sheets are not index-welded (each samples its OWN copy of the
+ * shared edge), so adjacency is found geometrically: a boundary segment of sheet A whose midpoint
+ * lies within `tol` of a parallel boundary segment of sheet B is a junction, and consistent
+ * orientation means the two traverse it in OPPOSITE directions. Weighted by length, those votes
+ * form a signed graph over sheets; a max-|weight| spanning tree assigns flips, a few majority
+ * sweeps clean up, and then each connected group is oriented globally: OUTWARD by signed volume
+ * (with cavity parity, like orientConsistent) when its boundary is ≥97% matched, else to the
+ * area-majority of the file's own senses (an open quilt keeps the source's side).
+ * Only CLEAN two-sheet junctions vote: where three or more sheets meet (interpenetrating parts —
+ * the XT30 pins pass through housing holes whose walls coincide with the pin walls) the votes
+ * contradict at full strength, and sheets that FOLD onto each other at a segment (duplicate /
+ * overlapping faces: both triangles on the same side) carry no signal at all. Groups therefore
+ * come out per physical piece (housing, each pin segment), and each is oriented on its own. Only sheets whose
+ * solids share a placement frame are compared (meshes are still in part-local coordinates here).
+ * Returns the number of sheets flipped.
+ */
+function orientSheets(P: number[], I: number[], solidOfTri: number[], frameKey: Map<number, string>, tol: number): number {
+  const nt = I.length / 3;
+  // --- units: connected triangle components of open solids (index-welded within a solid) ---
+  const par = new Int32Array(nt).fill(-1);
+  const find = (x: number): number => { while (par[x]! >= 0 && par[par[x]!]! >= 0) { par[x] = par[par[x]!]!; x = par[x]!; } return par[x]! >= 0 ? par[x]! : x; };
+  const sheetTris: number[] = [];
+  for (let t = 0; t < nt; t++) if (frameKey.has(solidOfTri[t]!)) sheetTris.push(t);
+  if (sheetTris.length === 0) return 0;
+  const KEY = 2 ** 26;
+  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
+  const edgeTri = new Map<number, number>(); // first tri on the edge
+  const use = new Map<number, number>();
+  for (const t of sheetTris) for (let e = 0; e < 3; e++) {
+    const k = ek(I[t * 3 + e]!, I[t * 3 + (e + 1) % 3]!);
+    use.set(k, (use.get(k) ?? 0) + 1);
+    const o = edgeTri.get(k);
+    if (o === undefined) edgeTri.set(k, t);
+    else { const ra = find(o), rb = find(t); if (ra !== rb) par[ra] = rb; }
+  }
+  const unitOf = new Map<number, number>(); // root tri -> dense unit id
+  const uTri: number[][] = [];
+  const triUnit = new Int32Array(nt).fill(-1);
+  for (const t of sheetTris) {
+    const r = find(t);
+    let u = unitOf.get(r);
+    if (u === undefined) { u = uTri.length; unitOf.set(r, u); uTri.push([]); }
+    uTri[u]!.push(t); triUnit[t] = u;
+  }
+  const nu = uTri.length;
+  if (nu < 2) return 0;
+  const uGroup = uTri.map((ts) => frameKey.get(solidOfTri[ts[0]!]!)!);
+  // --- directed boundary segments with the apex of their owning triangle ---
+  interface Seg { a: number; b: number; c: number; u: number; len: number }
+  const segs: Seg[] = [];
+  // bLen: boundary length; mLen: length with ANY partner; cLen: length on clean voting junctions
+  const bLen = new Float64Array(nu), mLen = new Float64Array(nu), cLen = new Float64Array(nu);
+  for (const t of sheetTris) for (let e = 0; e < 3; e++) {
+    const a = I[t * 3 + e]!, b = I[t * 3 + (e + 1) % 3]!, c = I[t * 3 + (e + 2) % 3]!;
+    if (use.get(ek(a, b)) !== 1) continue;
+    const len = Math.hypot(P[b * 3]! - P[a * 3]!, P[b * 3 + 1]! - P[a * 3 + 1]!, P[b * 3 + 2]! - P[a * 3 + 2]!);
+    if (!(len > 1e-12)) continue;
+    segs.push({ a, b, c, u: triUnit[t]!, len });
+    bLen[triUnit[t]!] += len;
+  }
+  if (segs.length === 0) return 0;
+  // --- uniform grid over segment bboxes (inflated by tol) ---
+  let mean = 0;
+  for (const s of segs) mean += s.len;
+  mean /= segs.length;
+  const h = Math.max(4 * tol, mean);
+  const cell = (x: number): number => Math.floor(x / h);
+  const ck = (i: number, j: number, k: number): string => `${i},${j},${k}`;
+  const grid = new Map<string, number[]>();
+  segs.forEach((s, si) => {
+    const ax = P[s.a * 3]!, ay = P[s.a * 3 + 1]!, az = P[s.a * 3 + 2]!, bx = P[s.b * 3]!, by = P[s.b * 3 + 1]!, bz = P[s.b * 3 + 2]!;
+    const i0 = cell(Math.min(ax, bx) - tol), i1 = cell(Math.max(ax, bx) + tol);
+    const j0 = cell(Math.min(ay, by) - tol), j1 = cell(Math.max(ay, by) + tol);
+    const k0 = cell(Math.min(az, bz) - tol), k1 = cell(Math.max(az, bz) + tol);
+    if ((i1 - i0 + 1) * (j1 - j0 + 1) * (k1 - k0 + 1) > 4096) return; // absurdly long segment — no vote
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) for (let k = k0; k <= k1; k++) {
+      const key = ck(i, j, k);
+      const l = grid.get(key);
+      if (l) l.push(si); else grid.set(key, [si]);
+    }
+  });
+  // In-plane direction from a segment's midpoint toward its triangle's apex (perpendicular part).
+  const side = (s: Seg, dx: number, dy: number, dz: number): [number, number, number] => {
+    const mx = (P[s.a * 3]! + P[s.b * 3]!) / 2, my = (P[s.a * 3 + 1]! + P[s.b * 3 + 1]!) / 2, mz = (P[s.a * 3 + 2]! + P[s.b * 3 + 2]!) / 2;
+    let x = P[s.c * 3]! - mx, y = P[s.c * 3 + 1]! - my, z = P[s.c * 3 + 2]! - mz;
+    const d = x * dx + y * dy + z * dz;
+    x -= d * dx; y -= d * dy; z -= d * dz;
+    const l = Math.hypot(x, y, z) || 1;
+    return [x / l, y / l, z / l];
+  };
+  // --- votes: net[u,v] = Σ len · (+1 opposite traversal / −1 same traversal) ---
+  const net = new Map<number, number>();
+  const NK = nu + 1;
+  for (const s of segs) {
+    const ax = P[s.a * 3]!, ay = P[s.a * 3 + 1]!, az = P[s.a * 3 + 2]!;
+    const dx = (P[s.b * 3]! - ax) / s.len, dy = (P[s.b * 3 + 1]! - ay) / s.len, dz = (P[s.b * 3 + 2]! - az) / s.len;
+    const mx = ax + dx * s.len / 2, my = ay + dy * s.len / 2, mz = az + dz * s.len / 2;
+    const cand = grid.get(ck(cell(mx), cell(my), cell(mz)));
+    if (!cand) continue;
+    const best = new Map<number, { d: number; cos: number; t: Seg }>(); // per partner unit: closest segment
+    for (const ti of cand) {
+      const t = segs[ti]!;
+      if (t.u === s.u || uGroup[t.u] !== uGroup[s.u]) continue;
+      const tx = P[t.a * 3]!, ty = P[t.a * 3 + 1]!, tz = P[t.a * 3 + 2]!;
+      const ex = (P[t.b * 3]! - tx) / t.len, ey = (P[t.b * 3 + 1]! - ty) / t.len, ez = (P[t.b * 3 + 2]! - tz) / t.len;
+      const cos = dx * ex + dy * ey + dz * ez;
+      if (Math.abs(cos) < 0.9) continue;
+      let w = (mx - tx) * ex + (my - ty) * ey + (mz - tz) * ez;
+      w = w < 0 ? 0 : w > t.len ? t.len : w;
+      const d = Math.hypot(mx - tx - w * ex, my - ty - w * ey, mz - tz - w * ez);
+      if (d > tol) continue;
+      const o = best.get(t.u);
+      if (!o || d < o.d) best.set(t.u, { d, cos, t });
+    }
+    const matched = best.size > 0;
+    // Only a clean two-sheet junction carries an orientation signal. Where three or more sheets
+    // meet (a pin passing through a housing hole whose wall coincides with the pin's: pin above,
+    // pin inside, housing top, hole wall), the pairing is ambiguous and the votes contradict each
+    // other at full strength — they glued INDX's XT30 pins to the housing with the wrong sign.
+    if (best.size === 1) for (const [v, { cos, t }] of best) {
+      const sa = side(s, dx, dy, dz), sb = side(t, dx, dy, dz);
+      if (sa[0] * sb[0] + sa[1] * sb[1] + sa[2] * sb[2] > 0.7) continue; // sheets folded onto each other
+      const k = s.u < v ? s.u * NK + v : v * NK + s.u;
+      net.set(k, (net.get(k) ?? 0) + (cos < 0 ? s.len : -s.len));
+      cLen[s.u] += s.len;
+    }
+    if (matched) mLen[s.u] += s.len;
+  }
+  const adj: { v: number; w: number }[][] = Array.from({ length: nu }, () => []);
+  for (const [k, w] of net) {
+    if (w === 0) continue;
+    const u = Math.floor(k / NK), v = k % NK;
+    adj[u]!.push({ v, w }); adj[v]!.push({ v: u, w });
+  }
+  // --- max-|w| spanning forest (Prim with a binary heap), flips from tree-edge signs ---
+  const area = new Float64Array(nu);
+  for (let u = 0; u < nu; u++) for (const t of uTri[u]!) {
+    const a = I[t * 3]! * 3, b = I[t * 3 + 1]! * 3, c = I[t * 3 + 2]! * 3;
+    const ux = P[b]! - P[a]!, uy = P[b + 1]! - P[a + 1]!, uz = P[b + 2]! - P[a + 2]!;
+    const vx = P[c]! - P[a]!, vy = P[c + 1]! - P[a + 1]!, vz = P[c + 2]! - P[a + 2]!;
+    area[u] += 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+  }
+  const flip = new Int8Array(nu);
+  const comp = new Int32Array(nu).fill(-1);
+  const heap: [number, number, number][] = []; // [|w|, v, flip]
+  const push = (x: [number, number, number]): void => {
+    heap.push(x);
+    let i = heap.length - 1;
+    while (i > 0) { const p = (i - 1) >> 1; if (heap[p]![0] >= heap[i]![0]) break; [heap[p], heap[i]] = [heap[i]!, heap[p]!]; i = p; }
+  };
+  const pop = (): [number, number, number] => {
+    const top = heap[0]!, last = heap.pop()!;
+    if (heap.length > 0) {
+      heap[0] = last;
+      let i = 0;
+      for (;;) {
+        const l = 2 * i + 1, r = l + 1;
+        let m = i;
+        if (l < heap.length && heap[l]![0] > heap[m]![0]) m = l;
+        if (r < heap.length && heap[r]![0] > heap[m]![0]) m = r;
+        if (m === i) break;
+        [heap[m], heap[i]] = [heap[i]!, heap[m]!]; i = m;
+      }
+    }
+    return top;
+  };
+  const order = [...Array(nu).keys()].sort((x, y) => area[y]! - area[x]!);
+  let nComp = 0;
+  for (const root of order) {
+    if (comp[root]! >= 0 || adj[root]!.length === 0) continue;
+    const c = nComp++;
+    comp[root] = c; flip[root] = 0;
+    for (const { v, w } of adj[root]!) push([Math.abs(w), v, w > 0 ? 0 : 1]);
+    while (heap.length) {
+      const [, v, f] = pop();
+      if (comp[v]! >= 0) continue;
+      comp[v] = c; flip[v] = f;
+      for (const { v: x, w } of adj[v]!) if (comp[x]! < 0) push([Math.abs(w), x, w > 0 ? f : 1 - f]);
+    }
+  }
+  if (nComp === 0) return 0;
+  if (DBG) { const un: number[] = []; for (let u = 0; u < nu; u++) if (comp[u]! < 0) un.push(solidOfTri[uTri[u]![0]!]!); if (un.length) console.error(`[orientSheets] ${un.length} ungrouped sheet(s): ${un.slice(0, 40).join(" ")}`); }
+  // Majority sweeps: a sheet whose weighted neighbours mostly disagree flips.
+  for (let it = 0; it < 8; it++) {
+    let changed = 0;
+    for (let u = 0; u < nu; u++) {
+      let s = 0;
+      for (const { v, w } of adj[u]!) s += flip[u] === flip[v] ? w : -w;
+      if (s < 0) { flip[u] = 1 - flip[u]!; changed++; }
+    }
+    if (changed === 0) break;
+  }
+  if (DBG) {
+    let sat = 0, uns = 0;
+    for (let u = 0; u < nu; u++) for (const { v, w } of adj[u]!) { const ok = (flip[u] === flip[v]) === (w > 0); if (ok) sat += Math.abs(w); else uns += Math.abs(w); }
+    console.error(`[orientSheets] vote weight satisfied=${sat.toFixed(2)} unsatisfied=${uns.toFixed(2)}`);
+  }
+  // --- global orientation per connected group ---
+  const members: number[][] = Array.from({ length: nComp }, () => []);
+  for (let u = 0; u < nu; u++) if (comp[u]! >= 0) members[comp[u]!]!.push(u);
+  // Signed volume (×6) of a triangle as seen from origin o. A group that closes only through
+  // ambiguous junctions (a pin tail whose end cap overlaps the next piece's) is not a sealed volume,
+  // so its world-origin volume can carry either sign; measured from the group's own centre the
+  // sign tracks the orientation (INDX XT30 signal pin: -1.3 world-origin vs its mirror twin's +4.6).
+  const triSV = (t: number, f: number, o: number[]): number => {
+    const a = I[t * 3]! * 3, b = I[t * 3 + (f ? 2 : 1)]! * 3, c = I[t * 3 + (f ? 1 : 2)]! * 3;
+    const ax = P[a]! - o[0]!, ay = P[a + 1]! - o[1]!, az = P[a + 2]! - o[2]!;
+    const bx = P[b]! - o[0]!, by = P[b + 1]! - o[1]!, bz = P[b + 2]! - o[2]!;
+    const cx = P[c]! - o[0]!, cy = P[c + 1]! - o[1]!, cz = P[c + 2]! - o[2]!;
+    return ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+  };
+  interface G { c: number; closed: boolean; strict: boolean; mixed: boolean; vol: number; box: number[]; pts: [number, number, number][]; group: string }
+  const gs: G[] = [];
+  for (let c = 0; c < nComp; c++) {
+    let bl = 0, ml = 0, cl = 0, vol = 0;
+    const box = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity];
+    // extreme vertices along ±x, ±y, ±z: a cavity must have ALL of them inside its enclosure
+    const pts: [number, number, number][] = [];
+    for (const u of members[c]!) {
+      bl += bLen[u]!; ml += mLen[u]!; cl += cLen[u]!;
+      for (const t of uTri[u]!) {
+        for (let e = 0; e < 3; e++) {
+          const v = I[t * 3 + e]! * 3, x = P[v]!, y = P[v + 1]!, z = P[v + 2]!;
+          if (x < box[0]!) box[0] = x; if (y < box[1]!) box[1] = y; if (z < box[2]!) box[2] = z;
+          if (x > box[3]!) box[3] = x; if (y > box[4]!) box[4] = y; if (z > box[5]!) box[5] = z;
+          if (x === box[0] || y === box[1] || z === box[2] || x === box[3] || y === box[4] || z === box[5]) {
+            for (let k = 0; k < 6; k++) if ([x, y, z][k % 3] === box[k]) pts[k] = [x, y, z];
+          }
+        }
+      }
+    }
+    const ctr = [(box[0]! + box[3]!) / 2, (box[1]! + box[4]!) / 2, (box[2]! + box[5]!) / 2];
+    for (const u of members[c]!) for (const t of uTri[u]!) vol += triSV(t, flip[u]!, ctr);
+    const mixed = members[c]!.some((u) => flip[u] !== flip[members[c]![0]!]);
+    gs.push({ c, closed: members[c]!.length > 1 && ml >= 0.97 * bl, strict: members[c]!.length > 1 && cl >= 0.97 * bl, mixed, vol, box, pts, group: uGroup[members[c]![0]!]! });
+  }
+  const winding = (g: G, p: [number, number, number]): number => {
+    let w = 0;
+    for (const u of members[g.c]!) for (const t of uTri[u]!) {
+      const f = flip[u]!;
+      const ia = I[t * 3]! * 3, ib = I[t * 3 + (f ? 2 : 1)]! * 3, ic = I[t * 3 + (f ? 1 : 2)]! * 3;
+      const ax = P[ia]! - p[0], ay = P[ia + 1]! - p[1], az = P[ia + 2]! - p[2];
+      const bx = P[ib]! - p[0], by = P[ib + 1]! - p[1], bz = P[ib + 2]! - p[2];
+      const cx = P[ic]! - p[0], cy = P[ic + 1]! - p[1], cz = P[ic + 2]! - p[2];
+      const la = Math.hypot(ax, ay, az), lb = Math.hypot(bx, by, bz), lc = Math.hypot(cx, cy, cz);
+      const num = ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+      const den = la * lb * lc + (ax * bx + ay * by + az * bz) * lc + (bx * cx + by * cy + bz * cz) * la + (cx * ax + cy * ay + cz * az) * lb;
+      w += 2 * Math.atan2(num, den);
+    }
+    return w / (4 * Math.PI);
+  };
+  // Global side per group. The file's own senses are the default: a group whose sheets ALREADY
+  // agree with each other keeps them unless it is STRICTLY closed (sealed through clean two-sheet
+  // junctions only) — then the volume sign is trustworthy and fixes an inside-out export. A group
+  // that closes only through ambiguous junctions (shared with another sheet group, or fused to a
+  // closed solid we don't see here) has a meaningless volume sign: ABC 00009794's surface shells
+  // continue a manifold solid consistently in the file, and the volume rule inverted them. Only when
+  // the file contradicts ITSELF inside a group (XT30: ~40% of sheets inward) does the volume decide
+  // a loosely closed group; an open inconsistent one takes the area-majority of the file's senses.
+  for (const g of gs) {
+    let invert: boolean;
+    if (!g.strict && !g.mixed) {
+      invert = flip[members[g.c]![0]!] === 1; // restore the file's (consistent) senses
+    } else if (g.closed) {
+      let parity = 0;
+      for (const o of gs) {
+        if (o === g || !o.closed || o.group !== g.group) continue;
+        // A cavity lies wholly inside its enclosure: bbox containment, then every extreme vertex
+        // enclosed. One sample point is not enough — interpenetrating parts (a pin pressed through
+        // a housing wall) have SOME vertices inside the other's material. o's orientation is not
+        // final yet, so |winding| (sign-free) is the test.
+        if (g.box[0]! < o.box[0]! || g.box[1]! < o.box[1]! || g.box[2]! < o.box[2]! || g.box[3]! > o.box[3]! || g.box[4]! > o.box[4]! || g.box[5]! > o.box[5]!) continue;
+        if (g.pts.every((p) => Math.abs(winding(o, p)) > 0.75)) parity++;
+      }
+      invert = (parity & 1) === 1 ? g.vol > 0 : g.vol < 0;
+    } else {
+      let keep = 0, flipA = 0;
+      for (const u of members[g.c]!) if (flip[u]) flipA += area[u]!; else keep += area[u]!;
+      invert = flipA > keep;
+    }
+    if (DBG) console.error(`[orientSheets] group ${g.c} sheets=${members[g.c]!.length} closed=${g.closed} vol6=${g.vol.toExponential(2)} box=${g.box.map((x) => x.toFixed(2)).join(",")} strict=${g.strict} mixed=${g.mixed} -> ${invert ? "invert" : "keep"}`);
+    if (invert) for (const u of members[g.c]!) flip[u] = 1 - flip[u]!;
+  }
+  let n = 0;
+  for (let u = 0; u < nu; u++) {
+    if (!flip[u]) continue;
+    n++;
+    for (const t of uTri[u]!) { const x = I[t * 3 + 1]!; I[t * 3 + 1] = I[t * 3 + 2]!; I[t * 3 + 2] = x; }
+  }
+  return n;
+}
+
 /**
  * CROSS-SOLID SEWING (rec ④ centerpiece). Solids are welded independently and kept disjoint — the
  * right call for genuine assemblies — but a large ABC class models ONE part as several open

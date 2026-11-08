@@ -142,6 +142,30 @@
     },
     "skipped": {}
   },
+  "INDX M3x16 ISO7380-3 Torx button head": {
+    "hash": "06f64f557e39fc54735c5030176d6c83a38e929c96a72466a98c555592802515",
+    "verts": 3525,
+    "tris": 7046,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 132.231,
+    "dispatch": {
+      "grid": 20
+    },
+    "skipped": {}
+  },
+  "INDX XT30 connector (818 sheets)": {
+    "hash": "b5bd4f57ba6a75ccaf505f540916bfc5a91ac220dd8916cb0a0fb685a5ca2353",
+    "verts": 14934,
+    "tris": 19419,
+    "openEdges": 8879,
+    "nonManifoldEdges": 0,
+    "volume": 398.447,
+    "dispatch": {
+      "grid": 818
+    },
+    "skipped": {}
+  },
   "Insta360GO3_case": {
     "hash": "61f936cf6ea2e9ee805fd06a02c2e127ae93e133bba2cd1c8c34ee0294486f1c",
     "verts": 29361,
@@ -1193,10 +1217,26 @@
     },
     "skipped": {}
   },
+  "Tool-free Z-Axis Belt Tensioner for Voron 2.4": {
+    "hash": "d62a2537098d3233d4f4ece380e85fbb98f262cf6f1c98c1d2ba962dbe2ca618",
+    "verts": 776283,
+    "tris": 1552574,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 222561.192,
+    "dispatch": {
+      "cone": 4,
+      "coneCap": 6,
+      "coneSlice": 20,
+      "grid": 4218,
+      "thinFace": 6
+    },
+    "skipped": {}
+  },
   "WN1452 K25x10 TX7 screw": {
-    "hash": "63ed56c25a53f5012464be3aba898408c83b1bdc1239f331674b7b72be8f5558",
-    "verts": 6869,
-    "tris": 13734,
+    "hash": "84e94ad274d488ee76d227213bb69b799b4f6fcb33920e08204106691119cbbd",
+    "verts": 6874,
+    "tris": 13744,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 41.421,
