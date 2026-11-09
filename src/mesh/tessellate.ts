@@ -78,7 +78,12 @@ export interface MeshResult {
   /** Ids of surface bodies built from OPEN_SHELLs: their boundary edges are open by design, so
    * watertightness checks must exclude their triangles rather than report defects. */
   openSolids: number[];
-  stats: { solids: number; facesTotal: number; facesTessellated: number; skipped: Record<string, number> };
+  stats: {
+    solids: number; facesTotal: number; facesTessellated: number; skipped: Record<string, number>;
+    /** Faces with no area at the requested precision (their whole boundary samples to fewer than
+     * three distinct points) — counted in facesTessellated with no triangles, not as skipped. */
+    degenerate?: number;
+  };
   /** Structured findings from the rescue/fallback meshing paths (dropped/skipped faces, heuristic
    * fills, degenerate boundaries) — the per-face half of the import diagnostics. */
   warnings: MeshWarning[];
@@ -4711,6 +4716,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const skipped: Record<string, number> = {};
   let facesTotal = 0;
   let facesTessellated = 0;
+  let facesDegenerate = 0;
   // Collect diagnostics warnings for this run (module-level sink: tessellation is synchronous,
   // and the deep meshing code reports without threading a sink through every signature).
   beginWarnings();
@@ -5012,6 +5018,43 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           || (periodic && mark(face.faceId, "region", tessellatePeriodicRegion(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || (face.loops.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, outer, sampled, face.faceId, verts, faceIds, sign, chordTol)));
       }
+      // POINT-LOOP RETRY (every mesher above declined): a loop whose whole sampled polyline is one
+      // weld-equal point — a micro B-spline edge from a vertex back to itself, an exporter's
+      // VERTEX_LOOP written as an edge — constrains nothing, but flagged FACE_OUTER_BOUND it is
+      // taken as THE outer boundary and the face "projects to 1 pt" (ABC 00028650: 4 planes each
+      // carrying a 25 um point loop beside their real 5-edge outer). Strip such loops like
+      // VERTEX_LOOPs and run the generic chain once more. Only reached on failure, so every face
+      // that meshes today keeps its result.
+      if (!ok && outer && face.loops.length > 1) {
+        const real = face.loops.filter((lp) => !isPointLoop(lp, sampled));
+        if (real.length > 0 && real.length < face.loops.length) {
+          const rOuter = real.find((l) => l.outer) ?? real[0]!;
+          const periodic = !!(surface.periodicU || (surface as Surface).periodicV);
+          ok = mark(face.faceId, "grid", tessellateParamGrid(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            || (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (periodic && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (real.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, rOuter, sampled, face.faceId, verts, faceIds, sign, chordTol)));
+        }
+      }
+      // DEGENERATE face: its whole boundary samples to fewer than three weld-distinct points (a
+      // face bounded only by a zero-length edge; a lens whose two arcs sag below chordTol and
+      // sample to the same chord). It has no area at the requested precision — the neighbours'
+      // shared samples already close the shell — so nothing is missing: count it as meshed with
+      // no triangles (stats.degenerate), not as a skipped face with missing geometry.
+      if (!ok && face.loops.length > 0) {
+        const seenPts = new Set<string>();
+        for (const lp of face.loops) for (const oe of lp.edges) for (const p of sampled.get(oe.edgeId) ?? []) {
+          seenPts.add(`${Math.round(p[0] / 1e-6)},${Math.round(p[1] / 1e-6)},${Math.round(p[2] / 1e-6)}`);
+          if (seenPts.size >= 3) break;
+        }
+        if (seenPts.size < 3) {
+          trace?.(face.faceId, "degenerate");
+          if (DBG) console.error(`[tess] DEGENERATE fid=${face.faceId} kind=${face.surfaceKind}: boundary samples to ${seenPts.size} distinct point(s)`);
+          facesDegenerate++;
+          facesTessellated++;
+          continue;
+        }
+      }
       if (ok) facesTessellated++;
       else {
         trace?.(face.faceId, "untriangulated");
@@ -5106,7 +5149,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     faceOfTri: Uint32Array.from(faceOfTri),
     solidOfTri: Uint32Array.from(solidOfTri),
     openSolids: brep.solids.filter((s) => s.open).map((s) => s.id),
-    stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped },
+    stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped, ...(facesDegenerate ? { degenerate: facesDegenerate } : {}) },
     warnings: takeWarnings(),
     ...(opts.collectEdgePolylines ? { edgePolylines: sampled } : {}),
   };
