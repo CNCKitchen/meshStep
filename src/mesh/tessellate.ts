@@ -2528,7 +2528,17 @@ function tessellateRevolutionBand(
         if (stackPeriodic) { while (dh > stackPeriod / 2) dh -= stackPeriod; while (dh < -stackPeriod / 2) dh += stackPeriod; }
         if (Math.abs(d) < 1e-8 && Math.abs(dh) > 1e-8) return false;
       }
-      if (Math.abs(wind) < 0.9 * period && amax - amin < 0.9 * period) return false; // partial arc
+      // Span on the UNWRAPPED angle walk: raw atan2 angles make a small hole straddling the seam
+      // (angles near -π and +π) read as a full-period span, and the loft then paved straight over
+      // the hole the neighbouring face fills (ABC 00020656/57, 00022015: 31 non-manifold rim
+      // edges each). A genuine seam-carrying doubled rim still walks a full period.
+      let ua = 0, umin = 0, umax = 0;
+      for (let i = 0; i + 1 < as.length; i++) {
+        let d = as[i + 1]! - as[i]!;
+        while (d > period / 2) d -= period; while (d < -period / 2) d += period;
+        ua += d; if (ua < umin) umin = ua; if (ua > umax) umax = ua;
+      }
+      if (Math.abs(wind) < 0.9 * period && Math.min(amax - amin, umax - umin) < 0.9 * period) return false; // partial arc
       // The per-angle loft is only well-defined for a rim SINGLE-VALUED in angle: monotone
       // angular progression means sum(|du|) == |sum(du)|. A rim whose trim curves BACKTRACK in
       // angle (a cone cut by a wavy B-spline boundary: 180°->152°->170°->56°, Ontos) passes the
