@@ -640,7 +640,10 @@ function shiftIntoRange(p2: P2[], target: number, c: 0 | 1, period = TWO_PI): vo
  * along the ruling. Genuinely curved edges still densify through the curve's own chord/turn
  * criteria in sampleEdgePolyline; interior meshing keeps the unfloored requirement. */
 function faceTarget(surface: Surface, targetEdge: number, chordTol: number, normalDev: number, u = 0, v = 0, floorAngular = false): number {
-  const Rc = surface.curvatureRadius(u, v);
+  return targetForRadius(surface.curvatureRadius(u, v), targetEdge, chordTol, normalDev, floorAngular);
+}
+/** faceTarget's formula for a given curvature radius. */
+function targetForRadius(Rc: number, targetEdge: number, chordTol: number, normalDev: number, floorAngular = false): number {
   const floor = Math.min(targetEdge / 40, 30 * chordTol);
   if (!Number.isFinite(Rc)) return targetEdge;
   const ang = floorAngular ? Math.max(floor, Rc * normalDev) : Rc * normalDev;
@@ -1022,6 +1025,14 @@ function gridCDT(
     // Floor only the chord term (see faceTarget): the angular requirement must hold as given.
     return Math.min(targetEdge, Math.max(targetEdge / 40, Math.sqrt(8 * chordTol * R)), R * normalDev);
   };
+  // A swept profile's curvature varies along the face and 3x3 samples can all miss its tight
+  // stretch (an airfoil-like extrusion: R 28..1150 mm over one face, the samples read ~300): bound
+  // the profile direction by the profile's tightest radius over the face's span as well, so the
+  // anisotropic stretch never lays chords across a bend the samples did not see.
+  if (surface.spanRadius) {
+    const R = surface.spanRadius(umin, umax, vmin, vmax);
+    if (Number.isFinite(R) && R > 0) { if (surface.profileAxis === 1) kV = Math.max(kV, 1 / R); else kU = Math.max(kU, 1 / R); }
+  }
   const stepU = stepOf(kU), stepV = stepOf(kV);
 
   // Sanitize each boundary ring: collapse zero-width "out-and-back" spikes. A pinched strip face
@@ -1087,7 +1098,23 @@ function gridCDT(
   const inRegion = (p: P2): boolean => pointInPoly(p, outer.p2) && !holeP2.some((h) => pointInPoly(p, h));
 
   // Curvature-adaptive interior density so the initial mesh is already fine on curved faces.
-  const target = faceTarget(surface, targetEdge, chordTol, normalDev, umid, vmid);
+  let target = faceTarget(surface, targetEdge, chordTol, normalDev, umid, vmid);
+  // SWEPT surfaces report the LOCAL radius of their profile, which varies along the face; the
+  // uniform base grid instead takes the profile's tightest radius over the span the face covers
+  // (what the old whole-curve minimum gave, restricted to this face) — but never more than 8x
+  // finer than the median target over a 5x5 lattice: a profile with a sharp tip (ABC 00029189:
+  // R 0.2 mm on one stretch, 300 mm elsewhere) would otherwise impose tip density on the whole face
+  // (580k points, minutes). The local size field + refinement (reaching ~16x below the base
+  // spacing) and the finely sampled boundary still resolve the tip.
+  if (surface.spanRadius) {
+    const ts: number[] = [];
+    for (let i = 0; i < 5; i++) for (let j = 0; j < 5; j++) {
+      ts.push(faceTarget(surface, targetEdge, chordTol, normalDev, umin + ((umax - umin) * (i + 0.5)) / 5, vmin + ((vmax - vmin) * (j + 0.5)) / 5));
+    }
+    ts.sort((a, b) => a - b);
+    const span = targetForRadius(surface.spanRadius(umin, umax, vmin, vmax), targetEdge, chordTol, normalDev);
+    target = Math.max(Math.min(target, span), ts[12]! / 8);
+  }
   // Anisotropy-adjusted axis scales for the CDT plane (capped so triangles never exceed ~6:1 —
   // beyond that slivers start to cost more numerically than the shading gains). uScale/vScale stay
   // the TRUE metric for anything with a physical tolerance (the sanitiser's snap key above).
@@ -2570,7 +2597,16 @@ function tessellateRevolutionBand(
         const f = d > 1e-12 ? (s - progT[ti]!) / d : 0;
         return hT[ti]! + (hT[(ti + 1) % hT.length]! - hT[ti]!) * Math.max(0, Math.min(1, f));
       };
-      const target = faceTarget(surface, targetEdge, chordTol, normalDev, c === 0 ? angs[0]! : (h0 + h1) / 2, c === 0 ? (h0 + h1) / 2 : angs[0]!);
+      let target = faceTarget(surface, targetEdge, chordTol, normalDev, c === 0 ? angs[0]! : (h0 + h1) / 2, c === 0 ? (h0 + h1) / 2 : angs[0]!);
+      // A swept profile's radius is LOCAL and varies over the band: one sample can sit on a flat
+      // stretch and under-sample a tight one — take the profile's tightest over the band's span.
+      if (surface.spanRadius) {
+        let aLo = Infinity, aHi = -Infinity;
+        for (const x of angs) { if (x < aLo) aLo = x; if (x > aHi) aHi = x; }
+        const lo = Math.min(h0, h1), hi = Math.max(h0, h1);
+        const R = c === 0 ? surface.spanRadius(aLo, aHi, lo, hi) : surface.spanRadius(lo, hi, aLo, aHi);
+        target = Math.min(target, targetForRadius(R, targetEdge, chordTol, normalDev));
+      }
       // Ring count from the LONGEST stack traverse over a few sample angles (a torus elbow's outer
       // side is much longer than its inner side).
       let span = 0;

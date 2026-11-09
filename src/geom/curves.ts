@@ -25,8 +25,6 @@ export interface Curve3 {
   evaluate(t: number): Vec3;
   /** Parameter of the closest point (exact for conics/lines, iterative for B-splines). */
   project(p: Vec3): number;
-  /** Smallest radius of curvature over the curve; Infinity for a line. Drives sampling density. */
-  minRadius(): number;
 }
 
 class LineCurve implements Curve3 {
@@ -36,7 +34,6 @@ class LineCurve implements Curve3 {
   constructor(o: Vec3, d: Vec3) { this.o = o; this.d = d; }
   evaluate(t: number): Vec3 { return add(this.o, scale(this.d, t)); }
   project(p: Vec3): number { const l2 = dot(this.d, this.d); return l2 > 0 ? dot(sub(p, this.o), this.d) / l2 : 0; }
-  minRadius(): number { return Infinity; }
 }
 
 class CircleCurve implements Curve3 {
@@ -46,7 +43,6 @@ class CircleCurve implements Curve3 {
   constructor(f: Frame, r: number) { this.f = f; this.r = r; }
   evaluate(t: number): Vec3 { return add(this.f.o, add(scale(this.f.x, Math.cos(t) * this.r), scale(this.f.y, Math.sin(t) * this.r))); }
   project(p: Vec3): number { const d = sub(p, this.f.o); return Math.atan2(dot(d, this.f.y), dot(d, this.f.x)); }
-  minRadius(): number { return this.r; }
 }
 
 class EllipseCurve implements Curve3 {
@@ -56,7 +52,6 @@ class EllipseCurve implements Curve3 {
   constructor(f: Frame, a: number, b: number) { this.f = f; this.a = a; this.b = b; }
   evaluate(t: number): Vec3 { return add(this.f.o, add(scale(this.f.x, Math.cos(t) * this.a), scale(this.f.y, Math.sin(t) * this.b))); }
   project(p: Vec3): number { const d = sub(p, this.f.o); return Math.atan2(dot(d, this.f.y) / this.b, dot(d, this.f.x) / this.a); }
-  minRadius(): number { return Math.min(this.a, this.b) ** 2 / Math.max(this.a, this.b, 1e-9); }
 }
 
 class BSplineCurve3 implements Curve3 {
@@ -99,19 +94,6 @@ class BSplineCurve3 implements Curve3 {
     }
     return bt;
   }
-  minRadius(): number {
-    // Turn-angle over chord-length between consecutive samples bounds the curvature radius.
-    let minR = Infinity;
-    for (let i = 1; i + 1 < this.samples.length; i++) {
-      const a = this.samples[i - 1]!.p, b = this.samples[i]!.p, c = this.samples[i + 1]!.p;
-      const u = sub(b, a), v = sub(c, b);
-      const lu = Math.hypot(u[0], u[1], u[2]), lv = Math.hypot(v[0], v[1], v[2]);
-      if (lu < 1e-12 || lv < 1e-12) continue;
-      const ang = Math.acos(Math.max(-1, Math.min(1, dot(u, v) / (lu * lv))));
-      if (ang > 1e-5) minR = Math.min(minR, ((lu + lv) / 2) / ang);
-    }
-    return minR;
-  }
 }
 
 /** A basis curve restricted to [ta, tb], reparametrised to t∈[0,1] running trim1 -> trim2. */
@@ -135,7 +117,88 @@ class TrimmedCurve3 implements Curve3 {
     const u = (t - this.ta) / ((this.tb - this.ta) || 1e-12);
     return Math.min(1, Math.max(0, u));
   }
-  minRadius(): number { return this.base.minRadius(); }
+}
+
+/**
+ * LOCAL radius of curvature along a curve, for the swept surfaces' curvatureRadius(). A swept
+ * face's size field must follow the curvature of the part of the profile the face actually spans:
+ * a single global minimum lets one cusp ANYWHERE on a closed basis curve size every face on it at
+ * that cusp's radius (0.3 um on a 100 mm extrusion -> gridCDT at its 1200x1200 cap, timeouts/OOM).
+ * Same scheme as BSplineSurface.rcGrid: turn-angle radius ((|ab|+|bc|)/2 / turn) on a fixed
+ * sample lattice, kept PER CELL, looked up as the min over the query's cell and its neighbours (one
+ * cell of smoothing so the size field never jumps across a cell border, and a bend between two
+ * query points is still seen). The turn-angle estimate is self-limiting at a genuine kink — it
+ * reads as a sample-spacing-sized radius, not 0 — unlike a pointwise second derivative.
+ * `axis` (unit) projects the curve onto the plane normal to it first: an extrusion's cross-section
+ * curvature is that of the profile's projection, which an oblique sweep changes.
+ */
+export class CurveRadiusTable {
+  private t0: number; private span: number; private periodic: boolean;
+  private cells: Float64Array | null = null;
+  private constant = Infinity;
+  constructor(c: Curve3, axis?: Vec3) {
+    this.t0 = c.t0; this.span = c.t1 - c.t0; this.periodic = c.closed && this.span > 0;
+    const circ = c instanceof CircleCurve ? c : c instanceof TrimmedCurve3 && c.base instanceof CircleCurve ? c.base : null;
+    if (c instanceof LineCurve) return; // straight: Infinity everywhere
+    // A circle swept along its own normal (or a profile circle with no sweep axis) has its exact
+    // radius everywhere — keep it exact rather than a 0.01%-off lattice estimate.
+    if (circ && (!axis || Math.abs(dot(axis, circ.f.z)) > 1 - 1e-9)) { this.constant = circ.r; return; }
+    const M = c instanceof BSplineCurve3 ? Math.min(4096, Math.max(64, 8 * c.cps.length)) : 128; // even
+    const N = M / 2; // two samples per cell
+    const pts: Vec3[] = [];
+    for (let i = 0; i <= M; i++) {
+      const p = c.evaluate(this.t0 + (this.span * i) / M);
+      pts.push(axis ? sub(p, scale(axis, dot(p, axis))) : p);
+    }
+    const cells = new Float64Array(N).fill(Infinity);
+    const turnR = (a: Vec3, b: Vec3, d: Vec3): number => {
+      const u = sub(b, a), v = sub(d, b);
+      const lu = Math.hypot(u[0], u[1], u[2]), lv = Math.hypot(v[0], v[1], v[2]);
+      if (lu < 1e-12 || lv < 1e-12) return Infinity;
+      const ang = Math.acos(Math.max(-1, Math.min(1, dot(u, v) / (lu * lv))));
+      return ang > 1e-5 ? ((lu + lv) / 2) / ang : Infinity;
+    };
+    for (let i = 1; i < M; i++) {
+      const ci = Math.min(N - 1, i >> 1);
+      cells[ci] = Math.min(cells[ci]!, turnR(pts[i - 1]!, pts[i]!, pts[i + 1]!));
+    }
+    if (this.periodic) { // the seam sample (0 == M) turns between the last and the first chord
+      const r = turnR(pts[M - 1]!, pts[0]!, pts[1]!);
+      cells[0] = Math.min(cells[0]!, r); cells[N - 1] = Math.min(cells[N - 1]!, r);
+    }
+    this.cells = cells;
+  }
+  /** Smallest radius over the parameter span [ta, tb] (either order; wrapped on a closed curve),
+   *  with the same one-cell smoothing as at(). */
+  minOver(ta: number, tb: number): number {
+    const cells = this.cells;
+    if (!cells) return this.constant;
+    const N = cells.length;
+    const lo = Math.min(ta, tb), hi = Math.max(ta, tb);
+    let a = Math.floor(((lo - this.t0) / this.span) * N) - 1, b = Math.floor(((hi - this.t0) / this.span) * N) + 1;
+    if (this.periodic) { if (b - a + 1 >= N) { a = 0; b = N - 1; } }
+    else { a = Math.max(0, a); b = Math.min(N - 1, b); }
+    let r = Infinity;
+    for (let j = a; j <= b; j++) { const c = cells[this.periodic ? ((j % N) + N) % N : j]!; if (c < r) r = c; }
+    return r;
+  }
+  /** Local radius at curve parameter t (wrapped on a closed curve, clamped otherwise). */
+  at(t: number): number {
+    const cells = this.cells;
+    if (!cells) return this.constant;
+    const N = cells.length;
+    let f = (t - this.t0) / this.span;
+    if (this.periodic) f -= Math.floor(f);
+    const ci = Math.min(N - 1, Math.max(0, Math.floor(f * N)));
+    let r = cells[ci]!;
+    for (const d of [-1, 1]) {
+      let j = ci + d;
+      if (this.periodic) j = (j + N) % N;
+      else if (j < 0 || j >= N) continue;
+      if (cells[j]! < r) r = cells[j]!;
+    }
+    return r;
+  }
 }
 
 /**

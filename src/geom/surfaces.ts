@@ -6,7 +6,7 @@ import type { Vec3 } from "./vec.ts";
 import { add, cross, dot, normalize, scale, sub } from "./vec.ts";
 import { readPlacement, readPoint, readDirection, type Frame } from "./placement.ts";
 import { Table, num, ref, list, numList } from "../step/entities.ts";
-import { makeCurve, type Curve3 } from "./curves.ts";
+import { makeCurve, CurveRadiusTable, type Curve3 } from "./curves.ts";
 
 export interface Surface {
   kind: string;
@@ -33,6 +33,13 @@ export interface Surface {
   normal(u: number, v: number): Vec3;
   /** Smallest principal radius of curvature at (u,v); Infinity for flat. Drives adaptive refinement. */
   curvatureRadius(u: number, v: number): number;
+  /** SWEPT surfaces only (extrusion, revolution, offsets of them): their curvatureRadius() follows
+   *  the LOCAL radius of a profile curve, which varies across a face. This is the PROFILE's
+   *  tightest radius over the parameter box (profile curvature only — the other, always-local terms
+   *  such as a revolution's parallel circle are not included), for whole-face density decisions. */
+  spanRadius?(u0: number, u1: number, v0: number, v1: number): number;
+  /** With spanRadius: the parameter direction (0 = u, 1 = v) along which the profile curves. */
+  profileAxis?: 0 | 1;
 }
 
 class Plane implements Surface {
@@ -230,6 +237,43 @@ class DegenerateTorus implements Surface {
   }
 }
 
+/**
+ * Signed principal curvatures (k1, k2) of s at (u,v), positive where the surface bends TOWARD
+ * s.normal(u,v): central differences of evaluate() at a METRIC step (the same physical step in u
+ * and v whatever the parametrisation's units), then the shape operator's eigenvalues from the
+ * first and second fundamental forms. null where the parametrisation degenerates (a pole).
+ */
+function principalCurvatures(s: Surface, u: number, v: number): [number, number] | null {
+  const p = s.evaluate(u, v);
+  const L = 1e-5 * (1 + Math.hypot(p[0], p[1], p[2])); // metric FD step (mm)
+  const speed = (du: number, dv: number): number => {
+    const a = s.evaluate(u + du, v + dv), b = s.evaluate(u - du, v - dv);
+    return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / (2 * Math.max(Math.abs(du), Math.abs(dv)));
+  };
+  const e0 = 1e-7 * (1 + Math.abs(u)), f0 = 1e-7 * (1 + Math.abs(v));
+  const su = speed(e0, 0), sv = speed(0, f0);
+  if (!(su > 1e-12) || !(sv > 1e-12)) return null;
+  const hu = L / su, hv = L / sv;
+  const pu1 = s.evaluate(u + hu, v), pu0 = s.evaluate(u - hu, v);
+  const pv1 = s.evaluate(u, v + hv), pv0 = s.evaluate(u, v - hv);
+  const a = s.evaluate(u + hu, v + hv), b = s.evaluate(u + hu, v - hv);
+  const c = s.evaluate(u - hu, v + hv), d = s.evaluate(u - hu, v - hv);
+  const Su: Vec3 = [(pu1[0] - pu0[0]) / (2 * hu), (pu1[1] - pu0[1]) / (2 * hu), (pu1[2] - pu0[2]) / (2 * hu)];
+  const Sv: Vec3 = [(pv1[0] - pv0[0]) / (2 * hv), (pv1[1] - pv0[1]) / (2 * hv), (pv1[2] - pv0[2]) / (2 * hv)];
+  const Suu: Vec3 = [(pu1[0] + pu0[0] - 2 * p[0]) / (hu * hu), (pu1[1] + pu0[1] - 2 * p[1]) / (hu * hu), (pu1[2] + pu0[2] - 2 * p[2]) / (hu * hu)];
+  const Svv: Vec3 = [(pv1[0] + pv0[0] - 2 * p[0]) / (hv * hv), (pv1[1] + pv0[1] - 2 * p[1]) / (hv * hv), (pv1[2] + pv0[2] - 2 * p[2]) / (hv * hv)];
+  const k4 = 4 * hu * hv;
+  const Suv: Vec3 = [(a[0] - b[0] - c[0] + d[0]) / k4, (a[1] - b[1] - c[1] + d[1]) / k4, (a[2] - b[2] - c[2] + d[2]) / k4];
+  const E = dot(Su, Su), F = dot(Su, Sv), G = dot(Sv, Sv);
+  const det = E * G - F * F;
+  if (!(det > 1e-18 * E * G)) return null;
+  const n = s.normal(u, v);
+  const e = dot(Suu, n), f = dot(Suv, n), g = dot(Svv, n);
+  const H = (e * G - 2 * f * F + g * E) / (2 * det), K = (e * g - f * f) / det;
+  const disc = Math.sqrt(Math.max(0, H * H - K));
+  return [H + disc, H - disc];
+}
+
 /** OFFSET_SURFACE: the basis surface pushed `dist` mm along its (unit) normal. Shares the basis
  * parametrisation, so the boundary projects through the basis solver; the normal is unchanged and the
  * point is shifted. project(p) seeds from the basis foot point (p sits one offset out along the normal —
@@ -245,7 +289,19 @@ class OffsetSurface implements Surface {
     this.uPeriod = base.uPeriod; this.vPeriod = base.vPeriod;
     this.uSeam = base.uSeam; this.vSeam = base.vSeam;
     this.uDomain = base.uDomain; this.vDomain = base.vDomain;
+    // Offset of a swept surface: the profile radius over the span moves by |dist| one way or the
+    // other depending on the side — take the tighter (floored like the unsigned fallback).
+    const bs = base.spanRadius?.bind(base);
+    if (bs) {
+      this.profileAxis = base.profileAxis;
+      this.spanRadius = (u0: number, u1: number, v0: number, v1: number): number => {
+        const r = bs(u0, u1, v0, v1);
+        return Number.isFinite(r) ? Math.max(1e-3, r - Math.abs(this.dist), 0.1 * r) : Infinity;
+      };
+    }
   }
+  spanRadius?: (u0: number, u1: number, v0: number, v1: number) => number;
+  profileAxis?: 0 | 1;
   evaluate(u: number, v: number): Vec3 {
     const p = this.base.evaluate(u, v), n = this.base.normal(u, v);
     return [p[0] + n[0] * this.dist, p[1] + n[1] * this.dist, p[2] + n[2] * this.dist];
@@ -281,9 +337,27 @@ class OffsetSurface implements Surface {
     return [u, v];
   }
   normal(u: number, v: number): Vec3 { return this.base.normal(u, v); }
+  /** Offsetting by d along the base normal n moves every principal radius by -d, SIGNED: a
+   *  direction bending toward n (centre of curvature on the +n side, R > 0) tightens to R - d, one
+   *  bending away (R < 0) widens to |R| + d. The base's curvatureRadius() is unsigned, and the old
+   *  r + d clamped every offset toward a concave side to 1 um (gridCDT saturation). Signs come
+   *  from the base's second fundamental form; the base's own (cell-smoothed, conservative)
+   *  magnitude is kept for its tightest direction. */
   curvatureRadius(u: number, v: number): number {
-    const r = this.base.curvatureRadius(u, v);
-    return Number.isFinite(r) ? Math.max(1e-3, r + this.dist) : Infinity;
+    const rb = this.base.curvatureRadius(u, v);
+    if (!Number.isFinite(rb)) return Infinity; // flat base (plane): the offset is flat too
+    const k = principalCurvatures(this.base, u, v);
+    if (!k) return Math.max(1e-3, rb - Math.abs(this.dist), 0.1 * rb); // sign unknown: conservative
+    // Signed radii, the dominant one replaced by the base's magnitude when that is tighter.
+    const big = Math.abs(k[0]) >= Math.abs(k[1]) ? 0 : 1;
+    let r = Infinity;
+    for (let i = 0; i < 2; i++) {
+      const ki = k[i]!;
+      let R = Math.abs(ki) > 1e-12 ? 1 / ki : Infinity;
+      if (i === big && Math.abs(R) > rb) R = ki >= 0 ? rb : -rb;
+      if (Number.isFinite(R)) r = Math.min(r, Math.abs(R - this.dist));
+    }
+    return Number.isFinite(r) ? Math.max(1e-3, r) : Infinity;
   }
 }
 
@@ -298,12 +372,15 @@ class ExtrusionSurface implements Surface {
   periodicU: boolean;
   uPeriod?: number;
   uSeam?: number;
+  private radii: CurveRadiusTable;
+  profileAxis = 0 as const;
   constructor(curve: Curve3, axis: Vec3) {
     this.curve = curve; this.axis = axis;
     this.axisLen = Math.max(1e-12, Math.hypot(axis[0], axis[1], axis[2]));
     this.axisUnit = [axis[0] / this.axisLen, axis[1] / this.axisLen, axis[2] / this.axisLen];
     this.periodicU = curve.closed;
     if (curve.closed) { this.uPeriod = curve.t1 - curve.t0; this.uSeam = curve.t0; }
+    this.radii = new CurveRadiusTable(curve, this.axisUnit);
   }
   evaluate(u: number, v: number): Vec3 {
     if (this.periodicU && this.uPeriod) {
@@ -335,7 +412,17 @@ class ExtrusionSurface implements Surface {
     const len = Math.hypot(n[0], n[1], n[2]);
     return len > 1e-12 ? [n[0] / len, n[1] / len, n[2] / len] : [0, 0, 1];
   }
-  curvatureRadius(): number { return this.curve.minRadius(); }
+  /** Cross-section curvature of the profile AT u (the rulings are straight): local, so a sharp
+   *  corner elsewhere on the basis curve no longer sizes this face; u wraps on a closed profile —
+   *  a face spanning the seam is charted with u unwrapped past t1 / before t0. */
+  curvatureRadius(u: number): number {
+    const r = this.radii.at(u);
+    return Number.isFinite(r) ? Math.max(1e-3, r) : Infinity;
+  }
+  spanRadius(u0: number, u1: number): number {
+    const r = this.radii.minOver(u0, u1);
+    return Number.isFinite(r) ? Math.max(1e-3, r) : Infinity;
+  }
 }
 
 /** SURFACE_OF_REVOLUTION: the swept (profile) curve C(v) rotated about an axis (point A, unit
@@ -363,8 +450,11 @@ class RevolutionSurface implements Surface {
   private sa: number[] = [];
   private sr: number[] = [];
   vDomain: [number, number];
+  private meridian: CurveRadiusTable;
+  profileAxis = 1 as const;
   constructor(curve: Curve3, A: Vec3, D: Vec3) {
     this.curve = curve; this.A = A; this.D = normalize(D);
+    this.meridian = new CurveRadiusTable(curve);
     this.t0 = curve.t0; this.t1 = curve.t1;
     this.vDomain = [this.t0, this.t1];
     if (curve.closed) { this.periodicV = true; this.vPeriod = this.t1 - this.t0; this.vSeam = this.t0; }
@@ -454,9 +544,13 @@ class RevolutionSurface implements Surface {
   }
   curvatureRadius(_u: number, v: number): number {
     const [, rho] = this.axialRadial(this.curve.evaluate(v)); // parallel-circle radius (tight near axis)
-    const mr = this.curve.minRadius();                        // meridian radius of curvature
+    const mr = this.meridian.at(v);                           // LOCAL meridian radius of curvature
     let r = rho > 1e-6 ? rho : Infinity;
     if (Number.isFinite(mr)) r = Math.min(r, mr);
+    return Number.isFinite(r) ? Math.max(1e-3, r) : Infinity;
+  }
+  spanRadius(_u0: number, _u1: number, v0: number, v1: number): number {
+    const r = this.meridian.minOver(v0, v1); // the parallel-circle term stays local (curvatureRadius)
     return Number.isFinite(r) ? Math.max(1e-3, r) : Infinity;
   }
 }
@@ -840,7 +934,9 @@ export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface 
       return new DegenerateTorus(readPlacement(t, ref(r.params[1]!), s), num(r.params[2]!) * s, num(r.params[3]!) * s,
         r.params[4]?.k === "enum" ? r.params[4].v === "T" : true);
     case "OFFSET_SURFACE": {
-      const base = makeSurface(t, ref(r.params[1]!), s);
+      // The basis is read with the file's angle unit too (a degree-unit cone basis otherwise gets
+      // a semi-angle 57x too large, like the plain CONICAL_SURFACE case above).
+      const base = makeSurface(t, ref(r.params[1]!), s, aRad);
       return base ? new OffsetSurface(base, num(r.params[2]!) * s) : null;
     }
     default:
