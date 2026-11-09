@@ -1118,11 +1118,31 @@ function gridCDT(
   // Anisotropy-adjusted axis scales for the CDT plane (capped so triangles never exceed ~6:1 —
   // beyond that slivers start to cost more numerically than the shading gains). uScale/vScale stay
   // the TRUE metric for anything with a physical tolerance (the sanitiser's snap key above).
+  // THIN features relax the cap: a thin, long cylinder (a 0.2 mm wire 2 m long at a 1 mm
+  // chordTol) has a 0.05 mm circumferential target, so 6:1 spaces its axial rows 0.3 mm apart —
+  // 8x finer than the boundary rails beside them (the edge sampler's length floor
+  // min(targetEdge/40, 30·chordTol) = 2.5 mm) along a straight ruling whose normal never changes.
+  // 6400 rows clamp at 1200 and refinement fills the deficit: ~40k points per face, hundreds of
+  // faces per model (ABC 00021244: 336 wires, 5.2M triangles, timeouts). Rows may therefore
+  // stretch to the rail spacing, and further when GRID_N rows still would not fit — never beyond
+  // the direction's own curvature step (stepOf honours chordTol and normalDev along it). An
+  // ordinary fillet's rails are finer than 6x its target, so it keeps the 6:1 cap unchanged.
   const ANISO_CAP = allowAniso ? 6 : 1;
-  const uSc = uScale / Math.min(ANISO_CAP, Math.max(1, stepU / target));
-  const vSc = vScale / Math.min(ANISO_CAP, Math.max(1, stepV / target));
-  const nU = Math.min(1200, Math.max(1, Math.round(((umax - umin) * uSc) / target)));
-  const nV = Math.min(1200, Math.max(1, Math.round(((vmax - vmin) * vSc) / target)));
+  const GRID_N = 1200;
+  const railStep = Math.min(targetEdge / 40, 30 * chordTol);
+  const stretchOf = (step: number, extent: number): number => {
+    const cap = Math.max(1, step / target);
+    let s = Math.min(ANISO_CAP, cap);
+    if (!allowAniso) return s;
+    if (railStep / target > s) s = Math.min(cap, railStep / target);
+    if (extent / (s * target) > GRID_N) s = Math.min(cap, extent / (GRID_N * target));
+    if (DBG && s > ANISO_CAP) console.error(`[grid] fid=${fid} thin-feature stretch ${s.toFixed(1)} (rail ${railStep.toExponential(2)} / target ${target.toExponential(2)})`);
+    return s;
+  };
+  const uSc = uScale / stretchOf(stepU, (umax - umin) * uScale);
+  const vSc = vScale / stretchOf(stepV, (vmax - vmin) * vScale);
+  const nU = Math.min(GRID_N, Math.max(1, Math.round(((umax - umin) * uSc) / target)));
+  const nV = Math.min(GRID_N, Math.max(1, Math.round(((vmax - vmin) * vSc) / target)));
 
   const allP2: P2[] = [];
   const allP3: Vec3[] = [];
