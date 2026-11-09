@@ -2928,9 +2928,13 @@ function tessellateSliverLoop(
   verts: number[], faceIds: number[], sign: number, chordTol: number,
 ): boolean {
   const p: Vec3[] = [];
+  const runs: { start: number; len: number }[] = []; // each edge's first index in p + its sampled length
   for (const oe of outerLoop.edges) {
     const base = sampled.get(oe.edgeId); if (!base) continue; // healed-away micro-edge: ring closes without it
     const poly = oe.orient ? base : base.slice().reverse();
+    let len = 0;
+    for (let i = 1; i < poly.length; i++) len += Math.hypot(poly[i]![0] - poly[i - 1]![0], poly[i]![1] - poly[i - 1]![1], poly[i]![2] - poly[i - 1]![2]);
+    if (poly.length > 1) runs.push({ start: p.length, len });
     for (let i = 0; i < poly.length - 1; i++) p.push(poly[i]!);
   }
   const m = p.length;
@@ -2961,24 +2965,44 @@ function tessellateSliverLoop(
     for (let i = 0; i < m; i++) { const d = (p[i]![0] - ox) ** 2 + (p[i]![1] - oy) ** 2 + (p[i]![2] - oz) ** 2; if (d > bd) { bd = d; bi = i; } }
     return bi;
   };
-  const ia = far(cx, cy, cz), ib = far(p[ia]![0], p[ia]![1], p[ia]![2]);
-  if (ia === ib) return false;
-  const c1: Vec3[] = [], c2: Vec3[] = [];
-  for (let i = ia; ; i = (i + 1) % m) { c1.push(p[i]!); if (i === ib) break; }
-  for (let i = ib; ; i = (i + 1) % m) { c2.push(p[i]!); if (i === ia) break; }
-  c2.reverse();
-  const na = c1.length, nb = c2.length;
-  if (na < 2 || nb < 2) return false;
   const dtol = Math.max(3 * width, 2.5 * chordTol, 1e-3);
-  const step1 = Math.max(1, Math.floor(na / 64)), step2 = Math.max(1, Math.floor(nb / 64));
-  for (let i = 0; i < na; i += step1) {
-    const d = distToPolyline(c1[i]!, c2);
-    if (d > dtol) { if (DBG) console.error(`[tess] fid=${fid} sliverLoop bail: rail1[${i}] ${d.toExponential(2)} > dtol ${dtol.toExponential(2)}`); return false; }
+  // Split the loop at (ia, ib) into two rails and verify they run within dtol of each other.
+  const railsAt = (ia: number, ib: number, how: string): [Vec3[], Vec3[]] | null => {
+    if (ia === ib) return null;
+    const c1: Vec3[] = [], c2: Vec3[] = [];
+    for (let i = ia; ; i = (i + 1) % m) { c1.push(p[i]!); if (i === ib) break; }
+    for (let i = ib; ; i = (i + 1) % m) { c2.push(p[i]!); if (i === ia) break; }
+    c2.reverse();
+    const na = c1.length, nb = c2.length;
+    if (na < 2 || nb < 2) return null;
+    const step1 = Math.max(1, Math.floor(na / 64)), step2 = Math.max(1, Math.floor(nb / 64));
+    for (let i = 0; i < na; i += step1) {
+      const d = distToPolyline(c1[i]!, c2);
+      if (d > dtol) { if (DBG) console.error(`[tess] fid=${fid} sliverLoop bail (${how}): rail1[${i}] ${d.toExponential(2)} > dtol ${dtol.toExponential(2)}`); return null; }
+    }
+    for (let j = 0; j < nb; j += step2) {
+      const d = distToPolyline(c2[j]!, c1);
+      if (d > dtol) { if (DBG) console.error(`[tess] fid=${fid} sliverLoop bail (${how}): rail2[${j}] ${d.toExponential(2)} > dtol ${dtol.toExponential(2)}`); return null; }
+    }
+    return [c1, c2];
+  };
+  const ia0 = far(cx, cy, cz);
+  let rails = railsAt(ia0, far(p[ia0]![0], p[ia0]![1], p[ia0]![2]), "far");
+  // TOPOLOGICAL split. The farthest-point pair is a rail's END only while the rails stay within
+  // 180 degrees of turn: a lens between two near-coincident arcs longer than a half circle (ABC
+  // 00020876: 48.6 mm arcs over a 10.5 mm chord) or a degenerate fillet whose two 43 mm rails
+  // wind between endpoints 9.8 mm apart (00021280 x18, 00029860) splits mid-rail, and the two
+  // halves read millimetres apart. When two edges carry the loop's length (>= 90%), they ARE the
+  // rails: split at their starts — the short edges between are the strip's ends.
+  if (!rails && runs.length >= 2) {
+    const order = runs.map((r, i) => i).sort((a, b) => runs[b]!.len - runs[a]!.len);
+    const r1 = runs[order[0]!]!, r2 = runs[order[1]!]!;
+    const tot = runs.reduce((acc, r) => acc + r.len, 0);
+    if (r1.len + r2.len >= 0.9 * tot) rails = railsAt(r1.start % m, r2.start % m, "edges");
   }
-  for (let j = 0; j < nb; j += step2) {
-    const d = distToPolyline(c2[j]!, c1);
-    if (d > dtol) { if (DBG) console.error(`[tess] fid=${fid} sliverLoop bail: rail2[${j}] ${d.toExponential(2)} > dtol ${dtol.toExponential(2)}`); return false; }
-  }
+  if (!rails) return false;
+  const [c1, c2] = rails;
+  const na = c1.length, nb = c2.length;
   if (DBG) console.error(`[tess] fid=${fid} sliverLoop: width=${width.toExponential(2)} rails=${na}/${nb}`);
   let i = 0, j = 0;
   while (i < na - 1 || j < nb - 1) {
