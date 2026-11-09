@@ -61,7 +61,7 @@ function producer(src: string): string {
 }
 
 interface Rec {
-  status: string;         // PASS | FAIL | EMPTY | ERR
+  status: string;         // PASS | FAIL | EMPTY | NOGEOM | ERR
   bucket: string;         // grouping key for the report
   phase?: string;         // read | parse | tess (for ERR)
   err?: string;
@@ -95,6 +95,11 @@ function processOne(path: string): Rec {
   const tris = res.mesh.indices.length / 3;
   const prod = producer(src);
   const skippedTotal = res.stats.facesTotal - res.stats.facesTessellated;
+  // No faces at all: a wireframe/points-only file (GEOMETRICALLY_BOUNDED_WIREFRAME_SHAPE_
+  // REPRESENTATION, bare curves) has no surface to mesh — correct behaviour, not a meshing failure.
+  if (tris === 0 && res.stats.facesTotal === 0) {
+    return { status: "NOGEOM", bucket: "no-surface-geometry", tris: 0, facesTotal: 0, facesTess: 0, diag, solids: brep.solids.length, producer: prod, ms: Date.now() - t0 };
+  }
   if (tris === 0) {
     return { status: "EMPTY", bucket: "empty", tris: 0, facesTotal: res.stats.facesTotal, facesTess: res.stats.facesTessellated, skipped: res.stats.skipped, diag, solids: brep.solids.length, producer: prod, ms: Date.now() - t0 };
   }

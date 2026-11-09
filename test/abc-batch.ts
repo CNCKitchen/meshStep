@@ -91,7 +91,7 @@ const logProgress = (): void => {
   const left = queue.length + busyCount();
   const eta = rate > 0 ? left / rate : 0;
   const c = tally();
-  const line = `[${done.size + processed}/${targetFiles.length}] ${rate.toFixed(1)}/s  ETA ${(eta / 60).toFixed(1)}m  | PASS ${c.PASS ?? 0} FAIL ${c.FAIL ?? 0} ERR ${(c.ERR ?? 0) + (c.CRASH ?? 0)} TO ${c.TIMEOUT ?? 0} EMPTY ${c.EMPTY ?? 0}`;
+  const line = `[${done.size + processed}/${targetFiles.length}] ${rate.toFixed(1)}/s  ETA ${(eta / 60).toFixed(1)}m  | PASS ${c.PASS ?? 0} FAIL ${c.FAIL ?? 0} ERR ${(c.ERR ?? 0) + (c.CRASH ?? 0)} TO ${c.TIMEOUT ?? 0} EMPTY ${c.EMPTY ?? 0} NOGEOM ${c.NOGEOM ?? 0}`;
   console.log(line);
 };
 
@@ -213,7 +213,8 @@ function writeReport(): void {
   md.push(`- Not watertight / defective: ${c.FAIL ?? 0} (${pct(c.FAIL ?? 0)})`);
   md.push(`- Import threw / crashed: ${(c.ERR ?? 0) + (c.CRASH ?? 0)} (${pct((c.ERR ?? 0) + (c.CRASH ?? 0))})`);
   md.push(`- Timed out (>${TIMEOUT_MS / 1000}s): ${c.TIMEOUT ?? 0} (${pct(c.TIMEOUT ?? 0)})`);
-  md.push(`- Empty (0 triangles): ${c.EMPTY ?? 0} (${pct(c.EMPTY ?? 0)})`, "");
+  md.push(`- Empty (0 triangles): ${c.EMPTY ?? 0} (${pct(c.EMPTY ?? 0)})`);
+  md.push(`- No surface geometry (wireframe/points only — nothing to mesh): ${c.NOGEOM ?? 0} (${pct(c.NOGEOM ?? 0)})`, "");
 
   md.push(`## Failure causes, grouped (most common first)`, "");
   md.push(`| # | cause bucket | count | % of all | example files |`, `|---|---|---|---|---|`);
