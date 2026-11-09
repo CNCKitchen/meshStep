@@ -387,13 +387,29 @@ export function buildBrep(src: string): BrepModel {
 
   // Shared edge table: every EDGE_CURVE sampled by id, used by both adjacent faces.
   const edges = new Map<number, BEdge>();
+  let nextSynthId = 0;
+  const pointEdges = new Set<number>(); // synthesized zero-length edges (curve absent, v0 == v1)
+  for (const id of table.model.entities.keys()) if (id >= nextSynthId) nextSynthId = id + 1;
   for (const [id, ec] of table.byType("EDGE_CURVE")) {
-    edges.set(id, {
-      v0: vertexPoint(table, ref(ec.params[1]!), s),
-      v1: vertexPoint(table, ref(ec.params[2]!), s),
-      curveId: ref(ec.params[3]!),
-      sameSense: enumOf(ec.params[4]!) === "T",
-    });
+    const v0 = vertexPoint(table, ref(ec.params[1]!), s), v1 = vertexPoint(table, ref(ec.params[2]!), s);
+    let curveId = ec.params[3]?.k === "ref" ? ec.params[3].v : -1;
+    // An edge whose curve is absent (a `#0` reference, an unset slot, or an instance the parser had
+    // to drop as malformed) still carries its two vertices — that is all the loop needs to stay
+    // closed. Give it a synthetic straight LINE between them rather than failing the whole model;
+    // on the degenerate v0 == v1 edges these exporters write it is a zero-length point edge.
+    if (!table.model.entities.has(curveId)) {
+      const d: Vec3 = [(v1[0] - v0[0]) / s, (v1[1] - v0[1]) / s, (v1[2] - v0[2]) / s];
+      const len = Math.hypot(d[0], d[1], d[2]);
+      const pt = nextSynthId++, dir = nextSynthId++, vec = nextSynthId++;
+      curveId = nextSynthId++;
+      const n = (x: number): { k: "num"; v: number } => ({ k: "num", v: x });
+      table.model.entities.set(pt, { type: "CARTESIAN_POINT", params: [{ k: "str", v: "" }, { k: "list", v: [n(v0[0] / s), n(v0[1] / s), n(v0[2] / s)] }] });
+      table.model.entities.set(dir, { type: "DIRECTION", params: [{ k: "str", v: "" }, { k: "list", v: len > 0 ? d.map((x) => n(x / len)) : [n(1), n(0), n(0)] }] });
+      table.model.entities.set(vec, { type: "VECTOR", params: [{ k: "str", v: "" }, { k: "ref", v: dir }, n(len)] });
+      table.model.entities.set(curveId, { type: "LINE", params: [{ k: "str", v: "" }, { k: "ref", v: pt }, { k: "ref", v: vec }] });
+      if (len * s < 1e-9) pointEdges.add(id);
+    }
+    edges.set(id, { v0, v1, curveId, sameSense: ec.params[4]?.k === "enum" ? ec.params[4].v === "T" : true });
   }
 
   const readLoop = (loopId: number): OrientedEdge[] => {
@@ -402,10 +418,15 @@ export function buildBrep(src: string): BrepModel {
     // it has no edges, so it constrains nothing for meshing — the pole point is already carried by
     // the adjacent edges. POLY_LOOP (a raw point polygon) is likewise not edge-based. Skip both.
     if (loop.type !== "EDGE_LOOP") return [];
-    return refList(loop.params[1]!).map((oeId) => {
+    const oes = refList(loop.params[1]!).map((oeId) => {
       const oe = table.record(oeId); // ORIENTED_EDGE(name, *, *, edge#, orient)
       return { edgeId: ref(oe.params[3]!), orient: enumOf(oe.params[4]!) === "T" };
     });
+    // A loop of nothing but curve-less point edges is a VERTEX_LOOP in disguise (a cone apex
+    // written as `EDGE_CURVE('', #v, #v, #0, ...)`) — skip it like one. A genuine one-edge loop
+    // with v0 == v1 (a full circle) has its curve and is not affected.
+    if (oes.length > 0 && oes.every((o) => pointEdges.has(o.edgeId))) return [];
+    return oes;
   };
 
   // Resolve a shell ref to its faces. ORIENTED_CLOSED_SHELL('',*,base,orient) wraps a base shell;
