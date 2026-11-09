@@ -3553,10 +3553,13 @@ function tessellateCone(
  * rim ring is exactly the shared arc, so the wedge stays watertight with all three neighbours.
  * Returns false WITHOUT emitting unless the loop is exactly {2 ruling LINEs through the apex + 1
  * partial arc}; full apex cones (tessellateCone) and frustums (param grid) are left alone.
+ * multiArc (last-resort dispatch only): the rim may be SEVERAL consecutive arc edges (ABC
+ * 00029487 & copies: a half-cone countersink whose rim is three B-spline arcs) — they are joined
+ * into one rim polyline in loop order.
  */
 function tessellateConeSlice(
   surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, brep: BrepModel, fid: number,
-  verts: number[], faceIds: number[], sign: number,
+  verts: number[], faceIds: number[], sign: number, multiArc = false,
 ): boolean {
   const cone = surface as Surface & { r: number; sin: number };
   const apex = surface.evaluate(0, -cone.r / cone.sin);
@@ -3595,11 +3598,26 @@ function tessellateConeSlice(
     else { arcs.push(oe.edgeId); if (kind !== "CIRCLE") typed = false; }
   }
   const bail = (why: string): false => { if (DBG && process.env.MESHSTEP_SLICEDBG) console.error(`[coneSlice] fid=${fid} bail: ${why}`); return false; };
-  if (arcs.length !== 1 || seams.length !== 2) return bail(`arcs=${arcs.length} seams=${seams.length}`);
-  const arcEdge = brep.edges.get(arcs[0]!)!;
-  if (d3(arcEdge.v0, arcEdge.v1) < 1e-9) return bail("closed rim"); // full circle -> tessellateCone / band
+  if (seams.length !== 2 || arcs.length < 1 || (arcs.length > 1 && !multiArc)) return bail(`arcs=${arcs.length} seams=${seams.length}`);
+  // The rim polyline: the single arc, or (multiArc) the arcs joined in loop order — they must be
+  // ONE contiguous run between the seams.
+  let rimPts: Vec3[];
+  if (arcs.length === 1) rimPts = sampled.get(arcs[0]!)!;
+  else {
+    const es = loop.edges, k0 = es.findIndex((oe, i) => arcs.includes(oe.edgeId) && seams.includes(es[(i + es.length - 1) % es.length]!.edgeId));
+    if (k0 < 0) return bail("multi-arc rim: no seam->arc transition");
+    rimPts = [];
+    for (let k = 0; k < arcs.length; k++) {
+      const oe = es[(k0 + k) % es.length]!;
+      if (!arcs.includes(oe.edgeId)) return bail("multi-arc rim not contiguous");
+      const s = sampled.get(oe.edgeId)!, poly = oe.orient ? s : s.slice().reverse();
+      for (let i = rimPts.length ? 1 : 0; i < poly.length; i++) rimPts.push(poly[i]!);
+    }
+  }
+  const rimA = rimPts[0]!, rimB = rimPts[rimPts.length - 1]!;
+  if (d3(rimA, rimB) < 1e-9) return bail("closed rim"); // full circle -> tessellateCone / band
   // Both seams must run to the apex.
-  const apexTol = 1e-6 * Math.max(1, d3(apex, arcEdge.v0));
+  const apexTol = 1e-6 * Math.max(1, d3(apex, rimA));
   const seamCol = (id: number): Vec3[] | null => {
     const s = sampled.get(id); if (!s || s.length < 2) return null;
     const col = d3(s[0]!, apex) <= d3(s[s.length - 1]!, apex) ? s.slice() : s.slice().reverse();
@@ -3614,15 +3632,15 @@ function tessellateConeSlice(
   // collinear rim open (a 100k cap re-routed nist_ctc_01's 150k-point wedges to the grid and opened
   // 2,516 edges). nist_ctc_02's wedge fan still exceeds the JS array limit at 0.002mm absolute
   // tolerance with ANY mesher — that is a documented capacity limit, not this cap's job.
-  if (n * (sampled.get(arcs[0]!)?.length ?? 0) > 2_000_000) return false;
+  if (n * rimPts.length > 2_000_000) return false;
   // A GEOMETRICALLY-classified wedge (B-spline seams/rim, the ftc_07 countersink class) only
   // qualifies while SMALL: the fan is ungraded (full arc count on every ring), and stealing
   // ctc_04's ~280×760-sample wedges from the graded param grid — which handles them perfectly —
   // multiplied its output 60× and overflowed the JS array limit. Type-classified CIRCLE+LINE
   // wedges (ctc_01) keep the generous cap above, bit-for-bit.
-  if (!typed && n * (sampled.get(arcs[0]!)?.length ?? 0) > 50_000) return bail(`geometric wedge too large (${n}×${sampled.get(arcs[0]!)?.length}) — graded grid handles it`);
+  if (!typed && n * rimPts.length > 50_000) return bail(`geometric wedge too large (${n}×${rimPts.length}) — graded grid handles it`);
   // Arc samples, oriented so index 0 is at the left seam's rim end.
-  let arc = sampled.get(arcs[0]!)!.slice();
+  let arc = rimPts.slice();
   const Lrim = Lc[n - 1]!, Rrim = Rc[n - 1]!;
   if (d3(arc[0]!, Lrim) > d3(arc[arc.length - 1]!, Lrim)) arc = arc.reverse();
   if (d3(arc[0]!, Lrim) > d3(arc[0]!, Rrim)) { const t = Lc; Lc = Rc; Rc = t; }
@@ -5059,6 +5077,12 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
             || (periodic && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
             || (real.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, rOuter, sampled, face.faceId, verts, faceIds, sign, chordTol)));
         }
+      }
+      // Multi-arc apex WEDGE (last resort, so every cone that meshes today keeps its result): a
+      // half-cone whose rim arrives as several arc edges is otherwise declined everywhere — its
+      // apex projects to an arbitrary angle and the param grid loses a constraint.
+      if (!ok && surface.kind === "CONICAL_SURFACE" && outer && face.loops.length === 1) {
+        ok = mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign, true));
       }
       // DEGENERATE face: its whole boundary samples to fewer than three weld-distinct points (a
       // face bounded only by a zero-length edge; a lens whose two arcs sag below chordTol and
