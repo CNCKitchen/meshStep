@@ -232,8 +232,8 @@ class DegenerateTorus implements Surface {
 
 /** OFFSET_SURFACE: the basis surface pushed `dist` mm along its (unit) normal. Shares the basis
  * parametrisation, so the boundary projects through the basis solver; the normal is unchanged and the
- * point is shifted. project(p) maps to the basis (p sits one offset out along the normal — exact for a
- * plane, a close seed for curved bases, which is all the boundary projection needs). */
+ * point is shifted. project(p) seeds from the basis foot point (p sits one offset out along the normal —
+ * exact for a plane) and refines on the offset surface itself. */
 class OffsetSurface implements Surface {
   kind = "OFFSET_SURFACE";
   base: Surface; dist: number;
@@ -250,7 +250,36 @@ class OffsetSurface implements Surface {
     const p = this.base.evaluate(u, v), n = this.base.normal(u, v);
     return [p[0] + n[0] * this.dist, p[1] + n[1] * this.dist, p[2] + n[2] * this.dist];
   }
-  project(p: Vec3, hu?: number, hv?: number): [number, number] { return this.base.project(p, hu, hv); }
+  project(p: Vec3, hu?: number, hv?: number): [number, number] {
+    let [u, v] = this.base.project(p, hu, hv);
+    // The basis foot point is only a SEED: p lies |dist| off the basis, and where the offset runs
+    // toward a centre of curvature it approaches the focal distance, the basis distance field goes
+    // flat and its nearest-point solve parks at a noisy parameter (a densely sampled boundary then
+    // zigzags in (u,v) and self-crosses — the CDT drops constraints). Gauss-Newton on THIS surface,
+    // S(u,v) + dist·n(u,v) = p, is well-conditioned there; keep it only if the residual improves.
+    const clampU = (x: number): number => !this.periodicU && this.uDomain ? Math.min(Math.max(x, this.uDomain[0]), this.uDomain[1]) : x;
+    const clampV = (x: number): number => !this.periodicV && this.vDomain ? Math.min(Math.max(x, this.vDomain[0]), this.vDomain[1]) : x;
+    const res2 = (q: Vec3): number => (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
+    let S = this.evaluate(u, v), r2 = res2(S);
+    for (let it = 0; it < 8 && r2 > 1e-18; it++) {
+      const eu = 1e-7 * (1 + Math.abs(u)), ev = 1e-7 * (1 + Math.abs(v));
+      const a1 = this.evaluate(u + eu, v), a0 = this.evaluate(u - eu, v);
+      const b1 = this.evaluate(u, v + ev), b0 = this.evaluate(u, v - ev);
+      const Su: Vec3 = [(a1[0] - a0[0]) / (2 * eu), (a1[1] - a0[1]) / (2 * eu), (a1[2] - a0[2]) / (2 * eu)];
+      const Sv: Vec3 = [(b1[0] - b0[0]) / (2 * ev), (b1[1] - b0[1]) / (2 * ev), (b1[2] - b0[2]) / (2 * ev)];
+      const r: Vec3 = [S[0] - p[0], S[1] - p[1], S[2] - p[2]];
+      const A = dot(Su, Su), B = dot(Su, Sv), C = dot(Sv, Sv), det = A * C - B * B;
+      if (!(Math.abs(det) > 1e-24 * (A * C + 1e-300))) break;
+      const g1 = dot(Su, r), g2 = dot(Sv, r);
+      const nu = clampU(u - (C * g1 - B * g2) / det), nv = clampV(v - (A * g2 - B * g1) / det);
+      const S2 = this.evaluate(nu, nv), r2n = res2(S2);
+      if (!(r2n < r2)) break;
+      const moved = Math.abs(nu - u) + Math.abs(nv - v);
+      u = nu; v = nv; S = S2; r2 = r2n;
+      if (moved < 1e-12 * (1 + Math.abs(u) + Math.abs(v))) break;
+    }
+    return [u, v];
+  }
   normal(u: number, v: number): Vec3 { return this.base.normal(u, v); }
   curvatureRadius(u: number, v: number): number {
     const r = this.base.curvatureRadius(u, v);
