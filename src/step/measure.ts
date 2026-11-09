@@ -6,12 +6,14 @@
 // own unit scale and through its assembly instance placements. A raw CARTESIAN_POINT scan is NOT
 // safe here: STEP files carry unbounded construction geometry (an infinite LINE's origin point
 // may sit anywhere along it — CATIA parks "Line Origine" points kilometers out), which inflated
-// a 77 mm board to a 500 m estimate. Circle/ellipse edges additionally contribute their full
-// circle box, so a lone cylinder's diameter isn't missed when its rim is one closed edge.
+// a 77 mm board to a 500 m estimate. Closed edges (both vertices coincide) additionally contribute
+// their whole curve — the full circle box for circles/ellipses, samples of the curve otherwise —
+// so a lone cylinder's diameter or a closed profile's extent isn't missed when its rim is one edge.
 import { buildBrep, type BrepModel } from "../brep/build.ts";
 import { ref, num } from "./entities.ts";
 import { readPlacement, type Frame } from "../geom/placement.ts";
 import { makeSurface } from "../geom/surfaces.ts";
+import { makeCurve } from "../geom/curves.ts";
 import type { Vec3 } from "../geom/vec.ts";
 
 export interface SizeEstimate {
@@ -88,6 +90,19 @@ export function estimateBrepSize(brep: BrepModel): SizeEstimate | null {
             const r = kind === "ELLIPSE" ? Math.max(a, num(rec.params[3]!) * sc) : a;
             local.add(f.o[0] - r, f.o[1] - r, f.o[2] - r);
             local.add(f.o[0] + r, f.o[1] + r, f.o[2] + r);
+          } else if (kind !== "LINE") {
+            // Any other closed rim (a closed B-spline profile, a trimmed full curve): sample the
+            // whole curve. ABC 00036322's extruded 230 mm B-spline profile is one closed edge per
+            // cap — endpoint-only it measured as a 3.2 mm sliver and every tolerance came out 70x
+            // too fine (4000-point edges, timeouts).
+            const c = makeCurve(table, cid, e.scale ?? brep.scale, brep.units.radPerAngle);
+            if (c) {
+              const N = 64;
+              for (let i = 0; i <= N; i++) {
+                const p = c.evaluate(c.t0 + ((c.t1 - c.t0) * i) / N);
+                if (Number.isFinite(p[0]) && Number.isFinite(p[1]) && Number.isFinite(p[2])) local.add(p[0], p[1], p[2]);
+              }
+            }
           }
         } catch { /* malformed curve — endpoints already counted */ }
       }
