@@ -79,11 +79,19 @@ class BSplineCurve3 implements Curve3 {
     let bt = this.t0, bd = Infinity;
     for (const s of this.samples) { const d = dist(s.p, p); if (d < bd) { bd = d; bt = s.t; } }
     // refine by ternary-style local search around the best sample
-    let step = (this.t1 - this.t0) / (this.samples.length - 1);
-    for (let it = 0; it < 20 && step > 1e-9 * (this.t1 - this.t0); it++) {
+    const span = this.t1 - this.t0;
+    let step = span / (this.samples.length - 1);
+    // On a CLOSED curve the search must roam across the seam: t0 and t1 are the same point, and a
+    // query just past it whose nearest sample is the t1 end can otherwise only be refined toward
+    // t1 - clamping strands it there with a millimetre residual (a closed extrusion profile then
+    // lifts two distinct boundary samples onto one (u,v) point and the unrolled ring self-touches).
+    const wrap = (t: number): number => this.closed && span > 0
+      ? this.t0 + (((t - this.t0) % span) + span) % span
+      : Math.min(Math.max(t, this.t0), this.t1);
+    for (let it = 0; it < 20 && step > 1e-9 * span; it++) {
       const cand = [bt - step / 2, bt + step / 2];
       for (const t of cand) {
-        const tc = Math.min(Math.max(t, this.t0), this.t1);
+        const tc = wrap(t);
         const d = dist(this.evaluate(tc), p);
         if (d < bd) { bd = d; bt = tc; }
       }
