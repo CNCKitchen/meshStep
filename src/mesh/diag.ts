@@ -33,6 +33,10 @@ export type WarningCode =
   /** A body claiming CLOSED_SHELL is structurally a sheet (B-rep boundary edges) and found no
    * mate ring to sew — reclassified as an open surface body. */
   | "open-shell"
+  /** Malformed STEP records were repaired (an empty parameter read as unset) or skipped while
+   * reading, or an edge whose curve was missing was bridged by a straight segment between its
+   * vertices. The mesh is built from the readable remainder — worth checking the preview. */
+  | "step-record-repaired"
   /** More warnings occurred than the cap; the excess was dropped. */
   | "warnings-truncated";
 
@@ -53,6 +57,7 @@ const SEVERITY: Record<WarningCode, WarningSeverity> = {
   "folded-triangles-dropped": "warning",
   "boundary-self-intersects": "warning",
   "open-shell": "warning",
+  "step-record-repaired": "warning",
   "warnings-truncated": "warning",
 };
 

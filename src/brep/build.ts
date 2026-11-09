@@ -175,6 +175,9 @@ export interface BrepModel {
   /** Face entity ids dropped during construction (malformed records) — geometry that is missing
    * from the model entirely; surfaced to consumers via the import diagnostics. */
   droppedFaces: number[];
+  /** EDGE_CURVE ids whose curve entity was missing (unset, `#0`, or a dropped malformed record),
+   * bridged by a synthetic straight segment between the edge's vertices. */
+  curvelessEdges?: number[];
 }
 
 const vertexPoint = (t: Table, id: number, s: number): Vec3 =>
@@ -389,6 +392,7 @@ export function buildBrep(src: string): BrepModel {
   const edges = new Map<number, BEdge>();
   let nextSynthId = 0;
   const pointEdges = new Set<number>(); // synthesized zero-length edges (curve absent, v0 == v1)
+  const curvelessEdges: number[] = [];
   for (const id of table.model.entities.keys()) if (id >= nextSynthId) nextSynthId = id + 1;
   for (const [id, ec] of table.byType("EDGE_CURVE")) {
     const v0 = vertexPoint(table, ref(ec.params[1]!), s), v1 = vertexPoint(table, ref(ec.params[2]!), s);
@@ -408,6 +412,7 @@ export function buildBrep(src: string): BrepModel {
       table.model.entities.set(vec, { type: "VECTOR", params: [{ k: "str", v: "" }, { k: "ref", v: dir }, n(len)] });
       table.model.entities.set(curveId, { type: "LINE", params: [{ k: "str", v: "" }, { k: "ref", v: pt }, { k: "ref", v: vec }] });
       if (len * s < 1e-9) pointEdges.add(id);
+      curvelessEdges.push(id);
     }
     edges.set(id, { v0, v1, curveId, sameSense: ec.params[4]?.k === "enum" ? ec.params[4].v === "T" : true });
   }
@@ -546,5 +551,7 @@ export function buildBrep(src: string): BrepModel {
   // the table, which would undo any earlier vertex unification.
   healMicroEdges(table, edges, solids, s);
 
-  return { solids, edges, units, table, scale: s, droppedFaces };
+  const model: BrepModel = { solids, edges, units, table, scale: s, droppedFaces };
+  if (curvelessEdges.length) model.curvelessEdges = curvelessEdges;
+  return model;
 }

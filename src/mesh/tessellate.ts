@@ -4695,6 +4695,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // and the deep meshing code reports without threading a sink through every signature).
   beginWarnings();
   for (const fid of brep.droppedFaces) warn("face-dropped", fid, "malformed face record dropped while reading the B-rep — geometry missing");
+  {
+    const ids = (a?: number[]): string => a && a.length ? a.slice(0, 8).map((i) => `#${i}`).join(", ") + (a.length > 8 ? `, ... (${a.length})` : "") : "";
+    const parts: string[] = [];
+    if (brep.table.model.repaired?.length) parts.push(`empty parameter read as unset in ${ids(brep.table.model.repaired)}`);
+    if (brep.table.model.dropped?.length) parts.push(`unreadable record(s) skipped: ${ids(brep.table.model.dropped)}`);
+    if (brep.curvelessEdges?.length) parts.push(`edge(s) without a curve bridged straight: ${ids(brep.curvelessEdges)}`);
+    if (parts.length) warn("step-record-repaired", undefined, `malformed STEP data — ${parts.join("; ")}`);
+  }
 
   // Cache each face's surface (used to dispatch tessellation).
   const faceSurf = new Map<number, Surface | null>();
