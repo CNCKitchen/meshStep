@@ -4110,11 +4110,40 @@ function tessellatePeriodicRegion(
   });
   let sLowEnd: number | null = null, sHighEnd: number | null = null; // synthetic ends (else rim)
   let rimLow: LL | null = null, rimHigh: LL | null = null;
+  // A doubly-periodic surface whose stack ring COLLAPSES somewhere (a closed revolution profile
+  // touching the axis — topologically a sphere, not a torus): one rim splits it into two CAPS.
+  let sPoleAt: number | null = null;
   if (sPeriodic && rims.length === 1) {
+    let cMax = 0, cMin = Infinity, sMin = 0;
+    for (let i = 0; i < 128; i++) {
+      const sv = sSeam + (sPeriod * i) / 128, c = arcOver(P, 0, period, sv);
+      if (c > cMax) cMax = c;
+      if (c < cMin) { cMin = c; sMin = sv; }
+    }
+    if (cMax > 0 && cMin < 1e-3 * cMax) {
+      // Refine the pole on a fine local scan around the coarse minimum.
+      let best = sMin, bc = cMin;
+      for (let i = -64; i <= 64; i++) { const sv = sMin + (sPeriod * i) / (128 * 64), c = arcOver(P, 0, period, sv); if (c < bc) { bc = c; best = sv; } }
+      sPoleAt = best;
+    }
+  }
+  if (sPeriodic && rims.length === 1 && sPoleAt === null) {
     // Cutting a doubly-periodic surface along ONE winding loop leaves a cylinder: the same rim
     // bounds the band on both sides, one S-period apart (identical 3D points — the weld closes it).
     rimLow = rims[0]!;
     rimHigh = shiftS(rims[0]!, sPeriod);
+  } else if (sPeriodic && rims.length === 1 && sPoleAt !== null) {
+    // Sphere-like: the cap runs from the rim to the pole on the ENCLOSED side (material left of
+    // the oriented rim, flipped with the face sense — the single-rim convention below). Without
+    // this the tube branch above meshed the WHOLE surface and overlapped every neighbour along
+    // the rims (ABC 00025667: 1,899 non-manifold edges on a 5-face closed-profile body).
+    const rim = rims[0]!;
+    const below = sPoleAt + Math.floor((rim.meanS - sPoleAt) / sPeriod) * sPeriod;
+    const leftIsPlusS = P === 0 ? rim.wind > 0 : rim.wind < 0;
+    const enclosedPlusS = leftIsPlusS === (sign > 0);
+    if (enclosedPlusS) { rimLow = rim; sHighEnd = below + sPeriod; }
+    else { rimHigh = rim; sLowEnd = below; }
+    if (DBG) console.error(`[tess] fid=${fid} region: closed profile with a pole at s=${sPoleAt.toFixed(4)} — single rim bounds a cap (${enclosedPlusS ? "+S" : "-S"})`);
   } else if (rims.length === 2) {
     let [a, b] = rims[0]!.meanS <= rims[1]!.meanS ? [rims[0]!, rims[1]!] : [rims[1]!, rims[0]!];
     // On a doubly-periodic surface the two rims' S-branches are arbitrary: bring b within one
