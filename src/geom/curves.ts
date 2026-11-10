@@ -62,7 +62,9 @@ class BSplineCurve3 implements Curve3 {
   constructor(degree: number, cps: Vec3[], knots: number[], weights: number[], t0: number, t1: number) {
     this.degree = degree; this.cps = cps; this.knots = knots; this.weights = weights;
     this.t0 = t0; this.t1 = t1;
-    this.closed = dist(this.evaluate(t0), this.evaluate(t1)) < 1e-6;
+    // An empty parameter span evaluates to one point at both ends — a degenerate curve, not a closed
+    // one (its "period" would be ~0 and every periodic unwrap downstream would spin, ABC 00025672).
+    this.closed = t1 - t0 > 1e-12 * Math.max(1, Math.abs(t0), Math.abs(t1)) && dist(this.evaluate(t0), this.evaluate(t1)) < 1e-6;
     const N = Math.max(16, cps.length * 4);
     for (let i = 0; i <= N; i++) { const t = t0 + ((t1 - t0) * i) / N; this.samples.push({ t, p: this.evaluate(t) }); }
   }

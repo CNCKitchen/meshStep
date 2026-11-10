@@ -131,9 +131,19 @@ function emitTri(
 /** Unwrap a periodic coordinate (component c: 0=u, 1=v) so the loop is continuous (no full-period
  * jumps at the seam). Period is 2π for the analytic surfaces, v1-v0 for a closed B-spline. */
 function unwrap(p2: P2[], c: 0 | 1, period = TWO_PI): void {
+  // A non-positive period (a "closed" curve whose parameter span is empty, ABC 00025672: -1e-17)
+  // would spin the shift loops below forever; there is nothing to unwrap.
+  if (!(period > 0) || !Number.isFinite(period)) return;
   const half = period / 2;
   for (let i = 1; i < p2.length; i++) {
     let d = p2[i]![c] - p2[i - 1]![c];
+    // A wild projection (ABC 00024499: u = -4.9e8 on a 1.04 period) is many periods away: jump
+    // there arithmetically instead of half a billion single-period steps. Same result interval;
+    // the usual 0/1-period case below is unchanged bit for bit.
+    if (d > half + 8 * period || d < -half - 8 * period) {
+      const k = d > half ? Math.ceil((d - half) / period) : -Math.ceil((-half - d) / period);
+      p2[i]![c] -= k * period; d -= k * period;
+    }
     while (d > half) { p2[i]![c] -= period; d -= period; }
     while (d < -half) { p2[i]![c] += period; d += period; }
   }
@@ -620,6 +630,7 @@ function pointInPoly(p: P2, poly: P2[]): boolean {
 /** Unwrap a periodic loop and shift it by whole periods so its mean (component c) sits near target. */
 function shiftIntoRange(p2: P2[], target: number, c: 0 | 1, period = TWO_PI): void {
   unwrap(p2, c, period);
+  if (!(period > 0) || !Number.isFinite(period)) return;
   let mean = 0;
   for (const p of p2) mean += p[c];
   mean /= p2.length;
