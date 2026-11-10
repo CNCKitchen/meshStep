@@ -77,19 +77,24 @@ function meshRecord(res: ReturnType<typeof importStep>): MeshRecord {
   h.update(new Uint8Array(res.solidOfTri.buffer, res.solidOfTri.byteOffset, res.solidOfTri.byteLength));
 
   // --- watertightness counters + signed volume
+  // Edge-use counts over a sorted key array: a Map stops at 2^24 entries, which a 58M-triangle
+  // mesh (wallganizer) far exceeds.
   const KEY = 0x4000000; // vertex ids < 2^26; a*KEY+b exact below 2^53
-  const use = new Map<number, number>();
+  const keys = new Float64Array(I.length);
   for (let t = 0; t < I.length; t += 3) {
     const a = I[t]!, b = I[t + 1]!, c = I[t + 2]!;
-    const k0 = a < b ? a * KEY + b : b * KEY + a;
-    const k1 = b < c ? b * KEY + c : c * KEY + b;
-    const k2 = c < a ? c * KEY + a : a * KEY + c;
-    use.set(k0, (use.get(k0) ?? 0) + 1);
-    use.set(k1, (use.get(k1) ?? 0) + 1);
-    use.set(k2, (use.get(k2) ?? 0) + 1);
+    keys[t] = a < b ? a * KEY + b : b * KEY + a;
+    keys[t + 1] = b < c ? b * KEY + c : c * KEY + b;
+    keys[t + 2] = c < a ? c * KEY + a : a * KEY + c;
   }
+  keys.sort();
   let open = 0, nonManifold = 0;
-  for (const n of use.values()) { if (n === 1) open++; else if (n > 2) nonManifold++; }
+  for (let i = 0; i < keys.length;) {
+    let j = i + 1;
+    while (j < keys.length && keys[j] === keys[i]) j++;
+    if (j - i === 1) open++; else if (j - i > 2) nonManifold++;
+    i = j;
+  }
   let vol6 = 0;
   for (let t = 0; t < I.length; t += 3) {
     const a = I[t]! * 3, b = I[t + 1]! * 3, c = I[t + 2]! * 3;

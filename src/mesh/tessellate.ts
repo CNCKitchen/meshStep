@@ -5909,23 +5909,45 @@ function orientSheets(P: number[], I: number[], solidOfTri: number[], frameKey: 
  * once, to its best mutual match, and only when BOTH rings track each other everywhere (a rim
  * half-covered by two caps fails the mutual gate and stays open rather than sewn wrong).
  */
-function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>, unsewn?: Set<number>, sewnSolids?: Set<number>): number {
+/** Which undirected edges of triangles [t0, t1) are used by exactly one of them (boundary edges).
+ * Counted over a sorted key array, not a Map: V8 Maps stop at 2^24 entries, which one large body
+ * can exceed. Vertex ids must stay below 2^26 (keys exact in a double). */
+function singleUseEdges(I: ArrayLike<number>, t0: number, t1: number): (a: number, b: number) => boolean {
   const KEY = 2 ** 26;
-  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
-  const use = new Map<number, number>();
-  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
-    const k = ek(I[i + e]!, I[i + (e + 1) % 3]!);
-    use.set(k, (use.get(k) ?? 0) + 1);
+  const keys = new Float64Array((t1 - t0) * 3);
+  let n = 0;
+  for (let t = t0; t < t1; t++) for (let e = 0; e < 3; e++) {
+    const a = I[t * 3 + e]!, b = I[t * 3 + (e + 1) % 3]!;
+    keys[n++] = a < b ? a * KEY + b : b * KEY + a;
   }
+  keys.sort();
+  return (a, b) => {
+    const k = a < b ? a * KEY + b : b * KEY + a;
+    let lo = 0, hi = n;
+    while (lo < hi) { const m = (lo + hi) >>> 1; if (keys[m]! < k) lo = m + 1; else hi = m; }
+    return lo < n && keys[lo] === k && (lo + 1 >= n || keys[lo + 1] !== k);
+  };
+}
+
+function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>, unsewn?: Set<number>, sewnSolids?: Set<number>): number {
   // Directed boundary edges and their owning triangle; walk simple rings (skip ambiguous pinches).
+  // Edge use is counted per body: bodies are contiguous triangle runs welded independently, so no
+  // edge spans two of them, and a whole-model count overflows (wallganizer: >2^24 edges).
   const nxt = new Map<number, number>();
   const triAt = new Map<number, number>();
   const multi = new Set<number>();
-  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
-    const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
-    if (use.get(ek(a, b)) !== 1) continue;
-    if (nxt.has(a)) multi.add(a);
-    nxt.set(a, b); triAt.set(a, i / 3);
+  const nTri = I.length / 3;
+  for (let r0 = 0; r0 < nTri;) {
+    let r1 = r0 + 1;
+    while (r1 < nTri && solidOfTri[r1] === solidOfTri[r0]) r1++;
+    const once = singleUseEdges(I, r0, r1);
+    for (let t = r0; t < r1; t++) for (let e = 0; e < 3; e++) {
+      const a = I[t * 3 + e]!, b = I[t * 3 + (e + 1) % 3]!;
+      if (!once(a, b)) continue;
+      if (nxt.has(a)) multi.add(a);
+      nxt.set(a, b); triAt.set(a, t);
+    }
+    r0 = r1;
   }
   type Ring = { v: number[]; solid: number; fid: number; per: number; frac: number[]; cx: number; cy: number; cz: number; r: number };
   const rings: Ring[] = [];
