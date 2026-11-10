@@ -71,11 +71,12 @@ class BSplineCurve3 implements Curve3 {
     return deBoor(this.degree, this.cps, this.knots, tc, this.weights);
   }
   project(p: Vec3): number {
-    let bt = this.t0, bd = Infinity;
-    for (const s of this.samples) { const d = dist(s.p, p); if (d < bd) { bd = d; bt = s.t; } }
-    // refine by ternary-style local search around the best sample
+    const S = this.samples, n = S.length;
+    const ds = S.map((s) => dist(s.p, p));
+    let i0 = 0;
+    for (let i = 1; i < n; i++) if (ds[i]! < ds[i0]!) i0 = i;
     const span = this.t1 - this.t0;
-    let step = span / (this.samples.length - 1);
+    const step0 = span / (n - 1);
     // On a CLOSED curve the search must roam across the seam: t0 and t1 are the same point, and a
     // query just past it whose nearest sample is the t1 end can otherwise only be refined toward
     // t1 - clamping strands it there with a millimetre residual (a closed extrusion profile then
@@ -83,14 +84,33 @@ class BSplineCurve3 implements Curve3 {
     const wrap = (t: number): number => this.closed && span > 0
       ? this.t0 + (((t - this.t0) % span) + span) % span
       : Math.min(Math.max(t, this.t0), this.t1);
-    for (let it = 0; it < 20 && step > 1e-9 * span; it++) {
-      const cand = [bt - step / 2, bt + step / 2];
-      for (const t of cand) {
-        const tc = wrap(t);
-        const d = dist(this.evaluate(tc), p);
-        if (d < bd) { bd = d; bt = tc; }
+    // refine by ternary-style local search around a sample
+    const refine = (t0: number, d0: number): [number, number] => {
+      let bt = t0, bd = d0, step = step0;
+      for (let it = 0; it < 20 && step > 1e-9 * span; it++) {
+        for (const t of [bt - step / 2, bt + step / 2]) {
+          const tc = wrap(t);
+          const d = dist(this.evaluate(tc), p);
+          if (d < bd) { bd = d; bt = tc; }
+        }
+        step /= 2;
       }
-      step /= 2;
+      return [bt, bd];
+    };
+    let [bt, bd] = refine(S[i0]!.t, ds[i0]!);
+    // A curve that passes within a sample spacing of itself (a wiggly closed profile, ABC 00036948)
+    // can put the nearest SAMPLE on the wrong branch: the point lies on the other branch, between
+    // two samples that are each farther away. Refine every other local minimum that could still
+    // beat the current best: its branch's true minimum is at least (sample distance - spacing).
+    // Only a strictly closer branch replaces the answer, so well-separated curves are unaffected.
+    const len = (i: number): number => Math.max(i > 0 ? dist(S[i]!.p, S[i - 1]!.p) : 0, i + 1 < n ? dist(S[i]!.p, S[i + 1]!.p) : 0);
+    for (let i = 0; i < n; i++) {
+      if (i === i0 || ds[i]! - 1.5 * len(i) >= bd) continue;
+      const prev = i > 0 ? ds[i - 1]! : this.closed ? ds[n - 2]! : Infinity;
+      const next = i + 1 < n ? ds[i + 1]! : this.closed ? ds[1]! : Infinity;
+      if (ds[i]! > prev || ds[i]! > next) continue;
+      const [t, d] = refine(S[i]!.t, ds[i]!);
+      if (d < bd - 1e-12) { bd = d; bt = t; }
     }
     return bt;
   }
