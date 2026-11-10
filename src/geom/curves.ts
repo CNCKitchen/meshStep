@@ -59,6 +59,7 @@ class BSplineCurve3 implements Curve3 {
   degree: number; cps: Vec3[]; knots: number[]; weights: number[];
   t0: number; t1: number; closed: boolean;
   private samples: { t: number; p: Vec3 }[] = [];
+  private size: number;
   constructor(degree: number, cps: Vec3[], knots: number[], weights: number[], t0: number, t1: number) {
     this.degree = degree; this.cps = cps; this.knots = knots; this.weights = weights;
     this.t0 = t0; this.t1 = t1;
@@ -67,6 +68,9 @@ class BSplineCurve3 implements Curve3 {
     this.closed = t1 - t0 > 1e-12 * Math.max(1, Math.abs(t0), Math.abs(t1)) && dist(this.evaluate(t0), this.evaluate(t1)) < 1e-6;
     const N = Math.max(16, cps.length * 4);
     for (let i = 0; i <= N; i++) { const t = t0 + ((t1 - t0) * i) / N; this.samples.push({ t, p: this.evaluate(t) }); }
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (const { p } of this.samples) for (let k = 0; k < 3; k++) { lo[k] = Math.min(lo[k]!, p[k]!); hi[k] = Math.max(hi[k]!, p[k]!); }
+    this.size = Math.max(1e-12, Math.hypot(hi[0]! - lo[0]!, hi[1]! - lo[1]!, hi[2]! - lo[2]!));
   }
   evaluate(t: number): Vec3 {
     const tc = Math.min(Math.max(t, this.t0), this.t1);
@@ -113,6 +117,42 @@ class BSplineCurve3 implements Curve3 {
       if (ds[i]! > prev || ds[i]! > next) continue;
       const [t, d] = refine(S[i]!.t, ds[i]!);
       if (d < bd - 1e-12) { bd = d; bt = t; }
+    }
+    // SECOND PASS — the junction case. Where two branches MEET (a hairpin's turn, a closed curve's
+    // start/end) the nearest samples are shared by both, and the greedy refine above walks off
+    // along whichever side looks better first: the wrong branch, a few hundredths off. Any point of
+    // sample interval k lies within the interval's arc length L of both its end samples, so its
+    // distance is at least (ds[k] + ds[k+1] - L) / 2. Screen only the intervals whose bound beats
+    // the answer (with L = 1.6x the chord, a semicircle's ratio) and that do not already hold it:
+    // most queries are legitimately off-curve but close to it (triangle centroids), and there only
+    // the answer's own interval qualifies. A cheap 12-step golden screen per interval, a full
+    // search only when the screen beats the answer, which is then replaced only when clearly
+    // closer, so a correct answer is kept bit for bit.
+    // Upper gate: a wrong-branch answer needs two branches within a sample spacing, so its error is
+    // below ~ that spacing; a query farther off the curve than 2 spacings is a genuine off-curve
+    // point whose branch the first pass already chose (and would otherwise admit many intervals).
+    if (bd > 1e-6 * this.size && bd < 2 * len(i0)) {
+      const golden = (a: number, b: number, iters: number): [number, number] => {
+        const g = (Math.sqrt(5) - 1) / 2;
+        let x1 = b - g * (b - a), x2 = a + g * (b - a);
+        let f1 = dist(this.evaluate(wrap(x1)), p), f2 = dist(this.evaluate(wrap(x2)), p);
+        for (let it = 0; it < iters && b - a > 1e-12 * span; it++) {
+          if (f1 < f2) { b = x2; x2 = x1; f2 = f1; x1 = b - g * (b - a); f1 = dist(this.evaluate(wrap(x1)), p); }
+          else { a = x1; x1 = x2; f1 = f2; x2 = a + g * (b - a); f2 = dist(this.evaluate(wrap(x2)), p); }
+        }
+        return f1 < f2 ? [wrap(x1), f1] : [wrap(x2), f2];
+      };
+      const tol = 1e-9 * span;
+      for (let k = 0; k < n - 1; k++) { // interval k = [S[k].t, S[k+1].t]
+        if ((ds[k]! + ds[k + 1]! - 1.6 * dist(S[k]!.p, S[k + 1]!.p)) / 2 >= bd) continue;
+        const a = S[k]!.t, b = S[k + 1]!.t;
+        if (bt > a + tol && bt < b - tol) continue; // the answer already lies inside this interval
+        const [ts, dsc] = golden(a, b, 12);
+        if (dsc >= bd) continue;
+        const [t, d] = golden(a, b, 48);
+        const [tb, db] = d <= dsc ? [t, d] : [ts, dsc];
+        if (db < bd - Math.max(1e-12, 1e-6 * bd)) { bd = db; bt = tb; }
+      }
     }
     return bt;
   }
