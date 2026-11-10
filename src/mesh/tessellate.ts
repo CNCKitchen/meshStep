@@ -4668,33 +4668,59 @@ function tessellateSphereCap(
 }
 
 /**
- * Last-resort cap for a single-loop sphere face whose rim is a circle in ANY plane — not a parallel
- * of the sphere's own frame. A hemisphere bounded by a great circle through both parametrisation
- * poles (ABC 00038301) projects to a pole-to-pole zigzag every (u,v) mesher declines, and
- * reorientSphere refuses patches reaching 90° from their centre. The parametrisation is ours to
- * choose: aim the pole along the rim plane's normal (Newell) so the rim becomes a parallel, and the
- * cap mesher fans the enclosed side to that pole. Right-handed frame, so the cap mesher's
- * orientation rule (eastward travel on a sameSense face encloses north) still holds.
+ * Cap for a single-loop sphere face whose rim is a circle in ANY plane — not a parallel of the
+ * sphere's own frame. The parametrisation is ours to choose: aim the pole along the rim plane's
+ * normal (Newell) so the rim becomes a parallel, and the cap mesher fans the enclosed side to that
+ * pole (it declines unless the rim really is a circle in that frame). Right-handed frame, so the cap
+ * mesher's orientation rule (eastward travel on a sameSense face encloses north) still holds.
+ * Two uses: a TILTED near-great-circle rim (8-23° off the equator, ABC 00021778 & co.) that the
+ * param grid meshes as a watertight but flattened dome (58-80% of the true area) — tried before the
+ * grid, gated by sphereTiltedGreatRim;
+ * and, last resort, a great circle through both parametrisation poles (ABC 00038301) that every
+ * (u,v) mesher declines.
  */
-function tessellateSphereCapAnyAxis(
-  s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
-  verts: number[], faceIds: number[], chordTol: number, targetEdge: number, normalDev: number, sign: number,
-): boolean {
+/** Unit Newell normal of a loop's sampled rim polyline (null when degenerate). */
+function loopNormal(loop: BLoop, sampled: Map<number, Vec3[]>): Vec3 | null {
   const pts: Vec3[] = [];
   for (const oe of loop.edges) {
-    const base = sampled.get(oe.edgeId); if (!base) return false;
+    const base = sampled.get(oe.edgeId); if (!base) return null;
     const poly = oe.orient ? base : base.slice().reverse();
     for (let i = 0; i < poly.length - 1; i++) pts.push(poly[i]!);
   }
-  if (pts.length < 4) return false;
+  if (pts.length < 4) return null;
   let nx = 0, ny = 0, nz = 0;
   for (let i = 0; i < pts.length; i++) {
     const a = pts[i]!, b = pts[(i + 1) % pts.length]!;
     nx += (a[1] - b[1]) * (a[2] + b[2]); ny += (a[2] - b[2]) * (a[0] + b[0]); nz += (a[0] - b[0]) * (a[1] + b[1]);
   }
   const L = Math.hypot(nx, ny, nz);
-  if (L < 1e-12) return false;
-  const z: Vec3 = [nx / L, ny / L, nz / L];
+  return L < 1e-12 ? null : [nx / L, ny / L, nz / L];
+}
+
+/** A sphere face's rim is a TILTED, near-GREAT circle — the shape the param grid meshes as a
+ * flattened dome: planar (within 1e-3 R), its plane within 0.26 R of the centre (a cap reaching past
+ * 75° from its centre, where reorientSphere refuses), and tilted less than ~45° from the sphere's
+ * equator (|cos| to the pole axis > 0.7; a rim through both poles, |cos| ~ 0, the grid handles). */
+function sphereTiltedGreatRim(s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>): boolean {
+  const n = loopNormal(loop, sampled);
+  if (!n || Math.abs(dot(n, s.f.z)) <= 0.7) return false;
+  const pts: Vec3[] = [];
+  for (const oe of loop.edges) for (const p of sampled.get(oe.edgeId) ?? []) pts.push(p);
+  let cx = 0, cy = 0, cz = 0;
+  for (const p of pts) { cx += p[0]; cy += p[1]; cz += p[2]; }
+  cx /= pts.length; cy /= pts.length; cz /= pts.length;
+  let dev = 0;
+  for (const p of pts) dev = Math.max(dev, Math.abs((p[0] - cx) * n[0] + (p[1] - cy) * n[1] + (p[2] - cz) * n[2]));
+  const o = s.f.o, d = (cx - o[0]) * n[0] + (cy - o[1]) * n[1] + (cz - o[2]) * n[2];
+  return dev <= 1e-3 * s.r && Math.abs(d) < Math.cos(1.31) * s.r;
+}
+
+function tessellateSphereCapAnyAxis(
+  s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], chordTol: number, targetEdge: number, normalDev: number, sign: number,
+): boolean {
+  const z = loopNormal(loop, sampled);
+  if (!z) return false;
   const x = normalize(cross(z, Math.abs(z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
   const o = s.f.o;
   const re = new Sphere({ o: [o[0], o[1], o[2]], x, y: cross(z, x), z }, s.r);
@@ -5115,6 +5141,10 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
             || (stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
             || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
             || (!single && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            // A TILTED near-great-circle rim (not a parallel the cap mesher above takes, too large for
+            // reorientSphere): the grid meshes it as a flattened dome — re-aim the pole first.
+            || (single && sphereTiltedGreatRim(surface, louter, sampled)
+              && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
             || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
             || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
             || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)))
