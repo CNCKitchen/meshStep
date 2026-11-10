@@ -11,6 +11,7 @@ import { Table } from "../src/step/entities.ts";
 import { makeCurve } from "../src/geom/curves.ts";
 import { makeSurface } from "../src/geom/surfaces.ts";
 import { unwrap } from "../src/mesh/tessellate.ts";
+import { importStep } from "../src/index.ts";
 
 let failures = 0;
 const check = (label: string, cond: boolean, detail: string): void => {
@@ -70,6 +71,29 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   unwrap(c, 0, 2 * Math.PI);
   check("unwrap: ordinary single-period wrap unchanged", c[1]![0] === 3 && c[2]![0] === -3 + 2 * Math.PI, JSON.stringify(c));
   check("unwrap: returns promptly", Date.now() - t0 < 1000, `${Date.now() - t0} ms`);
+}
+
+// ---- bounded-surface model (GEOMETRIC_SET of CURVE_BOUNDED_SURFACE, no solid): it imports as one
+// synthetic body with id 0, which is no entity in the file. The product-structure pass looked that
+// id up and threw "STEP: missing entity #0" (gear.stp, a 1998 Pro/E surface export).
+{
+  const corners = [[0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0]];
+  const lines: string[] = [`#1=CARTESIAN_POINT('',(0.,0.,0.));`, `#2=DIRECTION('',(0.,0.,1.));`, `#3=DIRECTION('',(1.,0.,0.));`,
+    `#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);`, `#5=PLANE('',#4);`];
+  const segs: number[] = [];
+  corners.forEach((p, i) => {
+    const q = corners[(i + 1) % 4]!, b = 100 + i * 10, d = [q[0]! - p[0]!, q[1]! - p[1]!, 0], len = Math.hypot(d[0]!, d[1]!);
+    lines.push(pt(b, p), `#${b + 1}=DIRECTION('',(${d.map((x) => (x / len).toFixed(6)).join(",")}));`, `#${b + 2}=VECTOR('',#${b + 1},${len.toFixed(1)});`,
+      `#${b + 3}=LINE('',#${b},#${b + 2});`, `#${b + 4}=TRIMMED_CURVE('',#${b + 3},(0.),(1.),.T.,.UNSPECIFIED.);`,
+      `#${b + 5}=COMPOSITE_CURVE_SEGMENT(.CONTINUOUS.,.T.,#${b + 4});`);
+    segs.push(b + 5);
+  });
+  lines.push(`#200=OUTER_BOUNDARY_CURVE('',(${segs.map((s) => `#${s}`).join(",")}),.F.);`, `#201=CURVE_BOUNDED_SURFACE('',#5,(#200),.F.);`,
+    `#202=GEOMETRIC_SET('',(#201));`);
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('CONFIG_CONTROL_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  let tris = 0, err = "";
+  try { tris = importStep(src).mesh.indices.length / 3; } catch (e) { err = (e as Error).message; }
+  check("bounded-surface model: imports without a product-structure error", !err && tris > 0, err || `tris=${tris}`);
 }
 
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }

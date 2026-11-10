@@ -34,6 +34,9 @@ const SOLID_TYPES = ["MANIFOLD_SOLID_BREP", "BREP_WITH_VOIDS", "SHELL_BASED_SURF
  */
 export function extractStructure(table: Table, solids: readonly Pick<BSolid, "id">[]): PartNode {
   const bodyName = (id: number): string => {
+    // A bounded-surface model (GEOMETRIC_SET) imports as one synthetic solid with id 0, which
+    // is no entity in the file.
+    if (!table.model.entities.has(id)) return "";
     for (const ty of SOLID_TYPES) {
       const rec = table.sub(id, ty);
       if (rec?.params[0]?.k === "str") return rec.params[0].v;
