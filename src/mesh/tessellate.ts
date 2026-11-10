@@ -1066,6 +1066,11 @@ function gridCDT(
       if (keep.length >= 1 && ringKey(keep[keep.length - 1]!) === k) continue;
       keep.push(i);
     }
+    // The ring is CYCLIC: a closing sample that repeats the first (a closed single-edge window
+    // whose polyline end lands 1e-15 off its start, ABC 00026004's torus slots) is a zero-length
+    // segment the scan above never compares. The near-coincident pair is unrealisable for the CDT:
+    // it slivers a triangle out to the far rim across the NEIGHBOURING slot's constraints.
+    while (keep.length > 3 && ringKey(keep[keep.length - 1]!) === ringKey(keep[0]!)) keep.pop();
     // Same-direction repeats: a degenerate rim traversed TWICE (a "doubled loop", another Shapr3D
     // pinch artefact — two edges tracing the same 3D circle). If (nearly) the whole stretch between
     // two visits of one position repeats at that fixed offset, the loop walks the cycle twice —
