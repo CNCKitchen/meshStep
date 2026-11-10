@@ -475,6 +475,17 @@
     },
     "skipped": {}
   },
+  "sourcemodels/iso14649-demo": {
+    "hash": "",
+    "verts": 0,
+    "tris": 0,
+    "openEdges": 0,
+    "nonManifoldEdges": 0,
+    "volume": 0,
+    "dispatch": {},
+    "skipped": {},
+    "error": "meshStep: one body needs at least 101M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
+  },
   "sourcemodels/jack_in_the_box": {
     "hash": "6eb78ebdc408bdeaaef0f65ca32c6b4f97662ca49e397dda6c2999b2c70a098e",
     "verts": 93032,
