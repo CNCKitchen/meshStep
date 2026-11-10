@@ -354,15 +354,18 @@
     "skipped": {}
   },
   "newtestmodels/wallganizer": {
-    "hash": "",
-    "verts": 0,
-    "tris": 0,
+    "hash": "4b3985036a91c61020c47ea61786c885b4bbcd9fcdbdbeab11ee01b8b05a1dde",
+    "verts": 29147622,
+    "tris": 58296708,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 0,
-    "dispatch": {},
-    "skipped": {},
-    "error": "Map maximum size exceeded"
+    "volume": 10244193.32,
+    "dispatch": {
+      "cone": 2,
+      "grid": 13517,
+      "thinFace": 25
+    },
+    "skipped": {}
   },
   "roundedCube": {
     "hash": "894e9b3d29a06725e9836903ab55fb2502f90841c826585b0322d7c5722beacc",
@@ -458,7 +461,7 @@
     "volume": 0,
     "dispatch": {},
     "skipped": {},
-    "error": "STEP: missing entity #0"
+    "error": "meshStep: one body needs at least 16M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/hose-fitting": {
     "hash": "ca68035d60858d955391b6b07d402aa6c50573e297c6d7861d00ad90619e60c7",
