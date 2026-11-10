@@ -130,7 +130,7 @@ function emitTri(
 
 /** Unwrap a periodic coordinate (component c: 0=u, 1=v) so the loop is continuous (no full-period
  * jumps at the seam). Period is 2π for the analytic surfaces, v1-v0 for a closed B-spline. */
-function unwrap(p2: P2[], c: 0 | 1, period = TWO_PI): void {
+export function unwrap(p2: P2[], c: 0 | 1, period = TWO_PI): void { // exported for test/geometry-regressions.ts only
   // A non-positive period (a "closed" curve whose parameter span is empty, ABC 00025672: -1e-17)
   // would spin the shift loops below forever; there is nothing to unwrap.
   if (!(period > 0) || !Number.isFinite(period)) return;

@@ -38,6 +38,7 @@
     "test:abort": "node test/abort.ts",
     "test:overrides": "node test/face-overrides.ts",
     "test:parse": "node test/parse-recovery.ts",
+    "test:geometry": "node test/geometry-regressions.ts",
     "test:3mf": "node test/threemf.ts",
     "char": "node --max-old-space-size=16384 test/char.ts",
     "inspect": "node test/inspect.ts",
@@ -46,7 +47,7 @@
     "test:version": "node test/version.ts",
     "typecheck": "tsc --noEmit",
     "version": "node scripts/sync-version.mjs && git add src/version.ts",
-    "prepublishOnly": "npm run typecheck && npm run build && npm run test:version && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort && npm run test:overrides && npm run test:parse"
+    "prepublishOnly": "npm run typecheck && npm run build && npm run test:version && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort && npm run test:overrides && npm run test:parse && npm run test:geometry"
   },
   "keywords": [
     "step",
