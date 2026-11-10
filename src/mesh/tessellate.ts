@@ -13,7 +13,7 @@ import type { Vec3 } from "../geom/vec.ts";
 import { cross, dot, lerp, normalize } from "../geom/vec.ts";
 import { ref, refList, list, num, numList } from "../step/entities.ts";
 import type { Param } from "../step/parser.ts";
-import type { BrepModel, BLoop } from "../brep/build.ts";
+import type { BrepModel, BFace, BLoop } from "../brep/build.ts";
 import type { IndexedMesh } from "../io/stl.ts";
 import type { Surface } from "../geom/surfaces.ts";
 import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
@@ -105,6 +105,9 @@ const FULL_FACE_TRI_BUDGET = 2_000_000;
  * grow past ~134M elements (≈14.9M triangles), surfacing as a cryptic "Invalid array length" deep
  * in a push. Checked between faces so the failure is a clear, actionable error instead. */
 const SOLID_VERTS_LIMIT = 120_000_000;
+/** The V8 array ceiling in triangles (~134M elements / 9): a body proven to need more cannot be
+ * meshed at all, so it is rejected up front (bodyTriLowerBound) instead of after minutes of work. */
+const BODY_TRI_CEILING = 14_900_000;
 
 /** Emit a triangle, oriented so its normal points outward (surface normal × same_sense sign).
  * `refN` short-circuits the orientation reference: callers that know the triangle's (u,v) pass
@@ -4680,7 +4683,10 @@ function tessellateSphereCap(
  * (u,v) mesher declines.
  */
 /** Unit Newell normal of a loop's sampled rim polyline (null when degenerate). */
-function loopNormal(loop: BLoop, sampled: Map<number, Vec3[]>): Vec3 | null {
+/** Vector area of a sampled loop (half the Newell sum): its length is the area of the loop's
+ * projection onto the best-fit plane, its direction the loop normal. null when an edge is unsampled
+ * or the loop has fewer than 4 distinct points. */
+function loopVectorArea(loop: BLoop, sampled: Map<number, Vec3[]>): Vec3 | null {
   const pts: Vec3[] = [];
   for (const oe of loop.edges) {
     const base = sampled.get(oe.edgeId); if (!base) return null;
@@ -4693,8 +4699,33 @@ function loopNormal(loop: BLoop, sampled: Map<number, Vec3[]>): Vec3 | null {
     const a = pts[i]!, b = pts[(i + 1) % pts.length]!;
     nx += (a[1] - b[1]) * (a[2] + b[2]); ny += (a[2] - b[2]) * (a[0] + b[0]); nz += (a[0] - b[0]) * (a[1] + b[1]);
   }
-  const L = Math.hypot(nx, ny, nz);
-  return L < 1e-12 ? null : [nx / L, ny / L, nz / L];
+  return [nx / 2, ny / 2, nz / 2];
+}
+
+function loopNormal(loop: BLoop, sampled: Map<number, Vec3[]>): Vec3 | null {
+  const a = loopVectorArea(loop, sampled); if (!a) return null;
+  const L = Math.hypot(a[0], a[1], a[2]);
+  return L < 1e-12 ? null : [a[0] / L, a[1] / L, a[2] / L];
+}
+
+/** A LOWER BOUND on the triangles one body will need, from its boundaries alone (no meshing).
+ * The vector area of a face's loops equals the integral of the surface normal over the face, so
+ * its length never exceeds the face area, whatever the surface shape; with loop orientations
+ * untrusted, |V_i| - sum_{j != i} |V_j| for any loop i is still below it (triangle inequality).
+ * Mesh edges stay within about 1.5x the face's target edge, so a triangle covers at most
+ * (sqrt(3)/4)(1.5 L)^2. Under-estimates curved and seam-bounded faces (a full cylinder bounds 0);
+ * it exists only to reject, BEFORE minutes of meshing, a body that cannot fit the array ceiling. */
+function bodyTriLowerBound(faces: readonly BFace[], sampled: Map<number, Vec3[]>, targetOf: (fid: number) => number): number {
+  let tris = 0;
+  for (const face of faces) {
+    const mags: number[] = [];
+    for (const lp of face.loops) { const a = loopVectorArea(lp, sampled); mags.push(a ? Math.hypot(a[0], a[1], a[2]) : 0); }
+    let sum = 0; for (const m of mags) sum += m;
+    let area = 0; for (const m of mags) area = Math.max(area, 2 * m - sum);
+    const L = 1.5 * targetOf(face.faceId);
+    if (area > 0 && L > 0) tris += area / ((Math.sqrt(3) / 4) * L * L);
+  }
+  return tris;
 }
 
 /** A sphere face's rim is a TILTED, near-GREAT circle — the shape the param grid meshes as a
@@ -5070,6 +5101,13 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   let voff = 0;
 
   for (const solid of brep.solids) {
+    const need = bodyTriLowerBound(solid.faces, sampled, (fid) => tolOf(fid).targetEdge);
+    if (need > BODY_TRI_CEILING) {
+      throw new Error(
+        `meshStep: one body needs at least ${Math.round(need / 1e6)}M triangles at these settings, more than `
+        + `one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. `
+        + `Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them.`);
+    }
     const verts: number[] = [];
     const faceIds: number[] = [];
     for (const face of solid.faces) {
