@@ -4657,6 +4657,41 @@ function tessellateSphereCap(
 }
 
 /**
+ * Last-resort cap for a single-loop sphere face whose rim is a circle in ANY plane — not a parallel
+ * of the sphere's own frame. A hemisphere bounded by a great circle through both parametrisation
+ * poles (ABC 00038301) projects to a pole-to-pole zigzag every (u,v) mesher declines, and
+ * reorientSphere refuses patches reaching 90° from their centre. The parametrisation is ours to
+ * choose: aim the pole along the rim plane's normal (Newell) so the rim becomes a parallel, and the
+ * cap mesher fans the enclosed side to that pole. Right-handed frame, so the cap mesher's
+ * orientation rule (eastward travel on a sameSense face encloses north) still holds.
+ */
+function tessellateSphereCapAnyAxis(
+  s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
+  verts: number[], faceIds: number[], chordTol: number, targetEdge: number, normalDev: number, sign: number,
+): boolean {
+  const pts: Vec3[] = [];
+  for (const oe of loop.edges) {
+    const base = sampled.get(oe.edgeId); if (!base) return false;
+    const poly = oe.orient ? base : base.slice().reverse();
+    for (let i = 0; i < poly.length - 1; i++) pts.push(poly[i]!);
+  }
+  if (pts.length < 4) return false;
+  let nx = 0, ny = 0, nz = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const a = pts[i]!, b = pts[(i + 1) % pts.length]!;
+    nx += (a[1] - b[1]) * (a[2] + b[2]); ny += (a[2] - b[2]) * (a[0] + b[0]); nz += (a[0] - b[0]) * (a[1] + b[1]);
+  }
+  const L = Math.hypot(nx, ny, nz);
+  if (L < 1e-12) return false;
+  const z: Vec3 = [nx / L, ny / L, nz / L];
+  const x = normalize(cross(z, Math.abs(z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+  const o = s.f.o;
+  const re = new Sphere({ o: [o[0], o[1], o[2]], x, y: cross(z, x), z }, s.r);
+  if (DBG) console.error(`[tess] fid=${fid} sphere cap retried with the pole on the rim-plane normal`);
+  return tessellateSphereCap(re, loop, sampled, fid, verts, faceIds, chordTol, targetEdge, normalDev, sign);
+}
+
+/**
  * Untrimmed (closed) B-spline patch forming a whole body — e.g. a surface of revolution with poles
  * and a periodic seam, which has no usable trimming loop. Tessellated as a structured (u,v) grid;
  * the seam columns coincide (weld) and pole rows collapse to fans (emitTri drops the degenerate half).
@@ -5071,7 +5106,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
             || (!single && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
             || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
             || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)));
+            || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)))
+            || (single && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)));
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
         && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))
