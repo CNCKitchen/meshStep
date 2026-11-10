@@ -4898,18 +4898,6 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           if (p[2] < lo2) lo2 = p[2]; if (p[2] > hi2) hi2 = p[2];
         }
       }
-      if (nPts > 512) continue;
-      // Two admission paths. SMALL faces (a few chord-lengths across, the original criterion):
-      // any crossing pattern qualifies — coarse chords can only swing across each other when the
-      // whole face is comparable to the tolerance budget. LARGER faces qualify only when EVERY
-      // crossing is LOCAL (near-adjacent segments of the loop): that is one tightly-curved edge
-      // run zigzagging under coarse sampling (skirt-corner fillets, z_endstop's rounded strip
-      // ends), which densification provably cures. Distant-pair crossings on a large face are
-      // the pinch/genuine-overlap class where densifying perturbs the neighbours' pinch handling
-      // for nothing (OpenVessel's 6mm counterbore rims at 0.002mm tolerance went watertight ->
-      // 12 open under a blind version; Ontos' tangent letter engravings never become simple).
-      const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * tolOf(face.faceId).chordTol;
-      let nonLocal = false;
       // A COLLAPSED loop — fewer than 3 weld-distinct sampled points — cannot form a polygon at
       // all: a sub-tolerance face's boundary can legally lose every interior sample to the
       // merge/DP floors (a 0.4 mm lens face on a 1.4 m assembly at 0.7 mm chordTol — ABC
@@ -4922,6 +4910,40 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         }
         return seen.size;
       };
+      // Per-loop rescue for collapsed loops, run only where the joint pass below gives up (too
+      // many points, a non-local crossing, or another loop still tangled at 64x). A collapsed
+      // window hole on an otherwise-tangled face stays a zero-area slit otherwise, and the face
+      // paves straight over it: ABC 00020365's D-shaped vent (a 0.8 mm-sagitta arc + its chord
+      // on a 6.8 m assembly, 3.4 mm chordTol) on a cylinder whose full-turn rims always read as
+      // tangled — the arc's neighbour faces then share a chord the cylinder also covers (nm).
+      // Densifying only the collapsed loop's own edges cannot disturb any other loop.
+      const rescueCollapsed = (): void => {
+        for (const lp of face.loops) {
+          if (lp.edges.length === 0 || distinct3(lp, sampled) >= 3) continue;
+          for (const f of [4, 16, 64]) {
+            const probe = new Map(sampled);
+            for (const oe of lp.edges) probe.set(oe.edgeId, resample(oe.edgeId, f));
+            if (distinct3(lp, probe) < 3) continue;
+            const p2 = loopParam(surface, lp, probe).p2;
+            if (p2.length >= 4 && countSelfIntersections(p2, 1) > 0) continue;
+            if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} collapsed loop rescued at tol/${f} (${lp.edges.length} edges)`);
+            for (const oe of lp.edges) level.set(oe.edgeId, Math.max(level.get(oe.edgeId) ?? 0, f));
+            break;
+          }
+        }
+      };
+      if (nPts > 512) { rescueCollapsed(); continue; }
+      // Two admission paths. SMALL faces (a few chord-lengths across, the original criterion):
+      // any crossing pattern qualifies — coarse chords can only swing across each other when the
+      // whole face is comparable to the tolerance budget. LARGER faces qualify only when EVERY
+      // crossing is LOCAL (near-adjacent segments of the loop): that is one tightly-curved edge
+      // run zigzagging under coarse sampling (skirt-corner fillets, z_endstop's rounded strip
+      // ends), which densification provably cures. Distant-pair crossings on a large face are
+      // the pinch/genuine-overlap class where densifying perturbs the neighbours' pinch handling
+      // for nothing (OpenVessel's 6mm counterbore rims at 0.002mm tolerance went watertight ->
+      // 12 open under a blind version; Ontos' tangent letter engravings never become simple).
+      const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * tolOf(face.faceId).chordTol;
+      let nonLocal = false;
       const tangledLoops = face.loops.filter((lp) => {
         if (lp.edges.length > 0 && distinct3(lp, sampled) < 3) return true;
         const p2 = loopParam(surface, lp, sampled).p2;
@@ -4936,7 +4958,8 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         }
         return true;
       });
-      if (tangledLoops.length === 0 || nonLocal) continue;
+      if (tangledLoops.length === 0) continue;
+      if (nonLocal) { rescueCollapsed(); continue; }
       for (const f of [4, 16, 64]) {
         const probe = new Map(sampled);
         const ids = new Set<number>();
@@ -4955,6 +4978,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         if (f === 64) {
           warn("boundary-self-intersects", face.faceId, "trim loops still self-intersect at 64× sampling density — genuine overlap in the CAD file, meshed as-is");
           if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} still self-intersecting at tol/64 — left as-is (genuine overlap)`);
+          rescueCollapsed();
         }
       }
     }
