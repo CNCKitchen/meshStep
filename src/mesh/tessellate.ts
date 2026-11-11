@@ -339,6 +339,115 @@ function assembleWire(surface: Surface, pcs: EdgePC[], forced?: Int8Array): { p3
   };
 }
 
+/**
+ * SEAM PATH SEARCH for a periodic face (unroll mesher). Finds a seam u(s), a function of the
+ * stack coordinate, that runs from below every loop to above every loop crossing the face
+ * boundary exactly twice: once into the face through the bottom rim, once out through the top.
+ * It therefore misses every hole and crosses each rim once. Face membership is rasterised on K
+ * around-columns × R stack-rows by vertical-ray parity (every loop crossing toggles membership,
+ * starting outside below everything: exact for rims and holes alike, whatever their shape), and
+ * a DP over rows picks per-row columns, phase out → in → out, steps of at most `maxStep`
+ * columns, minimising total sideways travel plus a penalty for hugging a boundary. Returns the
+ * path as continuous (unwrapped) around-values at simplified stack stations, or null.
+ */
+function findSeamPath(loops: P2[][], c: 0 | 1, stackC: 0 | 1, period: number, maxSlope: number): { s: number[]; u: number[] } | null {
+  const K = 512, R = 256;
+  const norm = (x: number): number => ((x % period) + period) % period;
+  const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
+  let sMin = Infinity, sMax = -Infinity;
+  for (const l of loops) for (const q of l) { if (q[stackC] < sMin) sMin = q[stackC]; if (q[stackC] > sMax) sMax = q[stackC]; }
+  if (!(sMax > sMin)) return null;
+  const pad = 1e-3 * (sMax - sMin);
+  const s0 = sMin - pad, ds = (sMax - sMin + 2 * pad) / (R - 1);
+  const cell = period / K;
+  // Column crossings: for each column, the stack values where some loop segment crosses it.
+  const colX: number[][] = Array.from({ length: K }, () => []);
+  for (const l of loops) {
+    for (let i = 0; i < l.length; i++) {
+      const A = l[i]!, B = l[(i + 1) % l.length]!;
+      const a0 = norm(A[c]), du = wrapD(B[c] - A[c]);
+      if (Math.abs(du) < 1e-15) continue;
+      const lo = Math.min(a0, a0 + du), hi = Math.max(a0, a0 + du);
+      // half-open (lo, hi]: a vertex exactly on a column counts once
+      for (let k = Math.floor(lo / cell - 0.5) + 1; (k + 0.5) * cell <= hi; k++) {
+        const uk = (k + 0.5) * cell;
+        if (uk <= lo) continue;
+        const t = (uk - a0) / du;
+        colX[((k % K) + K) % K]!.push(A[stackC] + (B[stackC] - A[stackC]) * t);
+      }
+    }
+  }
+  const M = new Uint8Array(K * R); // M[k*R + j] = 1 when (column k, row j) lies in the face
+  for (let k = 0; k < K; k++) {
+    const xs = colX[k]!.sort((x, y) => x - y);
+    let ix = 0, par = 0;
+    for (let j = 0; j < R; j++) {
+      const sj = s0 + j * ds;
+      while (ix < xs.length && xs[ix]! < sj) { par ^= 1; ix++; }
+      M[k * R + j] = par;
+    }
+  }
+  // Clearance (columns to the nearest non-member cell in the row), capped.
+  const CL = 32; // ~1/16 period: a path centred in a land strip clears both flanks between rows
+  const clear = new Uint8Array(K * R); // capped at CL
+  for (let j = 0; j < R; j++) {
+    for (let k = 0; k < K; k++) {
+      if (!M[k * R + j]) continue;
+      let d = 1;
+      while (d < CL && M[(((k + d) % K) * R) + j] && M[(((k - d) % K + K) % K) * R + j]) d++;
+      clear[k * R + j] = d;
+    }
+  }
+  // Steep enough for a helix twice the drivers' pitch. Kept small on purpose: rows are sampled,
+  // and a wide diagonal step between two rows can clip a slot corner that neither row sees.
+  const maxStep = Math.max(4, Math.min(K >> 2, Math.ceil((2 * Math.abs(maxSlope) * ds) / cell)));
+  // DP over (row, column, phase). phase 0 = below (out), 1 = in the face, 2 = above (out).
+  const INF = 1e30;
+  let cost = new Float64Array(K * 3).fill(INF);
+  const from = new Int32Array(R * K * 3).fill(-1);
+  for (let k = 0; k < K; k++) if (!M[k * R]) cost[k * 3] = 0;
+  for (let j = 1; j < R; j++) {
+    const next = new Float64Array(K * 3).fill(INF);
+    for (let k = 0; k < K; k++) {
+      const m = M[k * R + j]!;
+      const pen = m ? (CL - clear[k * R + j]!) * 4 : 0;
+      for (let ph = 0; ph < 3; ph++) {
+        if ((ph === 1) !== (m === 1)) continue;
+        let best = INF, arg = -1;
+        for (let d = -maxStep; d <= maxStep; d++) {
+          const kp = ((k + d) % K + K) % K;
+          const step = Math.abs(d);
+          for (let pp = ph === 0 ? 0 : ph - 1; pp <= ph; pp++) {
+            const v = cost[kp * 3 + pp]! + step;
+            if (v < best) { best = v; arg = kp * 3 + pp; }
+          }
+        }
+        if (arg >= 0) { next[k * 3 + ph] = best + pen; from[(j * K + k) * 3 + ph] = arg; }
+      }
+    }
+    cost = next;
+  }
+  let bk = -1, bc = INF;
+  for (let k = 0; k < K; k++) if (cost[k * 3 + 2]! < bc) { bc = cost[k * 3 + 2]!; bk = k; }
+  if (bk < 0) return null;
+  const ks = new Int32Array(R);
+  let st = bk * 3 + 2;
+  for (let j = R - 1; j >= 0; j--) {
+    ks[j] = Math.floor(st / 3);
+    if (j > 0) st = from[(j * K + ks[j]!) * 3 + (st % 3)]!;
+    if (st < 0) return null;
+  }
+  // Unwrap and keep only the stations where the path turns.
+  const us: number[] = [(ks[0]! + 0.5) * cell];
+  for (let j = 1; j < R; j++) us.push(us[j - 1]! + wrapD((ks[j]! - ks[j - 1]!) * cell));
+  const outS: number[] = [s0], outU: number[] = [us[0]!];
+  for (let j = 1; j < R - 1; j++) {
+    if (Math.abs((us[j + 1]! - us[j]!) - (us[j]! - us[j - 1]!)) > 1e-12) { outS.push(s0 + j * ds); outU.push(us[j]!); }
+  }
+  outS.push(s0 + (R - 1) * ds); outU.push(us[R - 1]!);
+  return { s: outS, u: outU };
+}
+
 /** Count strict self-intersections of a closed 2D polygon (segments sharing a vertex don't count).
  * Sorted-bbox sweep in x keeps it near-linear at boundary density; `cap` early-outs a hopeless
  * candidate during the phase-C search. `pairs` (optional) collects the crossing segment-index
@@ -2025,17 +2134,19 @@ function tessellatePeriodicUnroll(
       }
       return false;
     };
-    // cross/buildRimCut take an optional SHEAR slope: with slope s they operate on the sheared
-    // around-coordinate a = around − s·stack (a slanted meridian in (u,v)); slope 0 is the plain
-    // vertical meridian, bit-identical to the original code. buildRimCut's OUTPUT stays in the
-    // original (u,v): the accumulator unwraps in a-space and each emitted point adds s·stack back.
+    // cross/buildRimCut take an optional SHEAR sh(stack): they operate on the sheared
+    // around-coordinate a = around − sh(stack) (a slanted or bent meridian in (u,v)); the default
+    // zero shear is the plain vertical meridian, bit-identical to the original code. buildRimCut's
+    // OUTPUT stays in the original (u,v): the accumulator unwraps in a-space and each emitted
+    // point adds sh(stack) back.
     {
-      const cross = (p2: P2[], uk: number, slope = 0): number => {
+      const noShear = (_s: number): number => 0;
+      const cross = (p2: P2[], uk: number, sh = noShear): number => {
         let cnt = 0;
         for (let i = 0; i < p2.length; i++) {
-          const a = p2[i]![c] - slope * p2[i]![stackC];
+          const a = p2[i]![c] - sh(p2[i]![stackC]);
           const j = (i + 1) % p2.length;
-          let d = p2[j]![c] - slope * p2[j]![stackC] - a;
+          let d = p2[j]![c] - sh(p2[j]![stackC]) - a;
           while (d > period / 2) d -= period; while (d < -period / 2) d += period;
           if (Math.abs(d) < 1e-12) continue;
           const r = norm(uk - a);
@@ -2043,12 +2154,12 @@ function tessellatePeriodicUnroll(
         }
         return cnt;
       };
-      const buildRimCut = (rim: { p3: Vec3[]; p2: P2[]; wind: number }, uStar: number, slope = 0): { p3: Vec3[]; p2: P2[] } | null => {
+      const buildRimCut = (rim: { p3: Vec3[]; p2: P2[]; wind: number }, uStar: number, sh = noShear): { p3: Vec3[]; p2: P2[] } | null => {
         let p3 = rim.p3, p2 = rim.p2;
         if (rim.wind < 0) { p3 = p3.slice().reverse(); p2 = p2.slice().reverse(); }
         const n = p2.length;
         const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
-        const aOf = (q: P2): number => q[c] - slope * q[stackC];
+        const aOf = (q: P2): number => q[c] - sh(q[stackC]);
         let ci = -1, ct = 0, cs = 0;
         for (let i = 0; i < n; i++) {
           const a = aOf(p2[i]!), j = (i + 1) % n;
@@ -2072,15 +2183,15 @@ function tessellatePeriodicUnroll(
           p3[ci]![2] + (p3[j]![2] - p3[ci]![2]) * ct,
         ];
         const outP3: Vec3[] = [cut3];
-        const auv: [number, number][] = [[uStar + slope * cs, cs]];
+        const auv: [number, number][] = [[uStar + sh(cs), cs]];
         let acc = uStar + (1 - ct) * wrapD(aOf(p2[j]!) - aOf(p2[ci]!));
-        outP3.push(p3[j]!); auv.push([acc + slope * p2[j]![stackC], p2[j]![stackC]]);
+        outP3.push(p3[j]!); auv.push([acc + sh(p2[j]![stackC]), p2[j]![stackC]]);
         for (let k = 1; k < n; k++) {
           const idx = (j + k) % n, prv = (j + k - 1) % n;
           acc += wrapD(aOf(p2[idx]!) - aOf(p2[prv]!));
-          outP3.push(p3[idx]!); auv.push([acc + slope * p2[idx]![stackC], p2[idx]![stackC]]);
+          outP3.push(p3[idx]!); auv.push([acc + sh(p2[idx]![stackC]), p2[idx]![stackC]]);
         }
-        outP3.push(cut3); auv.push([uStar + period + slope * cs, cs]);
+        outP3.push(cut3); auv.push([uStar + period + sh(cs), cs]);
         return { p3: outP3, p2: auv.map(([a, s]) => toP2(a, s)) };
       };
       const K = 512;
@@ -2161,20 +2272,26 @@ function tessellatePeriodicUnroll(
       // The seam sides are sampled at IDENTICAL stack stations one period apart — identical 3D
       // points, so the weld seals the cut (the tessellatePeriodicRegion seam-pair trick). Output
       // stays in original (u,v): a parallelogram domain, which the grid CDT handles unchanged.
-      if (holes.length && (conflicted() || foldedHole() || holeLoops.some((h) => countSelfIntersections(h.p2) > 0))) {
-        const wrapD = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
-        const unw = holes.map((h) => {
-          const a: number[] = [norm(h.p2[0]![c])];
-          for (let i = 1; i < h.p2.length; i++) a.push(a[i - 1]! + wrapD(h.p2[i]![c] - h.p2[i - 1]![c]));
-          return a;
-        });
+      // A RIM can carry the helix too: a thread groove that runs out through the cylinder's end
+      // makes the land face's end rim climb the whole thread, run back down the other flank, and
+      // so on (ABC 00059010: a 50-turn double-start groove — the rim's unwrapped walk spans 50
+      // periods and crosses every vertical meridian ~8 times). The same sheared cut applies: in
+      // a = around − slope·stack the flanks stand vertical, and a meridian inside a land strip
+      // crosses that rim once (its end arc) and no flank. Such a rim joins the slope drivers.
+      const wrapD0 = (d: number): number => { while (d > period / 2) d -= period; while (d < -period / 2) d += period; return d; };
+      const unwrapA = (p2: P2[]): number[] => {
+        const a: number[] = [norm(p2[0]![c])];
+        for (let i = 1; i < p2.length; i++) a.push(a[i - 1]! + wrapD0(p2[i]![c] - p2[i - 1]![c]));
+        return a;
+      };
+      const spanOf = (a: number[]): number => { let mn = Infinity, mx = -Infinity; for (const x of a) { if (x < mn) mn = x; if (x > mx) mx = x; } return mx - mn; };
+      const helicalRims = rims.filter((r) => spanOf(unwrapA(r.p2)) > 2.5 * period);
+      if ((holes.length || helicalRims.length) && (conflicted() || foldedHole() || holeLoops.some((h) => countSelfIntersections(h.p2) > 0))) {
+        const unw = holes.map((h) => unwrapA(h.p2));
         const slopes: number[] = [];
-        for (let hi = 0; hi < holes.length; hi++) {
-          const a = unw[hi]!;
-          let mn = Infinity, mx = -Infinity;
-          for (const x of a) { if (x < mn) mn = x; if (x > mx) mx = x; }
-          if (mx - mn < 0.95 * period) continue; // fits a vertical cut — not a slope driver
-          const hp = holes[hi]!.p2;
+        const drivers = [...holes.map((h, hi) => ({ hp: h.p2, a: unw[hi]! })), ...helicalRims.map((r) => ({ hp: r.p2, a: unwrapA(r.p2) }))];
+        for (const { hp, a } of drivers) {
+          if (spanOf(a) < 0.95 * period) continue; // fits a vertical cut — not a slope driver
           let sm = 0, am = 0;
           for (let i = 0; i < a.length; i++) { sm += hp[i]![stackC]; am += a[i]!; }
           sm /= a.length; am /= a.length;
@@ -2186,15 +2303,45 @@ function tessellatePeriodicUnroll(
         const cands: number[] = [0];
         if (slopes.length) cands.push(slopes[slopes.length >> 1]!);
         for (const s of slopes) if (!cands.some((x) => Math.abs(x - s) <= 1e-9 * Math.max(1, Math.abs(s)))) cands.push(s);
-        if (DBG) console.error(`[unroll] fid=${fid} seam-path rescue: ${slopes.length} winding hole(s), slope candidates=[${cands.map((s) => s.toExponential(2)).join(",")}]`);
-        for (const slope of cands) {
-          const aOf = (q: P2): number => q[c] - slope * q[stackC];
+        if (DBG) console.error(`[unroll] fid=${fid} seam-path rescue: ${slopes.length} slope driver(s), slope candidates=[${cands.map((s) => s.toExponential(2)).join(",")}]`);
+        // BENT SEAM. A straight slanted meridian also slants through the face's OTHER features:
+        // axial slots and end notches beyond the helical zone become multi-turn strips under the
+        // helix shear (ABC 00044913: four helical slots mid-barrel, straight slots near both
+        // ends; 00044932: the same plus slotted rims), so no straight slope is clean. After the
+        // straight candidates, search the unrolled face for a seam PATH u(s) — vertical where
+        // the face is straight, helical through the helical zone, sidestepping wherever it must
+        // (findSeamPath) — and shear by it. The cut/sample/lift machinery below only ever uses
+        // around − sh(stack), so a path shear goes through it unchanged; its turning stations
+        // are always seam samples so both seam sides stay exact translates.
+        const shears: { slope: number; sh: (s: number) => number; kinks: number[] }[] =
+          cands.map((sl) => ({ slope: sl, sh: (s: number): number => sl * s, kinks: [] }));
+        const maxSlope = slopes.reduce((m, x) => Math.max(m, Math.abs(x)), 0);
+        const path = findSeamPath([...rims.map((r) => r.p2), ...holes.map((h) => h.p2)], c, stackC, period, maxSlope);
+        if (path) {
+          const { s: ps, u: pu } = path;
+          shears.push({
+            slope: NaN,
+            sh: (s: number): number => {
+              if (s <= ps[0]!) return pu[0]!;
+              const n = ps.length;
+              if (s >= ps[n - 1]!) return pu[n - 1]!;
+              let lo = 0, hi = n - 1;
+              while (hi - lo > 1) { const m = (lo + hi) >> 1; if (ps[m]! <= s) lo = m; else hi = m; }
+              const t = (s - ps[lo]!) / (ps[hi]! - ps[lo]!);
+              return pu[lo]! + (pu[hi]! - pu[lo]!) * t;
+            },
+            kinks: ps.slice(1, -1),
+          });
+        }
+        for (const { slope, sh, kinks } of shears) {
+          const tag = Number.isNaN(slope) ? `path(${kinks.length} turns)` : `slope=${slope.toExponential(2)}`;
+          const aOf = (q: P2): number => q[c] - sh(q[stackC]);
           let aStar = NaN, aMargin = -1;
           for (let k = 0; k < K; k++) {
             const ak = ((k + 0.5) * period) / K;
-            if (cross(rims[0]!.p2, ak, slope) !== 1 || cross(rims[1]!.p2, ak, slope) !== 1) continue;
+            if (cross(rims[0]!.p2, ak, sh) !== 1 || cross(rims[1]!.p2, ak, sh) !== 1) continue;
             let ok = true;
-            for (const h of holes) if (cross(h.p2, ak, slope) > 0) { ok = false; break; }
+            for (const h of holes) if (cross(h.p2, ak, sh) > 0) { ok = false; break; }
             if (!ok) continue;
             let margin = Infinity;
             for (const arr of [rims[0]!.p2, rims[1]!.p2, ...holes.map((h) => h.p2)]) {
@@ -2203,33 +2350,36 @@ function tessellatePeriodicUnroll(
             if (margin > aMargin) { aMargin = margin; aStar = ak; }
           }
           if (!Number.isFinite(aStar)) {
-            if (DBG) console.error(`[unroll] fid=${fid} seam-path: no clean meridian at slope=${slope.toExponential(2)}`);
+            if (DBG) console.error(`[unroll] fid=${fid} seam-path: no clean meridian at ${tag}`);
             continue;
           }
-          const b2 = buildRimCut(rims[0]!, aStar, slope);
-          const t2 = b2 ? buildRimCut(rims[1]!, aStar, slope) : null;
+          const b2 = buildRimCut(rims[0]!, aStar, sh);
+          const t2 = b2 ? buildRimCut(rims[1]!, aStar, sh) : null;
           if (!b2 || !t2) {
-            if (DBG) console.error(`[unroll] fid=${fid} seam-path: rim cut failed at a*=${aStar.toFixed(4)} slope=${slope.toExponential(2)}`);
+            if (DBG) console.error(`[unroll] fid=${fid} seam-path: rim cut failed at a*=${aStar.toFixed(4)} ${tag}`);
             continue;
           }
           // Seam sides: sampled along a = aStar between the two cut points at the face target
           // (a slanted cut is a helix in 3D — a single chord would gouge the surface). Both
           // sides reference the SAME evaluated 3D objects so the weld unifies them exactly.
           const csB = b2.p2[0]![stackC], csT = t2.p2[0]![stackC];
-          const qMid = toP2(aStar + slope * ((csB + csT) / 2), (csB + csT) / 2);
+          const qMid = toP2(aStar + sh((csB + csT) / 2), (csB + csT) / 2);
           const fT = faceTarget(surface, targetEdge, chordTol, normalDev, qMid[0], qMid[1]);
           let len = 0, prev = b2.p3[0]!;
           for (let i = 1; i <= 16; i++) {
             const s = csB + ((csT - csB) * i) / 16;
-            const q = toP2(aStar + slope * s, s);
+            const q = toP2(aStar + sh(s), s);
             const p = surface.evaluate(q[0], q[1]);
             len += Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]); prev = p;
           }
           const nSeam = Math.min(4096, Math.max(1, Math.ceil(len / Math.max(fT, 1e-9))));
           const seam3: Vec3[] = [], seamS: number[] = [];
-          for (let i = 1; i < nSeam; i++) {
-            const s = csB + ((csT - csB) * i) / nSeam;
-            const q = toP2(aStar + slope * s, s);
+          const stations: number[] = [];
+          for (let i = 1; i < nSeam; i++) stations.push(csB + ((csT - csB) * i) / nSeam);
+          for (const z of kinks) if ((z - csB) * (z - csT) < 0 && !stations.some((x) => Math.abs(x - z) < 1e-9 * (1 + Math.abs(z)))) stations.push(z);
+          if (kinks.length) stations.sort((x, y) => (csT >= csB ? x - y : y - x));
+          for (const s of stations) {
+            const q = toP2(aStar + sh(s), s);
             seam3.push(surface.evaluate(q[0], q[1])); seamS.push(s);
           }
           const prevOuter = outer, prevHoles = holeLoops;
@@ -2237,24 +2387,24 @@ function tessellatePeriodicUnroll(
             p3: [...b2.p3, ...seam3, ...t2.p3.slice().reverse(), ...seam3.slice().reverse()],
             p2: [
               ...b2.p2,
-              ...seamS.map((s) => toP2(aStar + period + slope * s, s)),
+              ...seamS.map((s) => toP2(aStar + period + sh(s), s)),
               ...t2.p2.slice().reverse(),
-              ...seamS.slice().reverse().map((s) => toP2(aStar + slope * s, s)),
+              ...seamS.slice().reverse().map((s) => toP2(aStar + sh(s), s)),
             ],
           };
           holeLoops = holes.map((h, hi) => {
             const a = unw[hi]!;
             let bMin = Infinity;
-            for (let i = 0; i < a.length; i++) { const b = a[i]! - slope * h.p2[i]![stackC]; if (b < bMin) bMin = b; }
+            for (let i = 0; i < a.length; i++) { const b = a[i]! - sh(h.p2[i]![stackC]); if (b < bMin) bMin = b; }
             const kk = Math.ceil((aStar - bMin) / period);
             return { p3: h.p3, p2: h.p2.map((q, i) => toP2(a[i]! + kk * period, q[stackC])) };
           });
           if (conflicted() || foldedHole()) {
-            if (DBG) console.error(`[unroll] fid=${fid} seam-path: rebuild at slope=${slope.toExponential(2)} still conflicted — reverted`);
+            if (DBG) console.error(`[unroll] fid=${fid} seam-path: rebuild at ${tag} still conflicted — reverted`);
             outer = prevOuter; holeLoops = prevHoles;
             continue;
           }
-          if (DBG) console.error(`[unroll] fid=${fid} seam-path rebuild slope=${slope.toExponential(2)} a*=${aStar.toFixed(4)} seamPts=${nSeam - 1} (margin ${aMargin.toExponential(1)})`);
+          if (DBG) console.error(`[unroll] fid=${fid} seam-path rebuild ${tag} a*=${aStar.toFixed(4)} seamPts=${seamS.length} (margin ${aMargin.toExponential(1)})`);
           break;
         }
       }
