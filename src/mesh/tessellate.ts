@@ -1850,7 +1850,51 @@ function tessellatePeriodicUnroll(
     const holes = proj.filter((p): p is NonNullable<typeof p> => Math.abs(p!.wind) < 0.9 * period);
     if (rims.length !== 2) return false;
     const meanStack = (p: { p2: P2[] }): number => { let s = 0; for (const q of p.p2) s += q[stackC]; return s / p.p2.length; };
-    rims.sort((a, b) => meanStack(a) - meanStack(b));
+    // PERIODIC STACK (torus, closed revolution profile): the stack coordinate wraps too, so (a) a
+    // rim lying ON the stack seam (a torus's inner equator, v = ±π) projects with its stack value
+    // flipping between the two branches sample to sample, and (b) two rims bound TWO complementary
+    // bands — sorting by raw mean stack picks one arbitrarily. Both produced an unrealisable outer
+    // polygon whose dropped constraints leaked (ABC 00058680 & co: torus fillet meeting a cylinder
+    // band at the inner equator). Unwrap every loop's stack walk, then let the face orientation
+    // pick the band: the rim whose material side is +S is the bottom one (the region mesher's
+    // single-rim convention), the other is lifted to within one stack period above it, and holes
+    // are lifted into the band. Rims that do not disagree on their sides keep the legacy order.
+    const stackPer = c === 0 ? surface.periodicV : surface.periodicU;
+    if (stackPer) {
+      const sP = (c === 0 ? surface.vPeriod : surface.uPeriod) || TWO_PI;
+      for (const l of proj) {
+        const p2 = l!.p2;
+        for (let i = 1; i < p2.length; i++) {
+          const d = p2[i]![stackC] - p2[i - 1]![stackC];
+          if (d > sP / 2 || d < -sP / 2) {
+            const k = Math.round(d / sP);
+            const q: P2 = [p2[i]![0], p2[i]![1]]; q[stackC] -= k * sP; p2[i] = q;
+          }
+        }
+      }
+      const plusS = (r: { wind: number }): boolean => (c === 0 ? r.wind > 0 : r.wind < 0) === (sign > 0);
+      const s0 = plusS(rims[0]!), s1 = plusS(rims[1]!);
+      if (s0 !== s1) {
+        const [bot, top] = s0 ? [rims[0]!, rims[1]!] : [rims[1]!, rims[0]!];
+        const shift = (l: { p2: P2[] }, k: number): void => {
+          if (k === 0) return;
+          for (let i = 0; i < l.p2.length; i++) { const q: P2 = [l.p2[i]![0], l.p2[i]![1]]; q[stackC] += k * sP; l.p2[i] = q; }
+        };
+        const mb = meanStack(bot);
+        shift(top, Math.ceil((mb - meanStack(top)) / sP + 1e-9));
+        const mt = meanStack(top);
+        for (const h of holes) {
+          const mh = meanStack(h);
+          const k = Math.ceil((mb - mh) / sP);
+          if (mh + k * sP < mt) shift(h, k);
+        }
+        rims[0] = bot; rims[1] = top;
+      } else {
+        rims.sort((a, b) => meanStack(a) - meanStack(b));
+      }
+    } else {
+      rims.sort((a, b) => meanStack(a) - meanStack(b));
+    }
 
     // Seam in the widest window-free gap of the around-coordinate so no hole straddles the cut.
     const norm = (x: number): number => ((x % period) + period) % period;
