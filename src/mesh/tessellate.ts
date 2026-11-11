@@ -2897,13 +2897,12 @@ function tessellateRevolutionBand(
       // former 5% slack let four cone folds through (Ontos #92585/#94992 at 4.7%/1.3%). Measured
       // over the local corpus: 1318 rims backtrack exactly 0, one by <1e-9 (noise), the rest by
       // ≥ 2.7e-3 of a period — 1e-6 separates them with three decades to spare.
-      // Exception: rims winding the TUBE of a torus (c = 1, a pipe elbow's end sections) keep the
-      // 5% slack. The unroll mis-meshes elbows (ABC 00022673 #78: a 0.27° backtrack sent there
-      // came out 165× off the surface), while the band's curved-column rework, which elbows take,
-      // lofts on uniform columns and does not fold under a small backtrack. Rims winding the AXIS
-      // (c = 0: the collet nut, ABC 00025779 #937 at 0.48%) do fold in the plain loft and unroll
-      // cleanly, so they get no slack.
-      if (absWind > Math.abs(wind) + (stackPeriodic && c === 1 ? 0.05 : 1e-6) * period) return false;
+      // Rims winding the TUBE of a torus (c = 1) get no slack either. A 5% exception there, meant
+      // for an elbow the unroll mis-meshes (ABC 00022673 #78, 165x off the surface), made 28
+      // ABC models worse: torus bands folded or flipped at backtracks of 5e-6..2e-2 of a period, in
+      // the plain loft and in the curved-column rework alike (00041690: 31 -> 48858 crossing pairs;
+      // 18 clean models -> 108 flips each). The elbow belongs to the unroll.
+      if (absWind > Math.abs(wind) + 1e-6 * period) return false;
       const h = stackPeriodic ? (Math.atan2(hsin, hcos) * stackPeriod) / TWO_PI : hsum / pts.length;
       rims.push({ pts, h, wind });
     }
@@ -3208,8 +3207,13 @@ function tessellateRevolutionBand(
       // the step, and the closing stitch folds (71 crossing pairs, watertight, on-surface). Detect
       // exactly that — a top sample below the last ring at its own angular fraction — and, for a
       // non-periodic stack, roll back everything this face emitted and return false so the unroll's
-      // constrained triangulation meshes the true boundary. Periodic stacks (torus) keep the loft:
-      // the unroll mis-meshes elbows (see the backtrack slack above). Bands whose last ring clears the top rim are bit-for-bit unchanged.
+      // constrained triangulation meshes the true boundary. Bands whose last ring clears the top
+      // rim are bit-for-bit unchanged, and so are:
+      // - periodic stacks (torus), which keep the loft;
+      // - rims that CROSS EACH OTHER (a top sample below the bottom rim itself, by up to 54 band
+      //   heights: ABC 00036584 cone #4871, 00056086 #677). That is no loft artefact, and the
+      //   unroll's CDT cannot realise crossing constraints either: declined, those faces came back
+      //   with 3-6 missing boundary edges each, where the loft had stayed watertight.
       const fracB = fracOf(progB, bottom), fracT = fracOf(progT, top);
       const interpAt = (fr: number[], hh: number[], s: number): number => {
         let lo = 0, hi = fr.length - 1;
@@ -3225,9 +3229,12 @@ function tessellateRevolutionBand(
       const hLast: number[] = [];
       for (let j = 0; j < bottom.length; j++) { ti = 0; hLast.push(hB[j]! + (hTopAt(progB[j]!) - hB[j]!) * fLast); }
       const slack = 1e-9 * Math.max(1, Math.abs(h1 - h0));
-      let crosses = false;
-      for (let i = 0; i < top.length && !crosses; i++) if (hT[i]! < interpAt(fracB, hLast, fracT[i]!) - slack) crosses = true;
-      if (crosses && !stackPeriodic) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
+      let crossesLast = false, crossesBottom = false;
+      for (let i = 0; i < top.length && !crossesBottom; i++) {
+        if (hT[i]! < interpAt(fracB, hLast, fracT[i]!) - slack) crossesLast = true;
+        if (hT[i]! < interpAt(fracB, hB, fracT[i]!) - slack) crossesBottom = true;
+      }
+      if (crossesLast && !crossesBottom && !stackPeriodic) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
         ti = 0;

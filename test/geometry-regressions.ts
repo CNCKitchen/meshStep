@@ -236,5 +236,87 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   check("rim step narrower than a loft column: area matches", Math.abs(area - exact) < 0.01 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
 }
 
+// ---- torus TUBE rim (an elbow's end section, rims winding v) that steps 1° back in v. A 5% backtrack
+// slack for such rims made 28 ABC models worse (00041690: 31 -> 48858 crossing pairs). Here the loft
+// with that slack folded (55 pairs) AND meshed the complementary 320° of the torus (area 8x).
+// Exact area: |∮ (U(v) - uCircle) dF(v)| along the stepped rim, F(v) = r(R v + r sin v).
+{
+  const R = 20, r = 5, D = Math.PI / 180;
+  const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
+  const corners: [number, number][] = [[0, 40], [-150, 40], [-149, 45], [-160, 46], [-170, 40], [-360, 40]]; // (v°, u°)
+  const vu: [number, number][] = [];
+  for (let i = 0; i + 1 < corners.length; i++) {
+    const [va, ua] = corners[i]!, [vb, ub] = corners[i + 1]!;
+    const n = Math.max(2, Math.ceil(Math.hypot(vb - va, ub - ua) / 2));
+    for (let j = 0; j < n; j++) vu.push([(va + ((vb - va) * j) / n) * D, (ua + ((ub - ua) * j) / n) * D]);
+  }
+  const nC = vu.length + 1;
+  const lines = [...vu.map(([v, u], i) => pt(1000 + i, onT(u, v))),
+    `#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(${[...vu.map((_, i) => `#${1000 + i}`), "#1000"].join(",")}),.POLYLINE_FORM.,.T.,.F.,(2,${Array(nC - 2).fill(1).join(",")},2),(${Array.from({ length: nC }, (_, i) => `${i}.`).join(",")}),.UNSPECIFIED.);`,
+    `#11=VERTEX_POINT('',#1000);`, `#12=EDGE_CURVE('',#11,#11,#10,.T.);`, `#13=ORIENTED_EDGE('',*,*,#12,.T.);`, `#14=EDGE_LOOP('',(#13));`,
+    pt(20, [R, 0, 0]), `#21=DIRECTION('',(0.,1.,0.));`, `#22=DIRECTION('',(1.,0.,0.));`, `#23=AXIS2_PLACEMENT_3D('',#20,#21,#22);`,
+    `#24=CIRCLE('',#23,${r});`, pt(25, onT(0, 0)), `#26=VERTEX_POINT('',#25);`,
+    `#27=EDGE_CURVE('',#26,#26,#24,.T.);`, `#28=ORIENTED_EDGE('',*,*,#27,.T.);`, `#29=EDGE_LOOP('',(#28));`,
+    pt(30, [0, 0, 0]), `#31=DIRECTION('',(0.,0.,1.));`, `#32=AXIS2_PLACEMENT_3D('',#30,#31,#22);`, `#34=TOROIDAL_SURFACE('',#32,${R},${r});`,
+    `#35=FACE_BOUND('',#14,.T.);`, `#36=FACE_BOUND('',#29,.T.);`, `#37=ADVANCED_FACE('',(#35,#36),#34,.T.);`,
+    `#38=OPEN_SHELL('',(#37));`, `#39=SHELL_BASED_SURFACE_MODEL('',(#38));`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src);
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const a = I[t * 3]! * 3, b = I[t * 3 + 1]! * 3, c = I[t * 3 + 2]! * 3;
+    const e1 = [P[b]! - P[a]!, P[b + 1]! - P[a + 1]!, P[b + 2]! - P[a + 2]!], e2 = [P[c]! - P[a]!, P[c + 1]! - P[a + 1]!, P[c + 2]! - P[a + 2]!];
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  const F = (v: number): number => r * (R * v + r * Math.sin(v));
+  const walk = [...vu, [-2 * Math.PI, vu[0]![1]] as [number, number]];
+  let A = 0;
+  for (let i = 0; i + 1 < walk.length; i++) A += ((walk[i]![1] + walk[i + 1]![1]) / 2) * (F(walk[i + 1]![0]) - F(walk[i]![0]));
+  const exact = Math.abs(A);
+  const si = selfIntersections(P, I, res.faceOfTri);
+  check("torus tube rim stepping back 1°: no fold", si.sameFace === 0, `${si.sameFace} crossing pairs`);
+  check("torus tube rim stepping back 1°: area matches the elbow segment", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(2)} vs exact ${exact.toFixed(2)} mm²`);
+}
+
+// ---- band whose rims CROSS each other (ABC 00036584 cone #4871: a B-spline rim that dips to the apex
+// and spikes 2x above the opposite circle). That is no loft-column artefact; declining it to the
+// unroll left 2-6 boundary constraints missing in the CDT (open edges against the neighbours) where
+// the loft stays on its rims. The face's mesh boundary must be its two rims: length within 0.5%.
+{
+  const r = 5, D = Math.PI / 180, zC = 3.37;
+  const corners: [number, number][] = [[0, 3.03], [-36, 0.76], [-87, 0], [-138, 0.76], [-174, 3.03], [-245, 3.03], [-268, 7.12], [-291, 3.03], [-360, 3.03]];
+  const uz: [number, number][] = [];
+  for (let i = 0; i + 1 < corners.length; i++) {
+    const [ua, za] = corners[i]!, [ub, zb] = corners[i + 1]!;
+    const n = Math.max(2, Math.ceil(Math.hypot((ub - ua) * D * r, zb - za) / 0.5));
+    for (let j = 0; j < n; j++) uz.push([(ua + ((ub - ua) * j) / n) * D, za + ((zb - za) * j) / n]);
+  }
+  const nC = uz.length + 1;
+  const lines = [...uz.map(([u, z], i) => pt(1000 + i, [r * Math.cos(u), r * Math.sin(u), z])),
+    `#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(${[...uz.map((_, i) => `#${1000 + i}`), "#1000"].join(",")}),.POLYLINE_FORM.,.T.,.F.,(2,${Array(nC - 2).fill(1).join(",")},2),(${Array.from({ length: nC }, (_, i) => `${i}.`).join(",")}),.UNSPECIFIED.);`,
+    `#11=VERTEX_POINT('',#1000);`, `#12=EDGE_CURVE('',#11,#11,#10,.T.);`, `#13=ORIENTED_EDGE('',*,*,#12,.T.);`, `#14=EDGE_LOOP('',(#13));`,
+    pt(20, [0, 0, zC]), `#21=DIRECTION('',(0.,0.,1.));`, `#22=DIRECTION('',(1.,0.,0.));`, `#23=AXIS2_PLACEMENT_3D('',#20,#21,#22);`,
+    `#24=CIRCLE('',#23,${r});`, pt(25, [r, 0, zC]), `#26=VERTEX_POINT('',#25);`,
+    `#27=EDGE_CURVE('',#26,#26,#24,.T.);`, `#28=ORIENTED_EDGE('',*,*,#27,.F.);`, `#29=EDGE_LOOP('',(#28));`,
+    pt(30, [0, 0, 0]), `#31=AXIS2_PLACEMENT_3D('',#30,#21,#22);`, `#32=CYLINDRICAL_SURFACE('',#31,${r});`,
+    `#33=FACE_BOUND('',#14,.T.);`, `#34=FACE_BOUND('',#29,.T.);`, `#35=ADVANCED_FACE('',(#33,#34),#32,.T.);`,
+    `#36=OPEN_SHELL('',(#35));`, `#37=SHELL_BASED_SURFACE_MODEL('',(#36));`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src);
+  const P = res.mesh.positions, I = res.mesh.indices;
+  const cnt = new Map<string, number>();
+  for (let t = 0; t < I.length / 3; t++) for (let e = 0; e < 3; e++) {
+    const a = I[t * 3 + e]!, b = I[t * 3 + (e + 1) % 3]!, k = a < b ? `${a},${b}` : `${b},${a}`;
+    cnt.set(k, (cnt.get(k) ?? 0) + 1);
+  }
+  let bLen = 0;
+  for (const [k, n] of cnt) if (n === 1) { const [a, b] = k.split(",").map(Number); bLen += dist([P[a! * 3]!, P[a! * 3 + 1]!, P[a! * 3 + 2]!], [P[b! * 3]!, P[b! * 3 + 1]!, P[b! * 3 + 2]!]); }
+  let rimLen = 2 * Math.PI * r;
+  const w = [...uz, uz[0]!];
+  for (let i = 0; i + 1 < w.length; i++) rimLen += dist([r * Math.cos(w[i]![0]), r * Math.sin(w[i]![0]), w[i]![1]], [r * Math.cos(w[i + 1]![0]), r * Math.sin(w[i + 1]![0]), w[i + 1]![1]]);
+  check("band rims crossing each other: mesh boundary is the two rims", Math.abs(bLen - rimLen) < 0.005 * rimLen, `boundary ${bLen.toFixed(3)} vs rims ${rimLen.toFixed(3)}`);
+}
+
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
 console.log("geometry-regressions: all passed");
