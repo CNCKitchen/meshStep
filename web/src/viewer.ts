@@ -116,6 +116,9 @@ export class Viewer {
   // faceIndex maps straight to the body under the cursor.
   private drawnSolidOfTri: Uint32Array | null = null;
   private rmbStart: { x: number; y: number } | null = null; // right-button down position
+  // macOS fires `contextmenu` on right PRESS (Windows/Linux: on release), so there the menu
+  // is deferred to the right-button release, where the drag distance is finally known.
+  private ctxOnRelease = false;
 
   /** Right-click (no drag) hook: body id under the cursor (null over empty space) + client x/y. */
   onContextMenu: ((solidId: number | null, x: number, y: number) => void) | null = null;
@@ -376,6 +379,11 @@ export class Viewer {
     // navigation in most schemes (pan here, orbit in Onshape/Tinkercad/Rhino).
     canvas.addEventListener("contextmenu", (ev) => {
       ev.preventDefault();
+      // Fired on press (macOS) with only the right button down: decide on release instead.
+      if ((ev.buttons & 7) === RMB) {
+        this.ctxOnRelease = true;
+        return;
+      }
       const s = this.rmbStart;
       this.rmbStart = null;
       if (ev.buttons & 7) return; // right released mid-chord (CATIA/NX gestures)
@@ -403,6 +411,16 @@ export class Viewer {
     this.navMask = mask;
     // rmbStart must catch chorded right presses too (they skip pointerdown).
     if (mask & RMB && !(prev & RMB)) this.rmbStart = { x: ev.clientX, y: ev.clientY };
+    // Deferred (macOS) context menu: any other button joining makes it a chord gesture.
+    if (this.ctxOnRelease && mask & ~RMB) this.ctxOnRelease = false;
+    if (this.ctxOnRelease && prev & RMB && !(mask & RMB)) {
+      this.ctxOnRelease = false;
+      const s = this.rmbStart;
+      this.rmbStart = null;
+      if (s && Math.hypot(ev.clientX - s.x, ev.clientY - s.y) <= 4) {
+        this.onContextMenu?.(this.pickSolid(ev.clientX, ev.clientY), ev.clientX, ev.clientY);
+      }
+    }
     // CATIA tick-zoom: a second button quickly CLICKED (not held) while middle
     // stays down flips the rest of the middle-drag from pan to zoom.
     if (this.scheme.catiaZoomTick && prev & MMB && mask & MMB) {

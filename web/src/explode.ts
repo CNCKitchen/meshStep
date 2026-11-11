@@ -36,6 +36,10 @@ export interface ExplodeInfo {
   leafCount: number;
   /** World offset per instance at explode factor f in [0,1], 3 floats per instance. */
   offsetsAt(f: number, style?: ExplodeStyle, axis?: ExplodeAxis): Float64Array;
+  /** Leave these solid (body) ids out of the arrangement: every style is computed from the
+   *  visible parts alone (tree grouping, centroid, bounds, peel order, flat-lay grid), and
+   *  hidden parts get a zero offset. Returns false when the set didn't change anything. */
+  setHiddenSolids(ids: Iterable<number>): boolean;
 }
 
 /** Overall explosion strength: at factor 1 a group's distance from its parent centroid grows
@@ -168,46 +172,69 @@ export function buildExplode(args: {
     const list = instIdxOfSolid.get(si.solidId);
     if (list) list.push(i); else instIdxOfSolid.set(si.solidId, [i]);
   });
-  const covered = new Set<number>();
-  const bodyNode = (solidId: number): XNode | null => {
-    const leaves: XNode[] = [];
-    for (const i of instIdxOfSolid.get(solidId) ?? []) {
-      const leaf = leafOf(i);
-      if (leaf) { leaves.push(leaf); covered.add(i); }
-    }
-    if (leaves.length === 0) return null;
-    return leaves.length === 1 ? leaves[0]! : groupOf(leaves);
-  };
-  // Single-child chains collapse (wrapper products carry no geometry of their own), so tree
-  // depth below counts only BRANCHING levels — the level-gain staggering isn't wasted on them.
-  const partToX = (n: PartNode): XNode | null => {
-    const kids: XNode[] = [];
-    for (const child of n.children) { const x = partToX(child); if (x) kids.push(x); }
-    for (const b of n.bodies) { const x = bodyNode(b.id); if (x) kids.push(x); }
-    if (kids.length === 0) return null;
-    return kids.length === 1 ? kids[0]! : groupOf(kids);
-  };
-  let root = partToX(structure);
-  // Bodies present in the mesh but absent from the part tree still deserve to move.
-  const strays: XNode[] = [];
-  for (let i = 0; i < nI; i++) {
-    if (covered.has(i)) continue;
-    const leaf = leafOf(i);
-    if (leaf) strays.push(leaf);
-  }
-  if (strays.length > 0) root = groupOf(root ? [root, ...strays] : strays);
-  const leaves: XNode[] = [];
-  const gather = (n: XNode): void => {
-    if (n.inst >= 0) { leaves.push(n); return; }
-    for (const k of n.children) gather(k);
-  };
-  if (root) gather(root);
-  const leafCount = leaves.length;
+  const solidOfInst = instances.map((si) => si.solidId);
 
-  // Global frame shared by the flat styles: area-weighted centroid, bbox, half diagonal.
-  const C: [number, number, number] = root ? root.c : [0, 0, 0];
-  const GB = root ? root.bb : EMPTY_BB;
-  const R = root ? Math.max(root.r, 1e-9) : 1;
+  /** Everything a style derives from the set of parts taking part: rebuilt when the hidden set
+   *  changes, so hidden parts neither move nor shape where the visible ones go. */
+  interface Frame {
+    root: XNode | null;
+    leaves: XNode[];
+    /** Area-weighted centroid, bbox and half diagonal of the parts taking part. */
+    C: [number, number, number];
+    GB: XNode["bb"];
+    R: number;
+    peelRank: Float64Array | null; // per-leaf rank in [0,1]: 0 = outermost (lazy)
+    layoutTarget: Float64Array | null; // per-leaf target centroid (x, y, z) (lazy)
+    layoutNormal: number; // axis the cached targets were built for
+  }
+  const buildFrame = (hidden: ReadonlySet<number>): Frame => {
+    const leafOfVisible = (i: number): XNode | null => hidden.has(solidOfInst[i]!) ? null : leafOf(i);
+    const covered = new Set<number>();
+    const bodyNode = (solidId: number): XNode | null => {
+      const leaves: XNode[] = [];
+      for (const i of instIdxOfSolid.get(solidId) ?? []) {
+        const leaf = leafOfVisible(i);
+        if (leaf) { leaves.push(leaf); covered.add(i); }
+      }
+      if (leaves.length === 0) return null;
+      return leaves.length === 1 ? leaves[0]! : groupOf(leaves);
+    };
+    // Single-child chains collapse (wrapper products carry no geometry of their own), so tree
+    // depth below counts only BRANCHING levels — the level-gain staggering isn't wasted on them.
+    const partToX = (n: PartNode): XNode | null => {
+      const kids: XNode[] = [];
+      for (const child of n.children) { const x = partToX(child); if (x) kids.push(x); }
+      for (const b of n.bodies) { const x = bodyNode(b.id); if (x) kids.push(x); }
+      if (kids.length === 0) return null;
+      return kids.length === 1 ? kids[0]! : groupOf(kids);
+    };
+    let root = partToX(structure);
+    // Bodies present in the mesh but absent from the part tree still deserve to move.
+    const strays: XNode[] = [];
+    for (let i = 0; i < nI; i++) {
+      if (covered.has(i)) continue;
+      const leaf = leafOfVisible(i);
+      if (leaf) strays.push(leaf);
+    }
+    if (strays.length > 0) root = groupOf(root ? [root, ...strays] : strays);
+    const leaves: XNode[] = [];
+    const gather = (n: XNode): void => {
+      if (n.inst >= 0) { leaves.push(n); return; }
+      for (const k of n.children) gather(k);
+    };
+    if (root) gather(root);
+    return {
+      root, leaves,
+      C: root ? root.c : [0, 0, 0],
+      GB: root ? root.bb : EMPTY_BB,
+      R: root ? Math.max(root.r, 1e-9) : 1,
+      peelRank: null, layoutTarget: null, layoutNormal: -1,
+    };
+  };
+  let hiddenKey = "";
+  let frame = buildFrame(new Set());
+  // Placed occurrences with geometry in the whole model (the hidden set doesn't change it).
+  const leafCount = frame.leaves.length;
 
   // ---- mate-axis inference: coaxial cylinder pairs across different instances ----
   const mateAxis = new Float64Array(nI * 3); // zero vector = no unambiguous mate
@@ -215,6 +242,7 @@ export function buildExplode(args: {
 
   const hierarchicalAt = (f: number): Float64Array => {
     const out = new Float64Array(nI * 3);
+    const { root } = frame;
     if (!root || f <= 0) return out;
     const fac = Math.min(1, f);
     const walk = (node: XNode, parent: XNode | null, siblingIdx: number, depth: number, ix: number, iy: number, iz: number): void => {
@@ -256,6 +284,7 @@ export function buildExplode(args: {
   // ---- radial: classic scale-about-COG (every part's distance to the centroid grows) ----
   const radialAt = (f: number): Float64Array => {
     const out = new Float64Array(nI * 3);
+    const { leaves, C, R } = frame;
     if (f <= 0) return out;
     leaves.forEach((n, k) => {
       const dx = n.c[0] - C[0], dy = n.c[1] - C[1], dz = n.c[2] - C[2];
@@ -288,6 +317,7 @@ export function buildExplode(args: {
       score[0] += Math.abs(ax); score[1] += Math.abs(ay); score[2] += Math.abs(az);
     }
     if (!anyMate) {
+      const { leaves } = frame;
       const mean = [0, 0, 0];
       for (const n of leaves) { mean[0] += n.c[0]; mean[1] += n.c[1]; mean[2] += n.c[2]; }
       for (let d = 0; d < 3; d++) mean[d] = mean[d]! / Math.max(1, leaves.length);
@@ -298,6 +328,7 @@ export function buildExplode(args: {
   };
   const axisAt = (f: number, axis: ExplodeAxis): Float64Array => {
     if (f <= 0) return new Float64Array(nI * 3);
+    const { leaves, R } = frame;
     const a = resolveAxis(axis);
     let pMin = Infinity, pMax = -Infinity;
     for (const n of leaves) {
@@ -322,11 +353,11 @@ export function buildExplode(args: {
   };
 
   // ---- peel: outer parts leave first, the slider walks inward layer by layer ----
-  let peelRank: Float64Array | null = null; // per-leaf rank in [0,1]: 0 = outermost
   const peelAt = (f: number): Float64Array => {
     const out = new Float64Array(nI * 3);
+    const { leaves, C, GB, R } = frame;
     if (f <= 0 || leaves.length < 2) return out;
-    if (!peelRank) {
+    if (!frame.peelRank) {
       // Enclosure-depth proxy: distance of the centroid to the nearest global bbox wall —
       // shallow = outer shell, deep = core. Rank-based so odd shapes can't skew the pacing.
       const depth = leaves.map((n, k) => ({
@@ -338,12 +369,14 @@ export function buildExplode(args: {
         ),
       }));
       depth.sort((a, b) => a.d - b.d);
-      peelRank = new Float64Array(leaves.length);
-      depth.forEach((e, order) => { peelRank![e.k] = order / (depth.length - 1); });
+      const rank = new Float64Array(leaves.length);
+      depth.forEach((e, order) => { rank[e.k] = order / (depth.length - 1); });
+      frame.peelRank = rank;
     }
+    const peelRank = frame.peelRank;
     const fac = Math.min(1, f);
     leaves.forEach((n, k) => {
-      const rank = peelRank![k]!;
+      const rank = peelRank[k]!;
       const start = 0.7 * rank; // outermost moves immediately; the core waits until f ~ 0.7
       const local = Math.min(1, Math.max(0, (fac - start) / (1 - start)));
       if (local <= 0) return;
@@ -364,17 +397,16 @@ export function buildExplode(args: {
   // other two coordinate planes. The packed grid is re-centered on the assembly's own footprint
   // center, so exploding spreads the parts AROUND where the assembly sits (and the collapse
   // animation converges back into the middle) instead of migrating off to one side.
-  let layoutTarget: Float64Array | null = null; // per-leaf target centroid (x, y, z)
-  let layoutNormal = -1; // axis the cached targets were built for
   const layoutAt = (f: number, axis: ExplodeAxis): Float64Array => {
     const out = new Float64Array(nI * 3);
+    const { leaves, GB, R } = frame;
     if (f <= 0 || leaves.length === 0) return out;
     const nAx = axis === "x" ? 0 : axis === "y" ? 1 : 2; // auto behaves as z (ground plane)
     const uAx = nAx === 0 ? 1 : 0;
     const vAx = nAx === 2 ? 1 : 2;
-    if (!layoutTarget || layoutNormal !== nAx) {
-      layoutNormal = nAx;
-      layoutTarget = new Float64Array(leaves.length * 3);
+    if (!frame.layoutTarget || frame.layoutNormal !== nAx) {
+      frame.layoutNormal = nAx;
+      const layoutTarget = frame.layoutTarget = new Float64Array(leaves.length * 3);
       const pad = 0.06 * R;
       // Big parts first, rows capped near the assembly's width (or the grid's own square).
       const order = leaves.map((n, k) => ({
@@ -409,11 +441,12 @@ export function buildExplode(args: {
       }
     }
     const fac = Math.min(1, f);
+    const layoutTarget = frame.layoutTarget;
     leaves.forEach((n, k) => {
       const o = n.inst * 3;
-      out[o] = (layoutTarget![k * 3]! - n.c[0]) * fac;
-      out[o + 1] = (layoutTarget![k * 3 + 1]! - n.c[1]) * fac;
-      out[o + 2] = (layoutTarget![k * 3 + 2]! - n.c[2]) * fac;
+      out[o] = (layoutTarget[k * 3]! - n.c[0]) * fac;
+      out[o + 1] = (layoutTarget[k * 3 + 1]! - n.c[1]) * fac;
+      out[o + 2] = (layoutTarget[k * 3 + 2]! - n.c[2]) * fac;
     });
     return out;
   };
@@ -428,7 +461,18 @@ export function buildExplode(args: {
     }
   };
 
-  return { instanceOfTri, leafCount, offsetsAt };
+  const setHiddenSolids = (ids: Iterable<number>): boolean => {
+    // Only ids of bodies this model places count — the key is what decides a rebuild.
+    const hidden = new Set<number>();
+    for (const id of ids) if (instIdxOfSolid.has(id)) hidden.add(id);
+    const key = [...hidden].sort((a, b) => a - b).join(",");
+    if (key === hiddenKey) return false;
+    hiddenKey = key;
+    frame = buildFrame(hidden);
+    return true;
+  };
+
+  return { instanceOfTri, leafCount, offsetsAt, setHiddenSolids };
 }
 
 /** Fill `mateAxis` (3 floats per instance, zero = none) with each instance's dominant mating

@@ -507,6 +507,7 @@ function applySmoothing(angleDeg: number): void {
   viewer.setMesh(geo, defectEdges, featEdges, colors, solidOfTri);
   // After setMesh (which resets the per-model explode state). The wrapper reads the live style
   // selection, so the dropdown swaps offset functions without touching the viewer's state.
+  explodeInfo?.setHiddenSolids(hiddenParts);
   viewer.setExplode(explodeInfo && {
     instanceOfTri: explodeInfo.instanceOfTri,
     offsetsAt: (f: number) => explodeInfo!.offsetsAt(f, explodeStyle, explodeStyle === "layout" ? layoutAxis : explodeAxis),
@@ -524,7 +525,17 @@ function applySmoothing(angleDeg: number): void {
 // from it after every change, so parent and child boxes can never disagree with the viewer.
 let hiddenParts = new Set<number>();
 let allPartSolids: number[] = [];
-const partRows: { cb: HTMLInputElement; row: HTMLElement; solids: number[] }[] = [];
+/** One parts-tree row. `kids` are its child rows once built (lazily, on first expand); `open`
+ *  expands it (building the children if needed) — null for rows without children. */
+interface PartRowRec {
+  cb: HTMLInputElement;
+  row: HTMLElement;
+  solids: number[];
+  kids: PartRowRec[] | null;
+  open: (() => void) | null;
+}
+const partRows: PartRowRec[] = []; // every built row, for the checkbox sync
+let topPartRows: PartRowRec[] = []; // the tree's first level, where a reveal starts
 
 // Right-click lookup: body id -> display label + owning part. The context menu acts on ONE
 // body — the same granularity as the tree's finest rows (a multi-body part lists each body
@@ -569,6 +580,9 @@ function subtreeSolids(n: PartNode, out: number[] = []): number[] {
 
 function applyHiddenParts(): void {
   viewer.setHiddenSolids(hiddenParts);
+  // The exploded arrangement is built from the visible parts only (a flat lay packs just what
+  // is shown): re-arrange, cross-blending like a style switch when currently exploded.
+  if (explodeInfo?.setHiddenSolids(hiddenParts)) viewer.restyleExplode();
   for (const r of partRows) {
     const hidden = r.solids.reduce((s, id) => s + (hiddenParts.has(id) ? 1 : 0), 0);
     r.cb.checked = hidden === 0;
@@ -577,7 +591,10 @@ function applyHiddenParts(): void {
   }
 }
 
-function partRow(label: string, meta: string, solids: number[], depth: number, children: (() => HTMLElement[]) | null): HTMLElement {
+function partRow(
+  label: string, meta: string, solids: number[], depth: number,
+  children: ((into: PartRowRec[]) => HTMLElement[]) | null, siblings: PartRowRec[],
+): HTMLElement {
   const row = document.createElement("div");
   row.className = "part-row";
   row.style.paddingLeft = `${depth * 14}px`;
@@ -605,7 +622,9 @@ function partRow(label: string, meta: string, solids: number[], depth: number, c
   }
 
   row.append(caret, cb, name, metaEl);
-  partRows.push({ cb, row, solids });
+  const rec: PartRowRec = { cb, row, solids, kids: null, open: null };
+  partRows.push(rec);
+  siblings.push(rec);
 
   cb.addEventListener("change", () => {
     for (const id of solids) cb.checked ? hiddenParts.delete(id) : hiddenParts.add(id);
@@ -619,22 +638,29 @@ function partRow(label: string, meta: string, solids: number[], depth: number, c
   if (children) {
     // Children are built lazily on first expand (a PCB's copper layer alone is ~700 bodies).
     let box: HTMLElement | null = null;
+    const build = (): HTMLElement => {
+      const b = document.createElement("div");
+      rec.kids = [];
+      for (const el of children(rec.kids)) b.appendChild(el);
+      wrap.appendChild(b);
+      applyHiddenParts(); // sync the freshly created checkboxes
+      return b;
+    };
     caret.addEventListener("click", () => {
-      if (!box) {
-        box = document.createElement("div");
-        for (const el of children()) box.appendChild(el);
-        wrap.appendChild(box);
-        applyHiddenParts(); // sync the freshly created checkboxes
-      } else {
-        box.hidden = !box.hidden;
-      }
+      if (!box) box = build();
+      else box.hidden = !box.hidden;
       caret.textContent = box.hidden ? "▶" : "▼";
     });
+    rec.open = () => {
+      if (!box) box = build();
+      box.hidden = false;
+      caret.textContent = "▼";
+    };
   }
   return wrap;
 }
 
-function nodeRows(n: PartNode, depth: number): HTMLElement[] {
+function nodeRows(n: PartNode, depth: number, into: PartRowRec[]): HTMLElement[] {
   const rows: HTMLElement[] = [];
   // "sheet" tags a surface body (open by design) so a boundary-edged part reads as intended.
   const sheetTag = (ids: number[]): string =>
@@ -648,15 +674,15 @@ function nodeRows(n: PartNode, depth: number): HTMLElement[] {
     ].filter(Boolean).join(" · ");
     const expandable = child.children.length > 0 || child.bodies.length > 1;
     rows.push(partRow(child.name || "(unnamed)", meta, solids, depth,
-      expandable ? () => nodeRows(child, depth + 1) : null));
+      expandable ? (kids) => nodeRows(child, depth + 1, kids) : null, into));
   }
   if (n.children.length > 0 && n.bodies.length === 1) {
     // A single own body next to subassemblies still deserves a row of its own.
     const b = n.bodies[0]!;
-    rows.push(partRow(b.name || "Body", sheetTag([b.id]), [b.id], depth, null));
+    rows.push(partRow(b.name || "Body", sheetTag([b.id]), [b.id], depth, null, into));
   } else if (n.bodies.length > 1 || (n.children.length === 0 && n.bodies.length > 0)) {
     for (const [i, b] of n.bodies.entries()) {
-      rows.push(partRow(b.name || `Body ${i + 1}`, sheetTag([b.id]), [b.id], depth, null));
+      rows.push(partRow(b.name || `Body ${i + 1}`, sheetTag([b.id]), [b.id], depth, null, into));
     }
   }
   return rows;
@@ -665,6 +691,7 @@ function nodeRows(n: PartNode, depth: number): HTMLElement[] {
 function buildPartsPanel(root: PartNode): void {
   hiddenParts = new Set();
   partRows.length = 0;
+  topPartRows = [];
   partsTree.textContent = "";
   const merged = mergeChains(root);
   allPartSolids = subtreeSolids(merged);
@@ -673,7 +700,37 @@ function buildPartsPanel(root: PartNode): void {
   const show = merged.children.length > 0 || merged.bodies.length > 1;
   partsPanel.hidden = !show;
   if (!show) return;
-  for (const el of nodeRows(merged, 0)) partsTree.appendChild(el);
+  for (const el of nodeRows(merged, 0, topPartRows)) partsTree.appendChild(el);
+}
+
+/** Expand the parts tree down to the deepest row holding this body, scroll it into view and
+ *  flash it. A multiply-placed part has one row per body (instances share it), so there is
+ *  exactly one place to go. */
+let revealSeq = 0; // the latest reveal owns the viewport highlight
+function revealInPartsTree(solidId: number): void {
+  let target: PartRowRec | null = null;
+  let level: PartRowRec[] | null = topPartRows;
+  while (level) {
+    const hit: PartRowRec | undefined = level.find((r) => r.solids.includes(solidId));
+    if (!hit) break;
+    target = hit;
+    if (!hit.open) break;
+    hit.open();
+    level = hit.kids;
+  }
+  if (!target) return;
+  const row = target.row;
+  row.scrollIntoView({ block: "center", behavior: "smooth" });
+  row.classList.remove("located");
+  void row.offsetWidth; // restart the flash when the same row is revealed twice in a row
+  row.classList.add("located");
+  // Mark the part in the viewport for as long as its row flashes, so the two read as one.
+  viewer.setHighlightSolids(new Set([solidId]));
+  const seq = ++revealSeq;
+  row.addEventListener("animationend", () => {
+    row.classList.remove("located");
+    if (seq === revealSeq) viewer.setHighlightSolids(null);
+  }, { once: true });
 }
 
 partsShowAll.addEventListener("click", () => {
@@ -752,6 +809,7 @@ function openCtxMenu(targetId: number | null, rayIds: number[], x: number, y: nu
         applyHiddenParts();
       }),
       menuItem("Zoom to part", () => viewer.fitSolids(new Set([id]))),
+      menuItem("Show in parts tree", () => revealInPartsTree(id), !partsPanel.hidden),
       menuItem("Part info…", () => showPartInfo(info, id, x, y)),
     );
     const sep = document.createElement("div");
