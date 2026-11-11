@@ -2117,13 +2117,42 @@ function tessellatePeriodicUnroll(
       outP3.push(p3[k]!); auv.push([auv[0]![0] + period, auv[0]![1]]);
       return { p3: outP3, p2: auv.map(([a, s]) => toP2(a, s)) };
     };
-    const bottom = buildRim(rims[0]!), top = buildRim(rims[1]!);
-    // Outer boundary: bottom left->right, then top right->left. The two vertical sides are the seam
-    // (same 3D line at seam and seam+period) -> weld closes it.
-    let outer = {
-      p3: [...bottom.p3, ...top.p3.slice().reverse()],
-      p2: [...bottom.p2, ...top.p2.slice().reverse()],
+    // Outer boundary: bottom left->right, then top right->left. The two sides joining the rims are
+    // the seam (same 3D line at seam and seam+period) -> weld closes it. A single chord per side is
+    // exact on a RULED stack (cylinder/cone: the seam side is a straight line), but on a CURVED
+    // stack — a torus band, the side runs along the tube circle — that chord cuts through the
+    // surface (Ontos tapered collet nut #92192: an 18° tube arc of r=49.7mm -> 0.48mm chord gouge).
+    // When the chord is out of tolerance, sample the side along its (u,v) segment at the face
+    // target; both sides reference the SAME evaluated points, so the weld still seals the seam.
+    // In (u,v) the samples lie on the original segment, so the polygon's simplicity is unchanged.
+    const joinRims = (b: { p3: Vec3[]; p2: P2[] }, t: { p3: Vec3[]; p2: P2[] }): { p3: Vec3[]; p2: P2[] } => {
+      const plain = { p3: [...b.p3, ...t.p3.slice().reverse()], p2: [...b.p2, ...t.p2.slice().reverse()] };
+      const qB = b.p2[0]!, qT = t.p2[0]!, pB = b.p3[0]!, pT = t.p3[0]!;
+      const at = (f: number): P2 => [qB[0] + (qT[0] - qB[0]) * f, qB[1] + (qT[1] - qB[1]) * f];
+      const ch = [pT[0] - pB[0], pT[1] - pB[1], pT[2] - pB[2]];
+      const chL2 = ch[0]! * ch[0]! + ch[1]! * ch[1]! + ch[2]! * ch[2]!;
+      let len = 0, sag = 0, prev = pB;
+      for (let i = 1; i <= 16; i++) {
+        const p = surface.evaluate(...at(i / 16));
+        len += Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]); prev = p;
+        const w = [p[0] - pB[0], p[1] - pB[1], p[2] - pB[2]];
+        const f = chL2 > 0 ? Math.max(0, Math.min(1, (w[0]! * ch[0]! + w[1]! * ch[1]! + w[2]! * ch[2]!) / chL2)) : 0;
+        sag = Math.max(sag, Math.hypot(w[0]! - ch[0]! * f, w[1]! - ch[1]! * f, w[2]! - ch[2]! * f));
+      }
+      if (sag <= chordTol) return plain;
+      const mid = at(0.5);
+      const fT = faceTarget(surface, targetEdge, chordTol, normalDev, mid[0], mid[1]);
+      const n = Math.min(4096, Math.max(2, Math.ceil(len / Math.max(fT, 1e-9))));
+      const sq: P2[] = [], s3: Vec3[] = [];
+      for (let i = 1; i < n; i++) { const q = at(i / n); sq.push(q); s3.push(surface.evaluate(q[0], q[1])); }
+      const shiftQ = (q: P2): P2 => { const r: P2 = [q[0], q[1]]; r[c] += period; return r; };
+      return {
+        p3: [...b.p3, ...s3, ...t.p3.slice().reverse(), ...s3.slice().reverse()],
+        p2: [...b.p2, ...sq.map(shiftQ), ...t.p2.slice().reverse(), ...sq.slice().reverse()],
+      };
     };
+    const bottom = buildRim(rims[0]!), top = buildRim(rims[1]!);
+    let outer = joinRims(bottom, top);
     let holeLoops = holes.map((h) => ({
       p3: h.p3,
       p2: h.p2.map((q) => toP2(normTo(q[c]), q[stackC])),
@@ -2238,7 +2267,7 @@ function tessellatePeriodicUnroll(
           const b2 = buildRimCut(rims[0]!, uStar), t2 = buildRimCut(rims[1]!, uStar);
           if (b2 && t2) {
             const normTo2 = (x: number): number => { let d = (x - uStar) % period; if (d < 0) d += period; return uStar + d; };
-            outer = { p3: [...b2.p3, ...t2.p3.slice().reverse()], p2: [...b2.p2, ...t2.p2.slice().reverse()] };
+            outer = joinRims(b2, t2);
             holeLoops = holes.map((h) => ({ p3: h.p3, p2: h.p2.map((q) => toP2(normTo2(q[c]), q[stackC])) }));
             if (DBG) console.error(`[unroll] fid=${fid} exact-seam rebuild at ${uStar.toFixed(4)} (margin ${bestMargin.toExponential(1)})`);
           }
@@ -2270,7 +2299,7 @@ function tessellatePeriodicUnroll(
         for (let k = 0; k < K; k++) {
           const seamK = ((k + 0.5) * period) / K;
           const b = buildRim(rims[0]!, seamK), t = buildRim(rims[1]!, seamK);
-          outer = { p3: [...b.p3, ...t.p3.slice().reverse()], p2: [...b.p2, ...t.p2.slice().reverse()] };
+          outer = joinRims(b, t);
           const normToK = (x: number): number => { let d = (x - seamK) % period; if (d < 0) d += period; return seamK + d; };
           holeLoops = holes.map((h) => ({ p3: h.p3, p2: h.p2.map((q) => toP2(normToK(q[c]), q[stackC])) }));
           if (!conflicted() && (wasFolded || !foldedHole())) {
@@ -2860,11 +2889,12 @@ function tessellateRevolutionBand(
       // by angular progress then folds — the loft/stitch chords straight through the surface
       // (5mm sagitta on an 8mm cone). Bail; the CDT-based unroll handles backtracking rims
       // (its rim builder unwraps in polyline order and triangulates the true boundary).
-      // ONLY for a non-periodic stack coordinate: the unroll's rectangle assumes a LINEAR stack,
-      // so kicking a torus tube segment out of the band mesher hands it to a fallback that is
-      // wrong by construction (Ontos torus #92192: 1.5mm loft -> 92mm unroll garbage). On a
-      // periodic stack the loft's bounded fold error stays the best available result.
-      if (!stackPeriodic && absWind > Math.abs(wind) + 0.05 * period) return false;
+      // Periodic stacks too: the fold is NOT bounded there — it lies on the surface, so deviation,
+      // watertightness and orientation all pass while the strip under each backtrack is covered
+      // 2-3x (Ontos tapered collet nut torus #92192: 7368 self-intersecting triangle pairs). This
+      // was once exempted because the unroll then assumed a linear stack; it now unwraps periodic
+      // stacks and samples curved seam sides (joinRims), so the torus band unrolls cleanly.
+      if (absWind > Math.abs(wind) + 0.05 * period) return false;
       const h = stackPeriodic ? (Math.atan2(hsin, hcos) * stackPeriod) / TWO_PI : hsum / pts.length;
       rims.push({ pts, h, wind });
     }

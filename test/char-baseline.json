@@ -287,19 +287,19 @@
     "skipped": {}
   },
   "newtestmodels/Ontos_V2": {
-    "hash": "514dbe4e00686a8596dbe5e4087b7817a5a9886c10bd03d03a1a09af577b6a28",
-    "verts": 2849813,
-    "tris": 5699954,
+    "hash": "c4371978d5b39e7ed01ccd53c851b5de1c57406ffb5ea80accc6d4187ec0b5d9",
+    "verts": 2847186,
+    "tris": 5694700,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2941923.684,
+    "volume": 2937196.013,
     "dispatch": {
-      "band": 274,
+      "band": 273,
       "cone": 7,
       "coneSlice": 1,
       "grid": 5036,
       "sphereCap": 1,
-      "unroll": 37
+      "unroll": 38
     },
     "skipped": {}
   },
@@ -487,19 +487,20 @@
     "error": "meshStep: one body needs at least 101M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/jack_in_the_box": {
-    "hash": "9d8c4131e61c5e4d5c5c173e9a00cc6642882b52f366c438de65192f95a6fc08",
-    "verts": 69471,
-    "tris": 138718,
+    "hash": "9ca31e6b33cbabc12ecf5c3930b3e263618778cded299b8a9d7d14a35ead302a",
+    "verts": 69429,
+    "tris": 138634,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12350.521,
+    "volume": 12348.81,
     "dispatch": {
-      "band": 45,
+      "band": 44,
       "coneCap": 1,
       "grid": 286,
       "region": 1,
       "sphereCap": 2,
-      "sphereFull": 2
+      "sphereFull": 2,
+      "unroll": 1
     },
     "skipped": {}
   },

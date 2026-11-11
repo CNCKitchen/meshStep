@@ -4,6 +4,7 @@
 //   #6c  B-spline curve projection lands on the wrong branch of a curve that passes near itself.
 //   #6e  a degenerate "closed" curve (empty parameter span) and a wild projection made the periodic
 //        unwrap spin for minutes / forever.
+//   torus band with a backtracking rim (Ontos tapered collet nut): the band mesher folded it.
 // (#6d, the pole-to-pole hemisphere rim, has no synthetic reproduction: a hand-built half-ball either
 // meshes through another path or hits a separate grid issue, so it is covered only by the corpus.)
 import { parseStep } from "../src/step/parser.ts";
@@ -12,6 +13,7 @@ import { makeCurve } from "../src/geom/curves.ts";
 import { makeSurface } from "../src/geom/surfaces.ts";
 import { unwrap } from "../src/mesh/tessellate.ts";
 import { importStep } from "../src/index.ts";
+import { selfIntersections } from "./self-intersect.ts";
 
 let failures = 0;
 const check = (label: string, cond: boolean, detail: string): void => {
@@ -94,6 +96,60 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   let tris = 0, err = "";
   try { tris = importStep(src).mesh.indices.length / 3; } catch (e) { err = (e as Error).message; }
   check("bounded-surface model: imports without a product-structure error", !err && tris > 0, err || `tris=${tris}`);
+}
+
+// ---- torus band whose rim BACKTRACKS in u (Ontos tapered collet nut, face #92192). The inner side
+// of a ring torus (R=65, r=49.7) between a bottom circle and a slotted zigzag rim whose curl runs
+// back in u for 7° per slot. The band mesher's per-angle loft folded under each curl: the strip was
+// covered 2-3x (7368 same-face triangle crossings on the real part) while the mesh stayed watertight,
+// on-surface and consistently oriented — no diagnostic fired. Area is exact via Green's theorem on
+// the torus metric dA = r(R + r cos v) du dv, so both an over-covered fold and a chord-gouged seam
+// (the unroll fallback's straight seam sides) fail it.
+{
+  const R = 65, r = 49.7, D = Math.PI / 180;
+  const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
+  const corners: [number, number][] = []; // (u°, v°), u decreasing; per 60° slot: diagonal, bottom, curl, top run
+  for (let k = 0; k < 6; k++) { const u0 = -k * 60; corners.push([u0, 166], [u0 - 28, 181.5], [u0 - 37, 180], [u0 - 40, 174], [u0 - 33, 166]); }
+  corners.push([-360, 166]);
+  const uv: [number, number][] = [];
+  for (let i = 0; i + 1 < corners.length; i++) {
+    const [ua, va] = corners[i]!, [ub, vb] = corners[i + 1]!;
+    const n = Math.max(2, Math.ceil(Math.hypot(ub - ua, vb - va) / 0.5));
+    for (let j = 0; j < n; j++) uv.push([(ua + ((ub - ua) * j) / n) * D, (va + ((vb - va) * j) / n) * D]);
+  }
+  uv.push(uv[0]!);
+  const vBot = 184 * D, rBot = R + r * Math.cos(vBot), zBot = r * Math.sin(vBot);
+  const cps = uv.map(([u, v], i) => pt(1000 + i, onT(u, v)));
+  const nC = uv.length;
+  const lines = [...cps,
+    `#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(${uv.map((_, i) => `#${1000 + i}`).join(",")}),.POLYLINE_FORM.,.T.,.F.,(2,${Array(nC - 2).fill(1).join(",")},2),(${Array.from({ length: nC }, (_, i) => `${i}.`).join(",")}),.UNSPECIFIED.);`,
+    `#11=VERTEX_POINT('',#1000);`, `#12=EDGE_CURVE('',#11,#11,#10,.T.);`, `#13=ORIENTED_EDGE('',*,*,#12,.T.);`, `#14=EDGE_LOOP('',(#13));`,
+    pt(20, [0, 0, zBot]), `#21=DIRECTION('',(0.,0.,1.));`, `#22=DIRECTION('',(1.,0.,0.));`, `#23=AXIS2_PLACEMENT_3D('',#20,#21,#22);`,
+    `#24=CIRCLE('',#23,${rBot.toFixed(9)});`, pt(25, [rBot, 0, zBot]), `#26=VERTEX_POINT('',#25);`,
+    `#27=EDGE_CURVE('',#26,#26,#24,.T.);`, `#28=ORIENTED_EDGE('',*,*,#27,.T.);`, `#29=EDGE_LOOP('',(#28));`,
+    pt(30, [0, 0, 0]), `#31=AXIS2_PLACEMENT_3D('',#30,#21,#22);`, `#32=TOROIDAL_SURFACE('',#31,${R},${r});`,
+    `#33=FACE_BOUND('',#14,.T.);`, `#34=FACE_BOUND('',#29,.T.);`, `#35=ADVANCED_FACE('',(#33,#34),#32,.F.);`,
+    `#36=OPEN_SHELL('',(#35));`, `#37=SHELL_BASED_SURFACE_MODEL('',(#36));`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src);
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const a = I[t * 3]! * 3, b = I[t * 3 + 1]! * 3, c = I[t * 3 + 2]! * 3;
+    const e1 = [P[b]! - P[a]!, P[b + 1]! - P[a + 1]!, P[b + 2]! - P[a + 2]!], e2 = [P[c]! - P[a]!, P[c + 1]! - P[a + 1]!, P[c + 2]! - P[a + 2]!];
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  // exact: |∮zig G(v) du − ∮bottom G(v) du| with G(v) = r(R v + r sin v), both loops walked in −u
+  const G = (v: number): number => r * (R * v + r * Math.sin(v));
+  let zig = 0;
+  // (the closing sample repeats uv[0] at u=0; the unwrapped walk ends at u=−2π)
+  const uvU = [...uv.slice(0, -1), [uv[0]![0] - 2 * Math.PI, uv[0]![1]] as [number, number]];
+  for (let i = 0; i + 1 < uvU.length; i++) zig += G((uvU[i]![1] + uvU[i + 1]![1]) / 2) * (uvU[i + 1]![0] - uvU[i]![0]);
+  const exact = Math.abs(zig + G(vBot) * 2 * Math.PI);
+  const si = selfIntersections(P, I, res.faceOfTri);
+  check("backtracking torus rim: no same-face triangle crossings (fold)", si.sameFace === 0, `${si.sameFace} crossing pairs`);
+  check("backtracking torus rim: area matches the trimmed band", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(2)} vs exact ${exact.toFixed(2)} mm²`);
+  check("backtracking torus rim: watertight against its rims", res.diagnostics.nonManifoldEdges === 0, `nonManifold=${res.diagnostics.nonManifoldEdges}`);
 }
 
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
