@@ -2712,7 +2712,23 @@ function tessellateRevolutionBand(
         ti = 0;
         span = Math.max(span, d3(bottom[j]!, evalAt(c, angs[j]!, hTopAt(progB[j]!))));
       }
-      const nRings = Math.max(1, Math.min(400, Math.ceil(span / target)));
+      // RULED STACK (an extrusion's v: the profile curves along the AROUND coordinate, the stack
+      // direction is a straight line). The profile's tightest radius sizes the rim samples, not the
+      // rings — no chord or normal error accrues along a ruling. Sizing rings by it (radius floor
+      // 1e-3 at a profile corner) stacked 400 rings of ~4000 rim points on a 25 mm extruded plate
+      // edge: 1.4M triangles, each orientation test a B-spline projection — 50-90 s for ONE face
+      // (ABC 00040341/43/54, 00040757, 00047354, 00050338, 00057419, 00058352/53). Space rings by
+      // the rim's own median sample spacing, stretched along the ruling by the grid mesher's
+      // ANISO_CAP (6:1), never finer than the isotropic target nor coarser than targetEdge.
+      let ringTarget = target;
+      if (surface.profileAxis !== undefined && surface.profileAxis === c && bottom.length > 2) {
+        const segs: number[] = [];
+        for (let j = 1; j < bottom.length; j++) segs.push(d3(bottom[j - 1]!, bottom[j]!));
+        segs.sort((x, y) => x - y);
+        ringTarget = Math.max(target, Math.min(targetEdge, 6 * segs[segs.length >> 1]!));
+      }
+      const nRings = Math.max(1, Math.min(400, Math.ceil(span / ringTarget)));
+      if (DBG) console.error(`[band] fid=${fid} rimPts=${bottom.length}/${top.length} span=${span.toExponential(2)} target=${target.toExponential(2)} ringTarget=${ringTarget.toExponential(2)} nRings=${nRings}`);
       // Angular-progress fractions for the final stitch: the loft rings inherit bottom's angles
       // (index-aligned 1:1 among themselves), but `top` may distribute its points unevenly in angle
       // (a staircase rim parks many points on one constant-angle step), so the closing band must
