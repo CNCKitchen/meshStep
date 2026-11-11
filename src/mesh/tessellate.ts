@@ -630,6 +630,40 @@ function pointInPoly(p: P2, poly: P2[]): boolean {
   return inside;
 }
 
+/** pointInPoly for MANY queries against one polygon: edges are bucketed by the y-band(s) they span,
+ * so a query scans only the edges that can cross its horizontal ray instead of the whole ring
+ * (gridCDT's inRegion on a ~1000-sample boundary was 15% of whole-model time). Same crossing test
+ * on the same edges, so the answer is identical to pointInPoly's. Small polygons just use that. */
+function polyTester(poly: P2[]): (p: P2) => boolean {
+  const n = poly.length;
+  if (n < 48) return (p) => pointInPoly(p, poly);
+  let y0 = Infinity, y1 = -Infinity;
+  for (const q of poly) { if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }
+  if (!(y1 > y0) || !Number.isFinite(y1 - y0)) return (p) => pointInPoly(p, poly);
+  const K = Math.min(4096, Math.max(8, n >> 2));
+  const h = (y1 - y0) / K;
+  const bin = (y: number): number => Math.min(K - 1, Math.max(0, Math.floor((y - y0) / h)));
+  const buckets: number[][] = Array.from({ length: K }, () => []);
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const ya = poly[i]![1], yb = poly[j]![1];
+    if (ya === yb) continue; // horizontal: never crosses a horizontal ray
+    for (let k = bin(Math.min(ya, yb)), kk = bin(Math.max(ya, yb)); k <= kk; k++) buckets[k]!.push(i);
+  }
+  return (p) => {
+    const y = p[1];
+    if (!(y >= y0 && y <= y1)) return false;
+    let inside = false;
+    for (const i of buckets[bin(y)]!) {
+      const a = poly[i]!, b = poly[i === 0 ? n - 1 : i - 1]!;
+      if ((a[1] > y) !== (b[1] > y)) {
+        const x = ((b[0] - a[0]) * (y - a[1])) / (b[1] - a[1]) + a[0];
+        if (p[0] < x) inside = !inside;
+      }
+    }
+    return inside;
+  };
+}
+
 /** Unwrap a periodic loop and shift it by whole periods so its mean (component c) sits near target. */
 function shiftIntoRange(p2: P2[], target: number, c: 0 | 1, period = TWO_PI): void {
   unwrap(p2, c, period);
@@ -1119,7 +1153,18 @@ function gridCDT(
     console.error(`[grid] fid=${fid} sanitize: outer ${preOuter}->${outer.p2.length} holes ${preHoles}->${holes.reduce((s, h) => s + h.p2.length, 0)}`);
   }
   const holeP2 = holes.map((h) => h.p2);
-  const inRegion = (p: P2): boolean => pointInPoly(p, outer.p2) && !holeP2.some((h) => pointInPoly(p, h));
+  const inOuter = polyTester(outer.p2);
+  // Holes: a bbox reject first (a face can carry hundreds of small holes), then the same test.
+  const holeT = holeP2.map((h) => {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const q of h) { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }
+    return { x0, x1, y0, y1, test: polyTester(h) };
+  });
+  const inRegion = (p: P2): boolean => {
+    if (!inOuter(p)) return false;
+    for (const t of holeT) if (p[0] >= t.x0 && p[0] <= t.x1 && p[1] >= t.y0 && p[1] <= t.y1 && t.test(p)) return false;
+    return true;
+  };
 
   // Curvature-adaptive interior density so the initial mesh is already fine on curved faces.
   let target = faceTarget(surface, targetEdge, chordTol, normalDev, umid, vmid);
