@@ -1,0 +1,58 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+# Copyright (C) 2026 Stefan Hermann (CNC Kitchen) <stefan@cnckitchen.com>
+#
+# Records agreement to CLA.md before an outside pull request can merge: on a
+# pull request from someone not yet on file the bot comments, the check stays
+# red until the author replies with the sentence in CLA.md, and the signature
+# (login, date, PR, commit) is committed to signatures/v1/cla.json on the
+# cla-signatures branch, which keeps bot commits off main.
+#
+# Runs on pull_request_target so it has the base repository's token on forks.
+# It does nothing but comment and write the signature file — it checks out no
+# code from the pull request.
+#
+# A pull request opened before this workflow existed is picked up by a push
+# to it, or by commenting `recheck` on it.
+name: CLA
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, synchronize]
+
+permissions:
+  actions: write
+  contents: write
+  pull-requests: write
+  statuses: write
+
+jobs:
+  cla:
+    if: >-
+      github.repository == 'CNCKitchen/meshStep' &&
+      (github.event_name == 'pull_request_target' ||
+       github.event.comment.body == 'recheck' ||
+       github.event.comment.body == 'I agree to CLA.md')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          path-to-document: https://github.com/CNCKitchen/meshStep/blob/main/CLA.md
+          path-to-signatures: signatures/v1/cla.json
+          branch: cla-signatures
+          allowlist: CNCKitchen,bot*
+          create-file-commit-message: Create the CLA signature file
+          signed-commit-message: $contributorName signed the CLA in #$pullRequestNo
+          custom-notsigned-prcomment: >-
+            Thank you for the pull request. meshStep is dual-licensed (AGPL and
+            commercial), which only works if its author may license every line
+            of it, so a short [Contributor License Agreement](https://github.com/CNCKitchen/meshStep/blob/main/CLA.md)
+            is needed once. You keep your copyright. To sign, reply with the
+            sentence below exactly:
+          custom-pr-sign-comment: I agree to CLA.md
+          custom-allsigned-prcomment: All contributors have signed the CLA. Thank you.
+          lock-pullrequest-aftermerge: true
