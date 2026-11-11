@@ -3234,7 +3234,31 @@ function tessellateRevolutionBand(
         if (hT[i]! < interpAt(fracB, hLast, fracT[i]!) - slack) crossesLast = true;
         if (hT[i]! < interpAt(fracB, hB, fracT[i]!) - slack) crossesBottom = true;
       }
-      if (crossesLast && !crossesBottom && !stackPeriodic) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
+      // The closing stitch can also fold with the last ring BELOW the top rim everywhere: the rings
+      // carry the bottom rim's narrow deep features (a slotted collet rim: 0.02 rad slots, 14 deep,
+      // under a 34-point circle 0.185 rad apart — ABC 00025895 #259) at 1/nRings of their depth, with
+      // near-vertical walls. The stitch fans each coarse top point to a whole wall, and one wall of
+      // every slot is seen from behind: reversed triangles (152 on #259, 232 crossing pairs).
+      // Replay the stitch's zipper in its own (angular fraction, height) coordinates and count
+      // triangles against the majority orientation.
+      let stitchFolds = 0;
+      if (!crossesLast && !crossesBottom && !stackPeriodic) {
+        const na = bottom.length, nb = top.length;
+        const ax = (i: number): number => (i >= na ? 1 : fracB[i]!), bx = (i: number): number => (i >= nb ? 1 : fracT[i]!);
+        const ah = (i: number): number => hLast[i % na]!, bh = (i: number): number => hT[i % nb]!;
+        const areas: number[] = [];
+        const tri = (x0: number, y0: number, x1: number, y1: number, x2: number, y2: number): void => { areas.push((x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0)); };
+        let ia = 0, ib = 0;
+        while (ia < na || ib < nb) {
+          if (ia < na && (ib >= nb || ax(ia) < bx(ib))) { tri(ax(ia), ah(ia), ax(ia + 1), ah(ia + 1), bx(ib), bh(ib)); ia++; }
+          else { tri(ax(ia), ah(ia), bx(ib + 1), bh(ib + 1), bx(ib), bh(ib)); ib++; }
+        }
+        let sum = 0; for (const a of areas) sum += a;
+        const tol = 1e-9 * Math.abs(sum);
+        for (const a of areas) if (a * Math.sign(sum) < -tol) stitchFolds++;
+      }
+      if (DBG && stitchFolds) console.error(`[band] fid=${fid} closing stitch folds ${stitchFolds} triangles -> unroll`);
+      if ((crossesLast || stitchFolds > 0) && !crossesBottom && !stackPeriodic) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
         ti = 0;
