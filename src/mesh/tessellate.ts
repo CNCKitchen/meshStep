@@ -5619,6 +5619,38 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
           continue;
         }
       }
+      // ZERO-HEIGHT BAND: a singly periodic surface whose every boundary sample lies on one ring,
+      // so the band between them is thinner than chordTol (ABC 00054277: 18 cylinder faces each
+      // bounded by a single circle, i.e. zero-height bosses; 00055415: revolution faces whose two
+      // rims coincide). An open stack bounds no other region, so this is no area at the requested
+      // precision, like the case above. On a cylinder or extrusion one loop qualifies; elsewhere
+      // (cone, revolution) one rim can bound a real cap to an apex or pole, so two or more loops
+      // are required. Doubly periodic surfaces are excluded: two coincident rims on a torus can
+      // bound the whole complementary band.
+      const ruledStack = surface?.kind === "CYLINDRICAL_SURFACE" || surface?.kind === "SURFACE_OF_LINEAR_EXTRUSION";
+      if (!ok && surface && face.loops.length >= (ruledStack ? 1 : 2)
+        && !!surface.periodicU !== !!(surface as Surface).periodicV) {
+        const S = surface.periodicU ? 1 : 0;
+        let sLo = Infinity, sHi = -Infinity, u0 = NaN, n = 0;
+        let hu: number | undefined, hv: number | undefined;
+        for (const lp of face.loops) for (const oe of lp.edges) for (const p of sampled.get(oe.edgeId) ?? []) {
+          const q = surface.project(p, hu, hv); hu = q[0]; hv = q[1];
+          if (Number.isNaN(u0)) u0 = q[1 - S]!;
+          if (q[S]! < sLo) sLo = q[S]!; if (q[S]! > sHi) sHi = q[S]!; n++;
+        }
+        if (n >= 3 && sHi >= sLo) {
+          const a = S === 1 ? surface.evaluate(u0, sLo) : surface.evaluate(sLo, u0);
+          const b = S === 1 ? surface.evaluate(u0, sHi) : surface.evaluate(sHi, u0);
+          const h = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+          if (h < chordTol) {
+            trace?.(face.faceId, "degenerate");
+            if (DBG) console.error(`[tess] DEGENERATE fid=${face.faceId} kind=${face.surfaceKind}: zero-height band (${h.toExponential(2)} < chordTol)`);
+            facesDegenerate++;
+            facesTessellated++;
+            continue;
+          }
+        }
+      }
       if (ok) facesTessellated++;
       else {
         trace?.(face.faceId, "untriangulated");
