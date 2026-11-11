@@ -2897,7 +2897,13 @@ function tessellateRevolutionBand(
       // former 5% slack let four cone folds through (Ontos #92585/#94992 at 4.7%/1.3%). Measured
       // over the local corpus: 1318 rims backtrack exactly 0, one by <1e-9 (noise), the rest by
       // ≥ 2.7e-3 of a period — 1e-6 separates them with three decades to spare.
-      if (absWind > Math.abs(wind) + 1e-6 * period) return false;
+      // Exception: rims winding the TUBE of a torus (c = 1, a pipe elbow's end sections) keep the
+      // 5% slack. The unroll mis-meshes elbows (ABC 00022673 #78: a 0.27° backtrack sent there
+      // came out 165× off the surface), while the band's curved-column rework, which elbows take,
+      // lofts on uniform columns and does not fold under a small backtrack. Rims winding the AXIS
+      // (c = 0: the collet nut, ABC 00025779 #937 at 0.48%) do fold in the plain loft and unroll
+      // cleanly, so they get no slack.
+      if (absWind > Math.abs(wind) + (stackPeriodic && c === 1 ? 0.05 : 1e-6) * period) return false;
       const h = stackPeriodic ? (Math.atan2(hsin, hcos) * stackPeriod) / TWO_PI : hsum / pts.length;
       rims.push({ pts, h, wind });
     }
@@ -2944,6 +2950,7 @@ function tessellateRevolutionBand(
       return [...r.slice(bi), ...r.slice(0, bi)];
     };
 
+    const vStart = verts.length, fStart = faceIds.length; // rollback point if a band declines
     for (const band of stack) {
       const bottom = band.bottom, top = align(bottom, band.top, band.bWind, band.tWind);
       const angs = bottom.map(angleOf);
@@ -3194,6 +3201,33 @@ function tessellateRevolutionBand(
           continue;
         }
       }
+      // TOP RIM STEPS WITHIN ONE COLUMN: decline to the unroll.
+      // The loft rings live at the BOTTOM rim's angles, linearly interpolating the top heights in
+      // between; a top rim that steps within one column (a 7° slanted notch above a 27-point bottom
+      // circle — ABC 00020182 cone #836) puts the LAST ring on the wrong side of the top rim around
+      // the step, and the closing stitch folds (71 crossing pairs, watertight, on-surface). Detect
+      // exactly that — a top sample below the last ring at its own angular fraction — and, for a
+      // non-periodic stack, roll back everything this face emitted and return false so the unroll's
+      // constrained triangulation meshes the true boundary. Periodic stacks (torus) keep the loft:
+      // the unroll mis-meshes elbows (see the backtrack slack above). Bands whose last ring clears the top rim are bit-for-bit unchanged.
+      const fracB = fracOf(progB, bottom), fracT = fracOf(progT, top);
+      const interpAt = (fr: number[], hh: number[], s: number): number => {
+        let lo = 0, hi = fr.length - 1;
+        if (s >= fr[hi]!) { // closing segment: last sample -> first sample at fraction 1
+          const d = 1 - fr[hi]!;
+          return hh[hi]! + (hh[0]! - hh[hi]!) * (d > 1e-12 ? (s - fr[hi]!) / d : 0);
+        }
+        while (hi - lo > 1) { const m = (lo + hi) >> 1; if (fr[m]! <= s) lo = m; else hi = m; }
+        const d = fr[hi]! - fr[lo]!;
+        return hh[lo]! + (hh[hi]! - hh[lo]!) * (d > 1e-12 ? (s - fr[lo]!) / d : 0);
+      };
+      const fLast = nRings > 1 ? (nRings - 1) / nRings : 0;
+      const hLast: number[] = [];
+      for (let j = 0; j < bottom.length; j++) { ti = 0; hLast.push(hB[j]! + (hTopAt(progB[j]!) - hB[j]!) * fLast); }
+      const slack = 1e-9 * Math.max(1, Math.abs(h1 - h0));
+      let crosses = false;
+      for (let i = 0; i < top.length && !crosses; i++) if (hT[i]! < interpAt(fracB, hLast, fracT[i]!) - slack) crosses = true;
+      if (crosses && !stackPeriodic) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
         ti = 0;
@@ -3202,7 +3236,7 @@ function tessellateRevolutionBand(
         stitchRings(verts, faceIds, prev, ring, fid, surface, sign);
         prev = ring;
       }
-      stitchRings(verts, faceIds, prev, top, fid, surface, sign, fracOf(progB, bottom), fracOf(progT, top));
+      stitchRings(verts, faceIds, prev, top, fid, surface, sign, fracB, fracT);
     }
     return true;
   };
