@@ -4032,7 +4032,16 @@ function tessellatePeriodicRegion(
   }
   if (rims.length > 2) { if (DBG) console.error(`[tess] fid=${fid} region bail: ${rims.length} rims`); return false; }
   if (!sPeriodic && rims.length === 2 && rims[0]!.wind === rims[1]!.wind) return false;
-  if (rims.length < 2 && !sDom) return false; // open stack (cylinder/cone) needs rims for S-bounds
+  // A CONE's stack is open on one side only: its apex (v = -r/sin, where the ring collapses) is a
+  // finite S-end. One rim + holes around the apex (a drill-point tip pierced by coolant holes,
+  // ABC 00046271-77: 6 tips each) is a cap from the rim to the apex — every other mesher refuses
+  // it (coneCap takes a single loop, the grid sees zero area for a seam-winding rim). Holes are
+  // required: a lone rim is coneCap's/coneSlice's, and closing a self-overlapping micro-face rim
+  // to the apex invents a cap that is not there (ABC 00056420 fid 620).
+  const coneApexS = !sDom && rims.length === 1 && holes.length > 0 && surface.kind === "CONICAL_SURFACE"
+    && (surface as unknown as { sin: number }).sin !== 0
+    ? -(surface as unknown as { r: number }).r / (surface as unknown as { sin: number }).sin : null;
+  if (rims.length < 2 && !sDom && coneApexS === null) return false; // open stack (cylinder) needs rims for S-bounds
 
   // Metric scales at the band's rough middle (for CDT conditioning, grid sizing, seam density).
   const sMid = rims.length === 2 ? (rims[0]!.meanS + rims[1]!.meanS) / 2 : sDom ? (sDom[0] + sDom[1]) / 2 : rims[0]!.meanS;
@@ -4184,14 +4193,23 @@ function tessellatePeriodicRegion(
     }
     rimLow = a; rimHigh = b;
   } else if (rims.length === 1) {
-    if (!sDom) return false;
     const rim = rims[0]!;
     // Enclosed side: material lies LEFT of the oriented rim, flipped with the face sense
     // (the sphere-cap convention; travel sign = wind sign).
     const leftIsPlusS = P === 0 ? rim.wind > 0 : rim.wind < 0;
     const enclosedPlusS = leftIsPlusS === (sign > 0);
-    if (enclosedPlusS) { rimLow = rim; sHighEnd = sDom[1]; }
-    else { rimHigh = rim; sLowEnd = sDom[0]; }
+    if (sDom) {
+      if (enclosedPlusS) { rimLow = rim; sHighEnd = sDom[1]; }
+      else { rimHigh = rim; sLowEnd = sDom[0]; }
+    } else if (coneApexS !== null) {
+      // Only the apex side of a cone rim is a finite region; the other side runs to infinity.
+      if (enclosedPlusS !== coneApexS > rim.meanS) {
+        if (DBG) console.error(`[tess] fid=${fid} region bail: cone rim encloses the side away from the apex`);
+        return false;
+      }
+      if (enclosedPlusS) { rimLow = rim; sHighEnd = coneApexS; }
+      else { rimHigh = rim; sLowEnd = coneApexS; }
+    } else return false;
   } else {
     if (!sDom) return false;
     sLowEnd = sDom[0]; sHighEnd = sDom[1];
