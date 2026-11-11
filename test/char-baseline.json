@@ -10,6 +10,14 @@
       "grid": 27
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.95,
+      "tiltMaxDeg": 2.9,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "be47f652db9eba3a97b93f8066276d15bd81f1890ab70a7c5090f8aa1e6629ca",
       "verts": 21876,
@@ -31,6 +39,14 @@
       "grid": 1
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.25,
+      "tiltMaxDeg": 3.9,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "825e52a0df6e1ac012317f150bb51debe302860e9433667b452e7db4d7426e83",
       "verts": 2377,
@@ -51,6 +67,14 @@
       "grid": 6
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 0,
+      "tiltMaxDeg": 0,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "c0ad5e6e59dcb84794b4a3451324f0bbf794fc16c7151dacf955d8ac76bf9b4e",
       "verts": 3078,
@@ -71,6 +95,14 @@
       "grid": 3
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.01,
+      "tiltMaxDeg": 1.1,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "3dcb2c4e0b143bed946d2611d5972aec9a573139ba0738f4a60a5f8429b5abe7",
       "verts": 2407,
@@ -91,6 +123,14 @@
       "grid": 4
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.01,
+      "tiltMaxDeg": 1.2,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "dd43897da1b819c0d2e21c9db1cba072c582ccb02eaa4cf8b15dbb2a4738358d",
       "verts": 4821,
@@ -113,7 +153,15 @@
       "thinFace": 6,
       "thinRing": 3
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 20,
+      "devRatio": 18.09,
+      "tiltMaxDeg": 87.6,
+      "slivers": 377
+    }
   },
   "everything": {
     "hash": "632fe618e748f06f2e80d648ec33822e0173984bb61ec8136bf2da799d86959a",
@@ -128,7 +176,15 @@
       "grid": 31,
       "sphereFull": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 3.25,
+      "tiltMaxDeg": 9.9,
+      "slivers": 0
+    }
   },
   "GoProHandlePod": {
     "hash": "d78fb46e008efc1fde0bfcb472f63b150f38952d2b6ce5f858c2bb8b04c603fb",
@@ -140,7 +196,15 @@
     "dispatch": {
       "grid": 121
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.14,
+      "tiltMaxDeg": 51,
+      "slivers": 314
+    }
   },
   "INDX M3x16 ISO7380-3 Torx button head": {
     "hash": "06f64f557e39fc54735c5030176d6c83a38e929c96a72466a98c555592802515",
@@ -152,7 +216,15 @@
     "dispatch": {
       "grid": 20
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 3.22,
+      "tiltMaxDeg": 9.5,
+      "slivers": 0
+    }
   },
   "INDX XT30 connector (818 sheets)": {
     "hash": "b5bd4f57ba6a75ccaf505f540916bfc5a91ac220dd8916cb0a0fb685a5ca2353",
@@ -164,7 +236,15 @@
     "dispatch": {
       "grid": 818
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.63,
+      "tiltMaxDeg": 7.4,
+      "slivers": 73
+    }
   },
   "Insta360GO3_case": {
     "hash": "61f936cf6ea2e9ee805fd06a02c2e127ae93e133bba2cd1c8c34ee0294486f1c",
@@ -176,7 +256,15 @@
     "dispatch": {
       "grid": 151
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.78,
+      "tiltMaxDeg": 40.2,
+      "slivers": 5
+    }
   },
   "LampenHalter": {
     "hash": "f07db8dfcd5ae83af2cbed42771cecfb99d6d713311340c83defcf05af5cdfea",
@@ -189,6 +277,14 @@
       "grid": 95
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.97,
+      "tiltMaxDeg": 3,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "5595f02e4941ef677332c13d4abf0e9155f7fc648fcca13bbcd83fb5680445f3",
       "verts": 9717,
@@ -208,7 +304,15 @@
     "dispatch": {
       "grid": 112
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 3.04,
+      "tiltMaxDeg": 7.2,
+      "slivers": 0
+    }
   },
   "newtestmodels/boomerang-v2": {
     "hash": "1d1a97290fd4b9d289fe645599f354ee2f64fb67ece298804f9d13bd16329270",
@@ -220,7 +324,15 @@
     "dispatch": {
       "grid": 143
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 8.51,
+      "tiltMaxDeg": 90,
+      "slivers": 662
+    }
   },
   "newtestmodels/bottle-cage": {
     "hash": "3b19dfc948a6449a5ec27532e5da86a9fad1bba830b155a8984642d9cda89d7c",
@@ -233,7 +345,15 @@
       "grid": 1143,
       "ribbon": 2
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 2,
+      "devRatio": 8.13,
+      "tiltMaxDeg": 82.5,
+      "slivers": 306
+    }
   },
   "newtestmodels/GARMIN_MOUNT_v15": {
     "hash": "c281ac8b55f1dcdc41e4dee276808133ad34567d9ab87366ce20a09840ae6bc3",
@@ -245,7 +365,15 @@
     "dispatch": {
       "grid": 43
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.01,
+      "tiltMaxDeg": 2.5,
+      "slivers": 0
+    }
   },
   "newtestmodels/Goblin Drone V2 (reinforced)": {
     "hash": "44f917e2d565b10deecf22e1475094d24bac0392e84ca9dc991f450f310a86f0",
@@ -258,7 +386,15 @@
       "grid": 618,
       "thinFace": 8
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.78,
+      "tiltMaxDeg": 4.2,
+      "slivers": 14
+    }
   },
   "newtestmodels/Goblin drone V3 (extra reinforced)": {
     "hash": "a52f8e5ae15ded46f00aa101a05403112fdac492d02dbf1c01a656f5cdf95c18",
@@ -271,7 +407,15 @@
       "grid": 912,
       "thinFace": 8
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.6,
+      "tiltMaxDeg": 35.4,
+      "slivers": 74
+    }
   },
   "newtestmodels/GoblinDrone": {
     "hash": "1a1f86c61d600d7aee07677c202806233dbcfb7154702dda2df997c429a2bc1c",
@@ -284,7 +428,15 @@
       "grid": 709,
       "thinFace": 7
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.28,
+      "tiltMaxDeg": 14,
+      "slivers": 3
+    }
   },
   "newtestmodels/Ontos_V2": {
     "hash": "79065d38c235485c883c2187f9554149ab7b30c7195271b0b8b7915709f5b6cb",
@@ -301,7 +453,15 @@
       "sphereCap": 1,
       "unroll": 40
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 4,
+      "devRatio": 23.51,
+      "tiltMaxDeg": 62.9,
+      "slivers": 1273
+    }
   },
   "newtestmodels/Ratched toothpaste tube squeezer v2": {
     "hash": "e365a32a3177488339453e6f45ebff4e5aad19ccb464d4609bddf08289648485",
@@ -314,7 +474,15 @@
       "grid": 1248,
       "thinFace": 5
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.91,
+      "tiltMaxDeg": 14,
+      "slivers": 39
+    }
   },
   "newtestmodels/Rugged Box Parametric V2": {
     "hash": "28c64e9d605ccaea0d38426b369c76f63aa9b67b4e807a288b146dce5bdadb3f",
@@ -326,7 +494,15 @@
     "dispatch": {
       "grid": 634
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.78,
+      "tiltMaxDeg": 4.5,
+      "slivers": 0
+    }
   },
   "newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2": {
     "hash": "d9c75a1c2c0b342107b567c1dbc9eacc369aba1769b145d81e737a6b94d77ddb",
@@ -339,7 +515,15 @@
       "grid": 5880,
       "thinFace": 25
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.48,
+      "tiltMaxDeg": 82.8,
+      "slivers": 385
+    }
   },
   "newtestmodels/trivenger": {
     "hash": "336935711767b2e8c74f9e6e832abb71b9c28e5d78ba26b5aa7fc8298de03dba",
@@ -351,7 +535,15 @@
     "dispatch": {
       "grid": 141
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.71,
+      "tiltMaxDeg": 15.4,
+      "slivers": 132
+    }
   },
   "newtestmodels/wallganizer": {
     "hash": "4b3985036a91c61020c47ea61786c885b4bbcd9fcdbdbeab11ee01b8b05a1dde",
@@ -365,7 +557,15 @@
       "grid": 13517,
       "thinFace": 25
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.5,
+      "tiltMaxDeg": 84.9,
+      "slivers": 16372
+    }
   },
   "roundedCube": {
     "hash": "894e9b3d29a06725e9836903ab55fb2502f90841c826585b0322d7c5722beacc",
@@ -378,6 +578,14 @@
       "grid": 26
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.21,
+      "tiltMaxDeg": 3,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "9c93029eb26b57a2c5515ec988f8049279311d2ece4e67902f6de8573ae650e0",
       "verts": 11723,
@@ -399,7 +607,15 @@
       "grid": 79,
       "unroll": 2
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 0.95,
+      "tiltMaxDeg": 27.1,
+      "slivers": 2
+    }
   },
   "sourcemodels/2827056": {
     "hash": "c66395a9efe449909fecc7ff1d9f77a1655de3de58adfb2d23a46471be84e264",
@@ -414,7 +630,15 @@
       "grid": 151,
       "unroll": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 0.46,
+      "tiltMaxDeg": 18.5,
+      "slivers": 93
+    }
   },
   "sourcemodels/filler": {
     "hash": "e712fb3e44348a78d1639dfed12e881628de699389b171a931fe17c7af923588",
@@ -426,7 +650,15 @@
     "dispatch": {
       "grid": 19
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 0.93,
+      "tiltMaxDeg": 4.5,
+      "slivers": 0
+    }
   },
   "sourcemodels/furniture-leg": {
     "hash": "53a46c1d0d9d0051f8eed479c24fa5826b27b08dc1bfd32677491a579368c388",
@@ -438,7 +670,15 @@
     "dispatch": {
       "grid": 257
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.34,
+      "tiltMaxDeg": 34.5,
+      "slivers": 44
+    }
   },
   "sourcemodels/GARMIN_MOUNT_v15": {
     "hash": "0f2daff1745e3109bc9284e9625a0fdcd6a2420ec0aecf54502b4029d3414c49",
@@ -450,7 +690,15 @@
     "dispatch": {
       "grid": 43
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.01,
+      "tiltMaxDeg": 2.5,
+      "slivers": 0
+    }
   },
   "sourcemodels/gear": {
     "hash": "",
@@ -473,7 +721,15 @@
     "dispatch": {
       "grid": 70
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.41,
+      "tiltMaxDeg": 4.6,
+      "slivers": 0
+    }
   },
   "sourcemodels/iso14649-demo": {
     "hash": "",
@@ -502,7 +758,15 @@
       "sphereFull": 2,
       "unroll": 4
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 5.39,
+      "tiltMaxDeg": 12,
+      "slivers": 105
+    }
   },
   "sourcemodels/nist_ctc_01_asme1_ap242-e1": {
     "hash": "4398383206e44a536a1747b576e7bfc64982340fa433d4455a61b39af3190807",
@@ -515,7 +779,15 @@
       "coneSlice": 4,
       "grid": 113
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.1,
+      "tiltMaxDeg": 1.9,
+      "slivers": 80464
+    }
   },
   "sourcemodels/nist_ctc_02_asme1_ap242-e2": {
     "hash": "",
@@ -538,7 +810,15 @@
     "dispatch": {
       "grid": 120
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.02,
+      "tiltMaxDeg": 1.8,
+      "slivers": 2
+    }
   },
   "sourcemodels/nist_ctc_04_asme1_ap242-e1": {
     "hash": "06bb991e20d4816cdf390ea30ccfd0e33743d50e27c42c2b4b4cfd4a433d9047",
@@ -550,7 +830,15 @@
     "dispatch": {
       "grid": 484
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 4.37,
+      "tiltMaxDeg": 16.4,
+      "slivers": 10611
+    }
   },
   "sourcemodels/nist_ctc_05_asme1_ap242-e1": {
     "hash": "78d7987ffbebb0973c61275ae5fa58ae3b13fcfed8ebe20764e98527ac4c371f",
@@ -565,7 +853,15 @@
       "grid": 109,
       "unroll": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.56,
+      "tiltMaxDeg": 3.7,
+      "slivers": 32
+    }
   },
   "sourcemodels/nist_ftc_06_asme1_ap242-e2": {
     "hash": "ab5deac3093442042eadba434e3746ab0ff337d26306f1ef084393f4e0419278",
@@ -578,7 +874,15 @@
       "coneSlice": 4,
       "grid": 183
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 1,
+      "crossFace": 10,
+      "flips": 0,
+      "devRatio": 5.05,
+      "tiltMaxDeg": 85.7,
+      "slivers": 6533
+    }
   },
   "sourcemodels/nist_ftc_07_asme1_ap242-e2": {
     "hash": "b213a333fbfe860b2dc79b21d7106bce4ab04abc3b43e11ccec244bdf19a2231",
@@ -591,7 +895,15 @@
       "coneSlice": 16,
       "grid": 290
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.98,
+      "tiltMaxDeg": 23.8,
+      "slivers": 149
+    }
   },
   "sourcemodels/nist_ftc_08_asme1_ap242-e1-tg": {
     "hash": "d38fcb4f541e12991b7dc6de63d12aa41c6ac90f41dff02dba7a17e03ea825d6",
@@ -601,7 +913,15 @@
     "nonManifoldEdges": 0,
     "volume": 503280.82,
     "dispatch": {},
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 0,
+      "tiltMaxDeg": 0,
+      "slivers": 243
+    }
   },
   "sourcemodels/nist_ftc_08_asme1_ap242-e2": {
     "hash": "6b1a45332d09a076cc6c4134387e46928ace7dc53c32d1b898273da57cb20d92",
@@ -614,7 +934,15 @@
       "band": 20,
       "grid": 227
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.2,
+      "tiltMaxDeg": 6.2,
+      "slivers": 0
+    }
   },
   "sourcemodels/nist_ftc_09_asme1_ap242-e1": {
     "hash": "11b56f11a5f7722172627d1600d56d3960f8f9b8e7ba86906794a2986ed16d60",
@@ -626,7 +954,15 @@
     "dispatch": {
       "grid": 163
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.02,
+      "tiltMaxDeg": 2.6,
+      "slivers": 0
+    }
   },
   "sourcemodels/nist_ftc_10_asme1_ap242-e2": {
     "hash": "b4c1bd8a9c04e37ad8051f7e94cc811df8579a9fdd9da0ebb59c530688f5d3e7",
@@ -639,7 +975,15 @@
       "coneSlice": 16,
       "grid": 266
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.1,
+      "tiltMaxDeg": 8.6,
+      "slivers": 928
+    }
   },
   "sourcemodels/nist_ftc_11_asme1_ap242-e2": {
     "hash": "fd528151e17051a4f66b5844e558593b554ca243e9ea444288bc096b10a04d83",
@@ -652,7 +996,15 @@
       "band": 6,
       "grid": 36
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.91,
+      "tiltMaxDeg": 9.7,
+      "slivers": 16
+    }
   },
   "sourcemodels/nist_stc_06_asme1_ap242-e3": {
     "hash": "caef26ba249938a5e00f59449081a6ee6b831e3a105665bfe85f980e10a0fd60",
@@ -668,7 +1020,15 @@
       "sphereCap": 3,
       "unroll": 4
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.93,
+      "tiltMaxDeg": 4.1,
+      "slivers": 3330
+    }
   },
   "sourcemodels/nist_stc_07_asme1_ap242-e3": {
     "hash": "c4a1430147c070555a12f24524b79ba868938d9b3759f3b02861dc6e421980dd",
@@ -681,7 +1041,15 @@
       "coneSlice": 16,
       "grid": 290
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.11,
+      "tiltMaxDeg": 6,
+      "slivers": 149
+    }
   },
   "sourcemodels/nist_stc_08_asme1_ap242-e3": {
     "hash": "02cfbb1d341cf49ccdd42fca4a34d3e44f62c55166aecfd73aa5b069d387d83b",
@@ -693,7 +1061,15 @@
     "dispatch": {
       "grid": 271
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2,
+      "tiltMaxDeg": 5.7,
+      "slivers": 4
+    }
   },
   "sourcemodels/nist_stc_09_asme1_ap242-e3": {
     "hash": "d71ff0985d4a0235880bc8d714ac905a2d96bb40999ba0987d75e757243fc69e",
@@ -705,7 +1081,15 @@
     "dispatch": {
       "grid": 125
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.02,
+      "tiltMaxDeg": 2.6,
+      "slivers": 0
+    }
   },
   "sourcemodels/nist_stc_10_asme1_ap242-e2": {
     "hash": "3987ff1bd24f1b81ad2dc7adcf9733b0a2ff2d7b182f37b6eb37de0f7e3aa99b",
@@ -720,7 +1104,15 @@
       "grid": 202,
       "unroll": 6
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.49,
+      "tiltMaxDeg": 6.1,
+      "slivers": 8
+    }
   },
   "sourcemodels/OpenVessel": {
     "hash": "07a9a3557f442e7ff7985a41689b6c9149e9739a7a43e846f4ca9697e9d4cadd",
@@ -734,7 +1126,15 @@
       "sphereCap": 1,
       "thinFace": 4
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 3,
+      "crossFace": 10,
+      "flips": 12,
+      "devRatio": 3.54,
+      "tiltMaxDeg": 52.5,
+      "slivers": 249
+    }
   },
   "sourcemodels/OpenVessel_extract-01": {
     "hash": "1fed4fae0a9821be6fca2c07d07be2d2de030d7a94b2661c9a4ba8ea550bae63",
@@ -747,7 +1147,15 @@
       "grid": 19,
       "sphereFull": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.72,
+      "tiltMaxDeg": 13.2,
+      "slivers": 0
+    }
   },
   "sourcemodels/OpenVessel_fusion360": {
     "hash": "eb290e95ef737016573a6c91cc290264514ecb791246dab1e634ac1b8a1a96e5",
@@ -761,7 +1169,15 @@
       "sphereCap": 1,
       "thinFace": 4
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 12,
+      "flips": 12,
+      "devRatio": 10.87,
+      "tiltMaxDeg": 86.6,
+      "slivers": 250
+    }
   },
   "sourcemodels/roundedCube": {
     "hash": "894e9b3d29a06725e9836903ab55fb2502f90841c826585b0322d7c5722beacc",
@@ -773,7 +1189,15 @@
     "dispatch": {
       "grid": 26
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.21,
+      "tiltMaxDeg": 3,
+      "slivers": 0
+    }
   },
   "sourcemodels/weldment_asm_solid": {
     "hash": "70eb955c4524ff0dbc658714a817f7249452aa7d18b210b011b4926fce860868",
@@ -785,7 +1209,15 @@
     "dispatch": {
       "grid": 1201
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.94,
+      "tiltMaxDeg": 7.5,
+      "slivers": 0
+    }
   },
   "sphere": {
     "hash": "a4f94aa76cbf517504e0215a42cf205b32b8717ff51ea0eaa1c07dbf82a0eaa6",
@@ -798,6 +1230,14 @@
       "sphereFull": 1
     },
     "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.85,
+      "tiltMaxDeg": 3.3,
+      "slivers": 0
+    },
     "remesh": {
       "hash": "936fa9968753f09a7da576f0689c9771ffeccd4d94694dcdeca87c16baa7a204",
       "verts": 1628,
@@ -817,7 +1257,15 @@
     "dispatch": {
       "bsplineFull": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 3.25,
+      "tiltMaxDeg": 9.9,
+      "slivers": 0
+    }
   },
   "SquAIRPot": {
     "hash": "7acab30a8d29606c9d4dede4277ad9a3c753406fd22683e69e5ddb4f2109ae3b",
@@ -829,7 +1277,15 @@
     "dispatch": {
       "grid": 188
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.15,
+      "tiltMaxDeg": 9.6,
+      "slivers": 0
+    }
   },
   "Tapered Collet Insert": {
     "hash": "320b142e9f6e3f56c746baa751105d2dfbcf911979682d52eeb12a17efcad009",
@@ -842,7 +1298,15 @@
       "grid": 12,
       "unroll": 1
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.82,
+      "tiltMaxDeg": 3.2,
+      "slivers": 1
+    }
   },
   "tool": {
     "hash": "57bd8a28c87847cfbc27cfd894aefe2c8436b31d7e20697a938bb916903232ad",
@@ -854,7 +1318,15 @@
     "dispatch": {
       "grid": 233
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.64,
+      "tiltMaxDeg": 8.4,
+      "slivers": 9
+    }
   },
   "Tool-free Z-Axis Belt Tensioner for Voron 2.4": {
     "hash": "eb7f63957333ac929ace583b276e47e19097a9671aa7acf487aa9fb24b35a663",
@@ -870,7 +1342,15 @@
       "grid": 4222,
       "thinFace": 6
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 2.56,
+      "tiltMaxDeg": 33.9,
+      "slivers": 843
+    }
   },
   "WN1452 K25x10 TX7 screw": {
     "hash": "84e94ad274d488ee76d227213bb69b799b4f6fcb33920e08204106691119cbbd",
@@ -882,6 +1362,14 @@
     "dispatch": {
       "grid": 35
     },
-    "skipped": {}
+    "skipped": {},
+    "audit": {
+      "folds": 0,
+      "crossFace": 0,
+      "flips": 0,
+      "devRatio": 1.28,
+      "tiltMaxDeg": 16.8,
+      "slivers": 0
+    }
   }
 }

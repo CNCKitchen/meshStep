@@ -29,19 +29,19 @@ export function selfIntersections(
 ): SelfIntersectionReport {
   const nT = I.length / 3;
   const lo = new Float64Array(nT * 3), hi = new Float64Array(nT * 3);
-  const ext: number[] = [];
+  const ext = new Float64Array(nT);
   let gx0 = Infinity, gy0 = Infinity, gz0 = Infinity;
   for (let t = 0; t < nT; t++) {
     for (let k = 0; k < 3; k++) {
       const a = P[I[t * 3]! * 3 + k]!, b = P[I[t * 3 + 1]! * 3 + k]!, c = P[I[t * 3 + 2]! * 3 + k]!;
       lo[t * 3 + k] = Math.min(a, b, c); hi[t * 3 + k] = Math.max(a, b, c);
     }
-    ext.push(Math.max(hi[t * 3]! - lo[t * 3]!, hi[t * 3 + 1]! - lo[t * 3 + 1]!, hi[t * 3 + 2]! - lo[t * 3 + 2]!));
+    ext[t] = Math.max(hi[t * 3]! - lo[t * 3]!, hi[t * 3 + 1]! - lo[t * 3 + 1]!, hi[t * 3 + 2]! - lo[t * 3 + 2]!);
     gx0 = Math.min(gx0, lo[t * 3]!); gy0 = Math.min(gy0, lo[t * 3 + 1]!); gz0 = Math.min(gz0, lo[t * 3 + 2]!);
   }
   const report: SelfIntersectionReport = { sameFace: 0, crossFace: 0, byFace: [] };
   if (nT === 0) return report;
-  ext.sort((x, y) => x - y);
+  ext.sort();
   const cell = Math.max(ext[nT >> 1]! * 2, 1e-9);
   // Grid: cell key -> triangle list. Keys pack the three cell coords with the grid's own extents.
   let gx1 = -Infinity, gy1 = -Infinity;
@@ -49,16 +49,6 @@ export function selfIntersections(
   const ci = (x: number, x0: number): number => Math.floor((x - x0) / cell);
   const NX = ci(gx1, gx0) + 1, NY = ci(gy1, gy0) + 1;
   const keyOf = (x: number, y: number, z: number): number => (z * NY + y) * NX + x;
-  const grid = new Map<number, number[]>();
-  for (let t = 0; t < nT; t++) {
-    const x0 = ci(lo[t * 3]!, gx0), x1 = ci(hi[t * 3]!, gx0);
-    const y0 = ci(lo[t * 3 + 1]!, gy0), y1 = ci(hi[t * 3 + 1]!, gy0);
-    const z0 = ci(lo[t * 3 + 2]!, gz0), z1 = ci(hi[t * 3 + 2]!, gz0);
-    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
-      const key = keyOf(x, y, z);
-      let arr = grid.get(key); if (!arr) grid.set(key, arr = []); arr.push(t);
-    }
-  }
   const v = (i: number, k: number): number => P[i * 3 + k]!;
   // Segment pq vs triangle abc (Möller–Trumbore), strict interior on both with relative epsilon.
   const segTri = (p: number, q: number, a: number, b: number, c: number): boolean => {
@@ -80,6 +70,33 @@ export function selfIntersections(
     return s > EPS && s < 1 - EPS;
   };
   const counts = new Map<string, number>();
+  // A Map holds at most 2^24 entries, so a big mesh (20M+ triangles) is gridded in X-SLABS of
+  // whole cell columns, each with its own map. A pair is still tested exactly once: only in the
+  // cell owning its overlap's min corner, and that cell lives in exactly one slab.
+  const cx0 = new Int32Array(nT), cx1 = new Int32Array(nT);
+  let inserts = 0;
+  for (let t = 0; t < nT; t++) {
+    cx0[t] = ci(lo[t * 3]!, gx0); cx1[t] = ci(hi[t * 3]!, gx0);
+    inserts += (cx1[t]! - cx0[t]! + 1) * (ci(hi[t * 3 + 1]!, gy0) - ci(lo[t * 3 + 1]!, gy0) + 1) * (ci(hi[t * 3 + 2]!, gz0) - ci(lo[t * 3 + 2]!, gz0) + 1);
+  }
+  const LIMIT = 4_000_000;
+  const slabW = Math.max(1, Math.floor((NX * LIMIT) / Math.max(1, inserts)));
+  const nSlab = Math.ceil(NX / slabW);
+  const slabTris: number[][] = Array.from({ length: nSlab }, () => []);
+  for (let t = 0; t < nT; t++) for (let k = Math.floor(cx0[t]! / slabW); k <= Math.floor(cx1[t]! / slabW); k++) slabTris[k]!.push(t);
+  for (let k = 0; k < nSlab; k++) {
+  const xa = k * slabW, xb = xa + slabW - 1;
+  const grid = new Map<number, number[]>();
+  for (const t of slabTris[k]!) {
+    const x0 = Math.max(xa, cx0[t]!), x1 = Math.min(xb, cx1[t]!);
+    const y0 = ci(lo[t * 3 + 1]!, gy0), y1 = ci(hi[t * 3 + 1]!, gy0);
+    const z0 = ci(lo[t * 3 + 2]!, gz0), z1 = ci(hi[t * 3 + 2]!, gz0);
+    for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+      const key = keyOf(x, y, z);
+      let arr = grid.get(key); if (!arr) grid.set(key, arr = []); arr.push(t);
+    }
+  }
+  slabTris[k] = [];
   for (const [cellKey, arr] of grid) {
     for (let i = 0; i < arr.length; i++) for (let j = i + 1; j < arr.length; j++) {
       const s = Math.min(arr[i]!, arr[j]!), t = Math.max(arr[i]!, arr[j]!);
@@ -100,6 +117,7 @@ export function selfIntersections(
       counts.set(key, (counts.get(key) ?? 0) + 1);
       if (fs === ft) report.sameFace++; else report.crossFace++;
     }
+  }
   }
   report.byFace = [...counts].sort((x, y) => y[1] - x[1]);
   return report;

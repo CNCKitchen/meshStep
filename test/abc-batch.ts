@@ -249,6 +249,20 @@ function writeReport(): void {
     md.push("");
   }
 
+  // ---- mesh quality (test/mesh-audit.ts): distribution + worst offenders among audited models ----
+  const audited = results.filter((r) => typeof r.devRatio === "number") as (Rec & { devRatio: number; tilt: number; slivers: number; folds: number; flips: number; worst?: string })[];
+  if (audited.length) {
+    const qs = (xs: number[], p: number): number => { const a = xs.slice().sort((x, y) => x - y); return a[Math.min(a.length - 1, Math.floor(p * a.length))]!; };
+    const dev = audited.map((r) => r.devRatio), tilt = audited.map((r) => r.tilt);
+    md.push("", "## Mesh quality (audit vs exact B-rep)", "",
+      `${audited.length} audited. Fold/flip models are FAIL above (buckets \`fold:*\` / \`flip:*\`).`, "",
+      "| metric | p50 | p90 | p99 | max | models over |", "|---|---|---|---|---|---|",
+      `| surface deviation / chordTol | ${qs(dev, 0.5)} | ${qs(dev, 0.9)} | ${qs(dev, 0.99)} | ${Math.max(...dev)} | >5: ${dev.filter((x) => x > 5).length}, >20: ${dev.filter((x) => x > 20).length} |`,
+      `| max normal tilt (deg) | ${qs(tilt, 0.5)} | ${qs(tilt, 0.9)} | ${qs(tilt, 0.99)} | ${Math.max(...tilt)} | >30: ${tilt.filter((x) => x > 30).length}, >60: ${tilt.filter((x) => x > 60).length} |`,
+      `| slivers (<1°) per model | ${qs(audited.map((r) => r.slivers), 0.5)} | ${qs(audited.map((r) => r.slivers), 0.9)} | ${qs(audited.map((r) => r.slivers), 0.99)} | ${Math.max(...audited.map((r) => r.slivers))} | >0: ${audited.filter((r) => r.slivers > 0).length} |`,
+      "", "Worst deviation:", "", "| model | dev/tol | tilt | worst |", "|---|---|---|---|");
+    for (const r of audited.slice().sort((a, b) => b.devRatio - a.devRatio).slice(0, 25)) md.push(`| ${r.file.split(/[\\/]/)[0]} | ${r.devRatio} | ${r.tilt} | ${r.worst ?? ""} |`);
+  }
   const reportPath = join(outBase, "report.md");
   writeFileSync(reportPath, md.join("\n"));
   writeFileSync(join(outBase, "summary.json"), JSON.stringify({

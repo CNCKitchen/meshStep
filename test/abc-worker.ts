@@ -13,6 +13,7 @@ import { buildBrep, type BrepModel } from "../src/brep/build.ts";
 import { tessellate } from "../src/mesh/tessellate.ts";
 import { orientConsistent } from "../src/mesh/orient.ts";
 import { estimateBrepSize } from "../src/step/measure.ts";
+import { auditMesh } from "./mesh-audit.ts";
 
 const SENT = "@@ABC@@";
 const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
@@ -71,6 +72,9 @@ interface Rec {
   openKinds?: Record<string, number>;
   domOpenKind?: string;
   diag?: number; solids?: number; producer?: string; ms: number;
+  // mesh-quality audit (test/mesh-audit.ts) — folds/flips FAIL a watertight model
+  folds?: number; flips?: number; crossFace?: number; devRatio?: number; tilt?: number; slivers?: number; worst?: string;
+  auditMs?: number;
 }
 
 function processOne(path: string): Rec {
@@ -88,7 +92,8 @@ function processOne(path: string): Rec {
   const targetEdge = diag > 0 ? 0.05 * diag : 1;
 
   let res: ReturnType<typeof tessellate>;
-  try { res = tessellate(brep, { chordTol, targetEdge, normalDev: 15 * Math.PI / 180 }); }
+  const mesherOf = new Map<number, string>();
+  try { res = tessellate(brep, { chordTol, targetEdge, normalDev: 15 * Math.PI / 180, trace: (f, m) => mesherOf.set(f, m) }); }
   catch (e) { return { status: "ERR", bucket: "error:tess", phase: "tess", err: errMsg(e), diag, solids: brep.solids.length, producer: producer(src), ms: Date.now() - t0 }; }
   try { orientConsistent(res.mesh, res.solidOfTri); } catch { /* orientation is cosmetic for watertightness */ }
 
@@ -119,8 +124,30 @@ function processOne(path: string): Rec {
     domOpenKind = Object.entries(byKind).sort((a, b) => b[1] - a[1])[0]?.[0];
   }
 
+  // Quality audit against the exact B-rep. A fold or an in-face flip is a mesher bug even on a
+  // watertight mesh — FAIL with a bucket naming the face's surface kind and mesher.
+  const ta = Date.now();
+  let q: ReturnType<typeof auditMesh> | null = null;
+  try { q = auditMesh({ positions: res.mesh.positions, indices: res.mesh.indices, faceOfTri: res.faceOfTri, solidOfTri: res.solidOfTri }, brep, { chordTol, samplesPerFace: 400 }); }
+  catch { q = null; }
+  const auditMs = Date.now() - ta;
+  const kindOfFace = new Map<number, string>();
+  for (const s of brep.solids) for (const f of s.faces) kindOfFace.set(f.faceId, f.surfaceKind);
+  const tag = (fid: number): string => `${normKind(kindOfFace.get(fid) ?? "?")}:${mesherOf.get(fid) ?? "?"}`;
+  const qual = q ? {
+    folds: q.folds, flips: q.flips, crossFace: q.crossFace, devRatio: Number(q.devRatio.toFixed(2)),
+    tilt: Number(q.tiltMaxDeg.toFixed(1)), slivers: q.slivers,
+    worst: q.worst.slice(0, 4).map((w) => `${w.kind}:${w.face}(${tag(w.face)})=${Number(w.value.toFixed(2))}`).join(" "),
+    auditMs,
+  } : { auditMs };
+
   const ok = wt.open === 0 && wt.nm === 0 && skippedTotal === 0;
+  const qualityBad = !!q && (q.folds > 0 || q.flips > 0);
   let bucket = "ok";
+  if (ok && qualityBad) {
+    const w = q!.worst.find((x) => x.kind === (q!.folds > 0 ? "fold" : "flip"))!;
+    bucket = `${w.kind}:${tag(w.face)}`;
+  }
   if (!ok) {
     const skippedKinds = Object.keys(res.stats.skipped);
     const unsupported = skippedKinds.filter((k) => k !== "untriangulated");
@@ -133,7 +160,7 @@ function processOne(path: string): Rec {
   }
 
   return {
-    status: ok ? "PASS" : "FAIL", bucket,
+    status: ok && !qualityBad ? "PASS" : "FAIL", bucket, ...qual,
     open: wt.open, nm: wt.nm, tris, facesTotal: res.stats.facesTotal, facesTess: res.stats.facesTessellated,
     skipped: skippedTotal > 0 ? res.stats.skipped : undefined,
     openKinds, domOpenKind, diag, solids: brep.solids.length, producer: prod, ms: Date.now() - t0,

@@ -15,11 +15,19 @@
 //    fine on one model.
 //  - metrics: open/non-manifold edge counts, signed volume, triangle count. The review gate for
 //    changes that legitimately alter float ordering (compare these by hand when the hash moves).
+//  - audit (test/mesh-audit.ts): mesh QUALITY against the exact B-rep — same-face folds, in-face
+//    flips, sampled surface deviation / chordTol, normal tilt, slivers. Drift in any of them is a
+//    DIFF; a drift for the worse is tagged WORSE. Folds and flips are also a HARD GATE: any model
+//    with either fails the run, even with --update (they are always bugs — a fold stays watertight
+//    and on-surface, so nothing else catches it). Known open cases sit in KNOWN_DEFECTS with their
+//    exact counts; a count above the entry fails, a count below asks to shrink the entry.
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import { importStep } from "../src/index.ts";
+import { buildBrep } from "../src/brep/build.ts";
+import { auditMesh } from "./mesh-audit.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const baselinePath = join(root, "test", "char-baseline.json");
@@ -43,6 +51,24 @@ const SLOW = new Set([
 // Small models also frozen through the OPTIONAL remesh pass (split/flip/collapse/smooth), so
 // remesh.ts refactors are protected too. Kept to fast models — remesh multiplies runtime.
 const REMESH = new Set(["cube", "cylinder", "cone", "sphere", "roundedCube", "cylinderWithHole", "LampenHalter", "chamferFillet"]);
+// Open quality defects, exact counts (fold/flip). Remove an entry once its fix lands.
+const KNOWN_DEFECTS: Record<string, { folds?: number; flips?: number; why: string }> = {
+  // B-spline param grid: ONE median metric per direction; where the parametrisation speed varies
+  // several-fold (rational fillets), triangles in the fast stretch span >90° of the fillet and face
+  // against the surface. A plain 3D-size refinement doubles the triangles without fixing it — needs
+  // a varying anisotropic metric (and fillet cross-arcs sampled to normalDeviation).
+  "ETA 6497-1 Movement Corrected": { flips: 20, why: "bspline grid under-resolved fillet (face 66554)" },
+  "newtestmodels/bottle-cage": { flips: 2, why: "bspline grid under-resolved fillets (25600, 61534)" },
+  "newtestmodels/Ontos_V2": { flips: 4, why: "bspline grid under-resolved fillets (91400, 91926, 95636, 96057)" },
+  // thinFace ribbon on 0.26mm-wide planar strips: rail pairing crosses (0.03° slivers), and the
+  // orientation consensus flips part of the strip.
+  "sourcemodels/OpenVessel": { folds: 3, flips: 12, why: "thinFace ribbon on planar strips 5890/5924/5958/5992" },
+  "sourcemodels/OpenVessel_fusion360": { flips: 12, why: "thinFace ribbon on planar strips 4982-4985" },
+  // Sphere lune whose two meridian edges meet at BOTH poles of the default frame, too wide (151°)
+  // for reorientSphere; the pole rows collapse to slivers. A clear-axis frame fixed it but broke the
+  // neighbouring lunes (>180° wide, no clearing axis) — needs per-lune frame choice.
+  "sourcemodels/nist_ftc_06_asme1_ap242-e2": { folds: 1, why: "sphere lune #3188 gridded in its pole-cornered frame" },
+};
 const QUANT = 1e9; // 1e-9 mm — same identity the pipeline's own weld/audit quantization implies
 
 interface MeshRecord {
@@ -54,7 +80,17 @@ interface MeshRecord {
   volume: number;
 }
 
+interface AuditRecord {
+  folds: number;
+  crossFace: number;
+  flips: number;
+  devRatio: number;
+  tiltMaxDeg: number;
+  slivers: number;
+}
+
 interface ModelRecord extends MeshRecord {
+  audit?: AuditRecord;
   dispatch: Record<string, number>;
   skipped: Record<string, number>;
   remesh?: MeshRecord;
@@ -119,10 +155,18 @@ function characterize(src: string, withRemesh: boolean): ModelRecord {
   // sort dispatch/skipped keys so the baseline JSON is diff-stable
   const sortRec = (o: Record<string, number>): Record<string, number> =>
     Object.fromEntries(Object.entries(o).sort(([x], [y]) => x.localeCompare(y)));
+  const a = auditMesh({
+    positions: res.mesh.positions, indices: res.mesh.indices, faceOfTri: res.faceOfTri, solidOfTri: res.solidOfTri,
+    instanceOfTri: res.instanceOfTri, frames: res.instances.map((i) => i.frame),
+  }, buildBrep(src), { chordTol: 0.01 }); // importStep's default surfaceDeviation
   const rec: ModelRecord = {
     ...meshRecord(res),
     dispatch: sortRec(dispatch),
     skipped: sortRec(res.stats.skipped),
+    audit: {
+      folds: a.folds, crossFace: a.crossFace, flips: a.flips,
+      devRatio: Number(a.devRatio.toFixed(2)), tiltMaxDeg: Number(a.tiltMaxDeg.toFixed(1)), slivers: a.slivers,
+    },
   };
   if (withRemesh) rec.remesh = meshRecord(importStep(src, { remesh: true }));
   return rec;
@@ -154,7 +198,7 @@ else if (!full) models = models.filter((m) => !SLOW.has(m.key));
 const baseline: Record<string, ModelRecord> = existsSync(baselinePath)
   ? JSON.parse(readFileSync(baselinePath, "utf8")) : {};
 const results: Record<string, ModelRecord> = {};
-let drift = 0;
+let drift = 0, qualityFail = 0;
 
 const writeBaseline = (): void => {
   const merged = { ...baseline, ...results };
@@ -173,6 +217,14 @@ for (const { key: m, file } of models) {
   }
   const ms = Date.now() - t0;
   results[m] = rec;
+  if (rec.audit) {
+    const known = KNOWN_DEFECTS[m];
+    for (const k of ["folds", "flips"] as const) {
+      const n = rec.audit[k], allowed = known?.[k] ?? 0;
+      if (n > allowed) { qualityFail++; console.log(`QUAL ${m.padEnd(40)} ${k}=${n}${allowed ? ` (known: ${allowed})` : ""} — always a mesher bug, see test/mesh-audit.ts`); }
+      else if (n < allowed) console.log(`QUAL ${m.padEnd(40)} ${k}=${n} < known ${allowed}: shrink/remove its KNOWN_DEFECTS entry`);
+    }
+  }
   const base = baseline[m];
   if (update || !base) {
     const tag = rec.error ? `ERROR ${rec.error.slice(0, 60)}` : `tris=${String(rec.tris).padStart(7)} open=${rec.openEdges} nm=${rec.nonManifoldEdges} vol=${rec.volume}`;
@@ -193,6 +245,13 @@ for (const { key: m, file } of models) {
   if (JSON.stringify(rec.skipped) !== JSON.stringify(base.skipped)) {
     diffs.push(`skipped ${JSON.stringify(base.skipped)} -> ${JSON.stringify(rec.skipped)}`);
   }
+  if (rec.audit && base.audit) {
+    // higher is worse for every audit metric
+    for (const k of ["folds", "crossFace", "flips", "devRatio", "tiltMaxDeg", "slivers"] as const) {
+      const was = base.audit[k], now = rec.audit[k];
+      if (now !== was) diffs.push(`${now > was ? "WORSE " : ""}audit.${k} ${was} -> ${now}`);
+    }
+  } else if (rec.audit && !base.audit) diffs.push("audit missing from baseline");
   if (base.remesh && rec.remesh) {
     if (rec.remesh.hash !== base.remesh.hash) diffs.push("remesh hash");
     for (const k of ["verts", "tris", "openEdges", "nonManifoldEdges", "volume"] as const) {
@@ -203,6 +262,11 @@ for (const { key: m, file } of models) {
   else console.log(`ok   ${m.padEnd(40)} tris=${String(rec.tris).padStart(7)} ${ms}ms`);
 }
 
+if (qualityFail) {
+  if (update) writeBaseline();
+  console.error(`${qualityFail} quality defect(s) (fold/flip) — fix them; KNOWN_DEFECTS is only for documented open cases`);
+  process.exit(1);
+}
 if (update) {
   // merge: keep baseline entries for models not run this time (e.g. slow ones skipped)
   writeBaseline();
