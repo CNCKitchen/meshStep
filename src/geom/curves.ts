@@ -386,6 +386,43 @@ export function analyzeEdgeCurve(t: Table, curveId: number, v0: Vec3, v1: Vec3, 
 }
 
 /**
+ * Adaptive bisection shared by the curve samplers, BREADTH-FIRST. `split(a, b, ta, tb)` returns
+ * the midpoint sample when the span (ta, tb) must be bisected, with a score (how badly), or null.
+ * Each span's refinement depends only on itself, so without the cap the result is exactly the
+ * classic depth-first left-to-right recursion. With the cap, that recursion spent the whole
+ * budget on the curve's start and left the tail at its coarse seeds: a closed 30-pole B-spline
+ * profile at tol/64 came back as 3,996 fine samples plus four chords cutting straight across it,
+ * a self-intersecting cap loop (ABC 00040340). Here every pass bisects all spans that need it;
+ * the pass that would overrun the cap bisects only the worst ones, so a capped curve degrades
+ * evenly instead.
+ */
+function refineSpans(
+  ts: number[], pts: Vec3[], maxPts: number,
+  split: (a: Vec3, b: Vec3, ta: number, tb: number) => { t: number; p: Vec3; score: number } | null,
+): { ts: number[]; pts: Vec3[] } {
+  for (;;) {
+    const cand: { i: number; t: number; p: Vec3; score: number }[] = [];
+    for (let i = 0; i + 1 < ts.length; i++) {
+      const r = split(pts[i]!, pts[i + 1]!, ts[i]!, ts[i + 1]!);
+      if (r) cand.push({ i, ...r });
+    }
+    const budget = maxPts - ts.length;
+    if (!cand.length || budget <= 0) break;
+    let use = cand;
+    if (cand.length > budget) use = cand.slice().sort((x, y) => y.score - x.score).slice(0, budget).sort((x, y) => x.i - y.i);
+    const nts: number[] = [], npts: Vec3[] = [];
+    let k = 0;
+    for (let i = 0; i < ts.length; i++) {
+      nts.push(ts[i]!); npts.push(pts[i]!);
+      if (k < use.length && use[k]!.i === i) { nts.push(use[k]!.t); npts.push(use[k]!.p); k++; }
+    }
+    ts = nts; pts = npts;
+    if (cand.length > budget) break;
+  }
+  return { ts, pts };
+}
+
+/**
  * Adaptively sample a Curve3 over [ta, tb] (defaults to its whole domain): start uniform, then
  * bisect any segment whose midpoint sags more than chordTol off the chord or that is longer than
  * maxSegLen. Returns ≥ 2 points, capped to stay bounded on pathological input.
@@ -397,10 +434,9 @@ export function sampleCurve(c: Curve3, chordTol: number, maxSegLen: number, ta =
   const pts = ts.map((t) => c.evaluate(t));
   const maxPts = 4000;
   const cosDev = Math.cos(Math.min(normalDev, Math.PI));
-  for (let i = 0; i + 1 < ts.length && ts.length < maxPts; ) {
-    const tm = (ts[i]! + ts[i + 1]!) / 2;
+  return refineSpans(ts, pts, maxPts, (a, b, t0, t1) => {
+    const tm = (t0 + t1) / 2;
     const pm = c.evaluate(tm);
-    const a = pts[i]!, b = pts[i + 1]!;
     const chord = dist(a, b);
     const mid = lerp(a, b, 0.5);
     const sag = dist(pm, mid);
@@ -411,10 +447,10 @@ export function sampleCurve(c: Curve3, chordTol: number, maxSegLen: number, ta =
       ? ((pm[0] - a[0]) * (b[0] - pm[0]) + (pm[1] - a[1]) * (b[1] - pm[1]) + (pm[2] - a[2]) * (b[2] - pm[2])) / (la * lb)
       : 1;
     if ((sag > chordTol || chord > maxSegLen || turnDot < cosDev) && la > 1e-9 && lb > 1e-9) {
-      ts.splice(i + 1, 0, tm); pts.splice(i + 1, 0, pm);
-    } else i++;
-  }
-  return pts;
+      return { t: tm, p: pm, score: Math.max(sag / Math.max(chordTol, 1e-300), chord / Math.max(maxSegLen, 1e-300), (1 - turnDot) / Math.max(1 - cosDev, 1e-12)) };
+    }
+    return null;
+  }).pts;
 }
 
 /** Evaluate a (possibly RATIONAL) B-spline curve at parameter u via de Boor in homogeneous space.
@@ -719,19 +755,20 @@ export function sampleEdgePolyline(
     // pile points into a micro-cluster; the CDT then fans every ~targetEdge interior vertex into
     // it, which looks far worse than the ≤ floor/4 chord deviation the merge leaves at the spot.
     const minSeg = Math.min(maxSegLen / 4, Math.max(4 * chordTol, 1e-4));
-    for (let i = 0; i + 1 < ts.length && ts.length < maxPts; ) {
-      const um = (ts[i]! + ts[i + 1]!) / 2;
+    pts = refineSpans(ts, pts, maxPts, (a, b, t0, t1) => {
+      const um = (t0 + t1) / 2;
       const pm = deBoor(degree, cps, knots, um, weights);
-      const a = pts[i]!, b = pts[i + 1]!;
       const sag = dist(pm, lerp(a, b, 0.5));
       const la = dist(a, pm), lb = dist(pm, b);
       const turnDot = la > 1e-9 && lb > 1e-9
         ? ((pm[0] - a[0]) * (b[0] - pm[0]) + (pm[1] - a[1]) * (b[1] - pm[1]) + (pm[2] - a[2]) * (b[2] - pm[2])) / (la * lb)
         : 1;
-      if ((sag > chordTol || dist(a, b) > maxSegLen || turnDot < cosDev) && la > minSeg && lb > minSeg) {
-        ts.splice(i + 1, 0, um); pts.splice(i + 1, 0, pm);
-      } else i++;
-    }
+      const chord = dist(a, b);
+      if ((sag > chordTol || chord > maxSegLen || turnDot < cosDev) && la > minSeg && lb > minSeg) {
+        return { t: um, p: pm, score: Math.max(sag / Math.max(chordTol, 1e-300), chord / Math.max(maxSegLen, 1e-300), (1 - turnDot) / Math.max(1 - cosDev, 1e-12)) };
+      }
+      return null;
+    }).pts;
     // Douglas–Peucker sweep (ε = chordTol/2, maxSegLen preserved): exporter noise leaves runs of
     // floor-length segments around each spike (and parametric speed collapse bunches the uniform
     // seeds the same way); DP collapses every such trail to the one vertex that actually deviates,
