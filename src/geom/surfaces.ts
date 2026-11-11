@@ -434,6 +434,13 @@ class ExtrusionSurface implements Surface {
     if (curve.closed) { this.uPeriod = curve.t1 - curve.t0; this.uSeam = curve.t0; }
     this.radii = new CurveRadiusTable(curve, this.axisUnit);
   }
+  /** A closed profile wraps u into [t0, t1): the unroll and the seam-spanning grids chart u past t1
+   *  (or before t0), and a B-spline basis curve clamps there. In range, u passes through untouched
+   *  (the modulo would perturb its last bits). */
+  private wrapU(u: number): number {
+    if (!this.periodicU || !this.uPeriod || (u >= this.curve.t0 && u < this.curve.t1)) return u;
+    return this.curve.t0 + (((u - this.curve.t0) % this.uPeriod) + this.uPeriod) % this.uPeriod;
+  }
   evaluate(u: number, v: number): Vec3 {
     if (this.periodicU && this.uPeriod) {
       u = this.curve.t0 + (((u - this.curve.t0) % this.uPeriod) + this.uPeriod) % this.uPeriod;
@@ -457,8 +464,12 @@ class ExtrusionSurface implements Surface {
     return [u, v];
   }
   normal(u: number, v: number): Vec3 {
+    // Wrap each probe on its own, like evaluate: unwrapped, a closed B-spline profile clamps both
+    // probes to t1 past the seam, the tangent vanishes and the normal fell back to +Z. The unroll
+    // orients every triangle by this normal, so the strip beyond u = t1 came out reversed (ABC
+    // 00021718 #172: 281 flipped slivers along the seam side).
     const e = 1e-5 * Math.max(1, this.curve.t1 - this.curve.t0);
-    const a = this.curve.evaluate(u - e), b = this.curve.evaluate(u + e);
+    const a = this.curve.evaluate(this.wrapU(u - e)), b = this.curve.evaluate(this.wrapU(u + e));
     const tang: Vec3 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
     const n = cross(tang, this.axis);
     const len = Math.hypot(n[0], n[1], n[2]);
@@ -543,10 +554,17 @@ class RevolutionSurface implements Surface {
     const k = dw * (1 - cu);
     return [w[0] * cu + cxw[0] * su + this.D[0] * k, w[1] * cu + cxw[1] * su + this.D[1] * k, w[2] * cu + cxw[2] * su + this.D[2] * k];
   }
+  /** A closed profile wraps v into [t0, t1), as ExtrusionSurface wraps u (in range: untouched). */
+  private wrapV(v: number): number {
+    if (!this.periodicV || !this.vPeriod || (v >= this.t0 && v < this.t1)) return v;
+    return this.t0 + (((v - this.t0) % this.vPeriod) + this.vPeriod) % this.vPeriod;
+  }
   private tangent(v: number): Vec3 {
     const e = 1e-5 * Math.max(1, this.t1 - this.t0);
-    const a = this.curve.evaluate(Math.max(this.t0, v - e));
-    const b = this.curve.evaluate(Math.min(this.t1, v + e));
+    // A closed profile has no ends: wrap the probes across the seam instead of clamping them (a
+    // clamp at t1 made the tangent vanish past the seam and the normal fell back to the axis).
+    const a = this.curve.evaluate(this.periodicV ? this.wrapV(v - e) : Math.max(this.t0, v - e));
+    const b = this.curve.evaluate(this.periodicV ? this.wrapV(v + e) : Math.min(this.t1, v + e));
     return sub(b, a);
   }
   evaluate(u: number, v: number): Vec3 {
@@ -585,6 +603,7 @@ class RevolutionSurface implements Surface {
     return [Math.atan2(sinA, cosA), v];
   }
   normal(u: number, v: number): Vec3 {
+    v = this.wrapV(v);
     const cu = Math.cos(u), su = Math.sin(u);
     const S = this.rotPoint(this.curve.evaluate(v), cu, su);
     const Su = cross(this.D, sub(S, this.A));        // parallel-circle tangent

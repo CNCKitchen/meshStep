@@ -58,6 +58,33 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   const s = makeSurface(t, 2, 1);
   check("degenerate curve: its extrusion is not periodic", !!s && !s.periodicU, `periodicU=${s?.periodicU} uPeriod=${s?.uPeriod}`);
 }
+// ---- closed B-spline profile: the surface normal wraps the periodic parameter like evaluate does.
+// The unroll charts a seam-spanning face past t1; the extrusion's normal there clamped both tangent
+// probes to t1 and fell back to +Z, the revolution's to its axis, and every triangle beyond the
+// seam was oriented against that (ABC 00021718 #172: 281 flipped slivers along the seam side).
+{
+  const loop = (ps: number[][]): string => {
+    const ids = ps.map((_, i) => 300 + i);
+    return [...ps.map((p, i) => pt(ids[i]!, p)),
+      `#1=B_SPLINE_CURVE_WITH_KNOTS('',3,(${ids.map((i) => `#${i}`).join(",")}),.UNSPECIFIED.,.T.,.F.,(4,1,1,4),(0.,1.,2.,3.),.UNSPECIFIED.);`].join("\n");
+  };
+  const near = (a: readonly number[], b: readonly number[]): boolean => dist(a, b) < 1e-9;
+  const fmt = (n: readonly number[]): string => n.map((x) => x.toFixed(4)).join(",");
+  const ex = makeSurface(table([loop([[10, 0, 0], [10, 10, 0], [-10, 10, 0], [-10, -10, 0], [10, -10, 0], [10, 0, 0]]),
+    `#203=DIRECTION('',(0.,0.,1.));`, `#204=VECTOR('',#203,5.);`, `#2=SURFACE_OF_LINEAR_EXTRUSION('',#1,#204);`].join("\n")), 2, 1)!;
+  check("closed extrusion: periodic in u", !!ex?.periodicU && ex.uPeriod === 3, `periodicU=${ex?.periodicU} uPeriod=${ex?.uPeriod}`);
+  for (const d of [0.05, -0.05]) {
+    const inside = ex.normal((d > 0 ? 0 : 3) + d, 0.5), past = ex.normal((d > 0 ? 3 : 0) + d, 0.5);
+    check(`closed extrusion: normal ${d > 0 ? "past t1" : "before t0"} matches the wrapped one`, near(inside, past), `${fmt(past)} vs ${fmt(inside)}`);
+  }
+  const rv = makeSurface(table([loop([[25, 0, 0], [25, 0, 5], [15, 0, 5], [15, 0, -5], [25, 0, -5], [25, 0, 0]]),
+    pt(210, [0, 0, 0]), `#211=DIRECTION('',(0.,0.,1.));`, `#212=AXIS1_PLACEMENT('',#210,#211);`, `#2=SURFACE_OF_REVOLUTION('',#1,#212);`].join("\n")), 2, 1)!;
+  check("closed revolution profile: periodic in v", !!rv?.periodicV && rv.vPeriod === 3, `periodicV=${rv?.periodicV} vPeriod=${rv?.vPeriod}`);
+  for (const d of [0.05, -0.05]) {
+    const inside = rv.normal(0.3, (d > 0 ? 0 : 3) + d), past = rv.normal(0.3, (d > 0 ? 3 : 0) + d);
+    check(`closed revolution profile: normal ${d > 0 ? "past t1" : "before t0"} matches the wrapped one`, near(inside, past), `${fmt(past)} vs ${fmt(inside)}`);
+  }
+}
 {
   // unwrap must return promptly on a non-positive period (formerly an infinite loop) and on a point
   // hundreds of millions of periods away (formerly ~5e8 single-period steps).
