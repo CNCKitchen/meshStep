@@ -287,19 +287,19 @@
     "skipped": {}
   },
   "newtestmodels/Ontos_V2": {
-    "hash": "c4371978d5b39e7ed01ccd53c851b5de1c57406ffb5ea80accc6d4187ec0b5d9",
-    "verts": 2847186,
-    "tris": 5694700,
+    "hash": "79065d38c235485c883c2187f9554149ab7b30c7195271b0b8b7915709f5b6cb",
+    "verts": 2843830,
+    "tris": 5687988,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2937196.013,
+    "volume": 2937305.518,
     "dispatch": {
-      "band": 273,
+      "band": 271,
       "cone": 7,
       "coneSlice": 1,
       "grid": 5036,
       "sphereCap": 1,
-      "unroll": 38
+      "unroll": 40
     },
     "skipped": {}
   },
@@ -388,9 +388,9 @@
     }
   },
   "sourcemodels/1797609in": {
-    "hash": "1f61dae41c51a80f4d79fe40cfdc58c82c97c845f1408fbdce7bebc075189bbf",
-    "verts": 9554,
-    "tris": 19200,
+    "hash": "6aac96c30ba64aa96dca07c0ce33670fa561ae56c19527786f5916a3ec963a4b",
+    "verts": 9566,
+    "tris": 19224,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 1.232,
@@ -402,9 +402,9 @@
     "skipped": {}
   },
   "sourcemodels/2827056": {
-    "hash": "5c34fc323f56f97ef6aa201a25d44a6419962cacd153b6fbf7073995746fb3c7",
-    "verts": 36142,
-    "tris": 72332,
+    "hash": "c66395a9efe449909fecc7ff1d9f77a1655de3de58adfb2d23a46471be84e264",
+    "verts": 36151,
+    "tris": 72350,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 4.29,
@@ -487,20 +487,20 @@
     "error": "meshStep: one body needs at least 101M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/jack_in_the_box": {
-    "hash": "9ca31e6b33cbabc12ecf5c3930b3e263618778cded299b8a9d7d14a35ead302a",
-    "verts": 69429,
-    "tris": 138634,
+    "hash": "15097167a909c071846d4291a72b3cc9121bf11e97db02759f68601a17f539d8",
+    "verts": 69394,
+    "tris": 138564,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12348.81,
+    "volume": 12348.743,
     "dispatch": {
-      "band": 44,
+      "band": 41,
       "coneCap": 1,
       "grid": 286,
       "region": 1,
       "sphereCap": 2,
       "sphereFull": 2,
-      "unroll": 1
+      "unroll": 4
     },
     "skipped": {}
   },
@@ -553,12 +553,12 @@
     "skipped": {}
   },
   "sourcemodels/nist_ctc_05_asme1_ap242-e1": {
-    "hash": "31fac34ce6f0a713c8161ef0a40f9295fc27648404dc6182ea595e646c2bc748",
-    "verts": 1529784,
-    "tris": 3059604,
+    "hash": "78d7987ffbebb0973c61275ae5fa58ae3b13fcfed8ebe20764e98527ac4c371f",
+    "verts": 1529393,
+    "tris": 3058822,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12695064.72,
+    "volume": 12695064.692,
     "dispatch": {
       "band": 36,
       "cone": 10,
@@ -655,12 +655,12 @@
     "skipped": {}
   },
   "sourcemodels/nist_stc_06_asme1_ap242-e3": {
-    "hash": "4da9cedc44b8d773c46b7d88508e86b532172b427e0c28e32a7dc36aa152eede",
-    "verts": 206922,
-    "tris": 413880,
+    "hash": "caef26ba249938a5e00f59449081a6ee6b831e3a105665bfe85f980e10a0fd60",
+    "verts": 206646,
+    "tris": 413328,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 3323533.525,
+    "volume": 3323533.323,
     "dispatch": {
       "band": 34,
       "cone": 2,
@@ -708,12 +708,12 @@
     "skipped": {}
   },
   "sourcemodels/nist_stc_10_asme1_ap242-e2": {
-    "hash": "025a068638a720d0f5fccd1113a7c7c9cb074ddc4179d3742ea105744dd94380",
-    "verts": 216592,
-    "tris": 433268,
+    "hash": "3987ff1bd24f1b81ad2dc7adcf9733b0a2ff2d7b182f37b6eb37de0f7e3aa99b",
+    "verts": 215070,
+    "tris": 430224,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 188348.459,
+    "volume": 188350.152,
     "dispatch": {
       "band": 40,
       "cone": 8,
@@ -832,12 +832,12 @@
     "skipped": {}
   },
   "Tapered Collet Insert": {
-    "hash": "d8d654554c8f1634ee7018b2fe0a73ecd1d294fdc510cdada547c0dcbd11419a",
-    "verts": 12640,
-    "tris": 25280,
+    "hash": "320b142e9f6e3f56c746baa751105d2dfbcf911979682d52eeb12a17efcad009",
+    "verts": 12643,
+    "tris": 25286,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 5629.672,
+    "volume": 5629.668,
     "dispatch": {
       "grid": 12,
       "unroll": 1
@@ -857,17 +857,17 @@
     "skipped": {}
   },
   "Tool-free Z-Axis Belt Tensioner for Voron 2.4": {
-    "hash": "1964d9ba1d04d7d2a7cf81e0a724022f8490f4660f0188bad411fdcbf951efd4",
-    "verts": 776283,
-    "tris": 1552574,
+    "hash": "eb7f63957333ac929ace583b276e47e19097a9671aa7acf487aa9fb24b35a663",
+    "verts": 777198,
+    "tris": 1554428,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 222561.192,
+    "volume": 222561.184,
     "dispatch": {
       "cone": 4,
-      "coneCap": 6,
+      "coneCap": 2,
       "coneSlice": 20,
-      "grid": 4218,
+      "grid": 4222,
       "thinFace": 6
     },
     "skipped": {}

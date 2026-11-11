@@ -152,5 +152,48 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   check("backtracking torus rim: watertight against its rims", res.diagnostics.nonManifoldEdges === 0, `nonManifold=${res.diagnostics.nonManifoldEdges}`);
 }
 
+// ---- cylinder band whose top rim backtracks by only 1° (jack_in_the_box cone #6986: a lobe B-spline
+// leaving its rim 0.6° backwards). The band loft runs every interior ring at the bottom rim's
+// angles, so even this small backtrack became a reversed column folded up the FULL band height;
+// the former 5%-of-a-turn slack let it through. The loft runs at the LOWER rim's angles, so the
+// curling rim is the bottom one (full circle above at z=20). Exact area = r·|∮ (zTop − z) du|.
+{
+  const r = 10, D = Math.PI / 180, zTop = 20;
+  // (u°, z): u decreasing; at u=-100 the rim steps 1° BACK while climbing, then runs on
+  const corners: [number, number][] = [[0, 10], [-100, 10], [-99, 12], [-110, 13], [-120, 10], [-360, 10]];
+  const uz: [number, number][] = [];
+  for (let i = 0; i + 1 < corners.length; i++) {
+    const [ua, za] = corners[i]!, [ub, zb] = corners[i + 1]!;
+    const n = Math.max(2, Math.ceil(Math.hypot((ub - ua) * D * r, zb - za) / 0.25));
+    for (let j = 0; j < n; j++) uz.push([(ua + ((ub - ua) * j) / n) * D, za + ((zb - za) * j) / n]);
+  }
+  const nC = uz.length + 1;
+  const lines = [...uz.map(([u, z], i) => pt(1000 + i, [r * Math.cos(u), r * Math.sin(u), z])),
+    `#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(${[...uz.map((_, i) => `#${1000 + i}`), "#1000"].join(",")}),.POLYLINE_FORM.,.T.,.F.,(2,${Array(nC - 2).fill(1).join(",")},2),(${Array.from({ length: nC }, (_, i) => `${i}.`).join(",")}),.UNSPECIFIED.);`,
+    `#11=VERTEX_POINT('',#1000);`, `#12=EDGE_CURVE('',#11,#11,#10,.T.);`, `#13=ORIENTED_EDGE('',*,*,#12,.T.);`, `#14=EDGE_LOOP('',(#13));`,
+    pt(20, [0, 0, zTop]), `#21=DIRECTION('',(0.,0.,1.));`, `#22=DIRECTION('',(1.,0.,0.));`, `#23=AXIS2_PLACEMENT_3D('',#20,#21,#22);`,
+    `#24=CIRCLE('',#23,${r});`, pt(25, [r, 0, zTop]), `#26=VERTEX_POINT('',#25);`,
+    `#27=EDGE_CURVE('',#26,#26,#24,.T.);`, `#28=ORIENTED_EDGE('',*,*,#27,.T.);`, `#29=EDGE_LOOP('',(#28));`,
+    pt(30, [0, 0, 0]), `#31=AXIS2_PLACEMENT_3D('',#30,#21,#22);`, `#32=CYLINDRICAL_SURFACE('',#31,${r});`,
+    `#33=FACE_BOUND('',#14,.T.);`, `#34=FACE_BOUND('',#29,.T.);`, `#35=ADVANCED_FACE('',(#33,#34),#32,.T.);`,
+    `#36=OPEN_SHELL('',(#35));`, `#37=SHELL_BASED_SURFACE_MODEL('',(#36));`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src);
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const a = I[t * 3]! * 3, b = I[t * 3 + 1]! * 3, c = I[t * 3 + 2]! * 3;
+    const e1 = [P[b]! - P[a]!, P[b + 1]! - P[a + 1]!, P[b + 2]! - P[a + 2]!], e2 = [P[c]! - P[a]!, P[c + 1]! - P[a + 1]!, P[c + 2]! - P[a + 2]!];
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  const walk = [...uz, [-2 * Math.PI, uz[0]![1]] as [number, number]];
+  let zu = 0;
+  for (let i = 0; i + 1 < walk.length; i++) zu += (zTop - (walk[i]![1] + walk[i + 1]![1]) / 2) * (walk[i + 1]![0] - walk[i]![0]);
+  const exact = r * Math.abs(zu);
+  const si = selfIntersections(P, I, res.faceOfTri);
+  check("1° rim backtrack on a cylinder band: no fold", si.sameFace === 0, `${si.sameFace} crossing pairs`);
+  check("1° rim backtrack on a cylinder band: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(2)} vs exact ${exact.toFixed(2)} mm²`);
+}
+
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
 console.log("geometry-regressions: all passed");

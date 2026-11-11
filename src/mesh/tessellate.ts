@@ -2118,31 +2118,28 @@ function tessellatePeriodicUnroll(
       return { p3: outP3, p2: auv.map(([a, s]) => toP2(a, s)) };
     };
     // Outer boundary: bottom left->right, then top right->left. The two sides joining the rims are
-    // the seam (same 3D line at seam and seam+period) -> weld closes it. A single chord per side is
-    // exact on a RULED stack (cylinder/cone: the seam side is a straight line), but on a CURVED
-    // stack — a torus band, the side runs along the tube circle — that chord cuts through the
-    // surface (Ontos tapered collet nut #92192: an 18° tube arc of r=49.7mm -> 0.48mm chord gouge).
-    // When the chord is out of tolerance, sample the side along its (u,v) segment at the face
-    // target; both sides reference the SAME evaluated points, so the weld still seals the seam.
-    // In (u,v) the samples lie on the original segment, so the polygon's simplicity is unchanged.
+    // the seam (same 3D line at seam and seam+period) -> weld closes it. A single chord per side
+    // fails twice over: on a CURVED stack (a torus band, the side runs along the tube circle) it
+    // cuts through the surface (Ontos tapered collet nut #92192: an 18° tube arc of r=49.7mm ->
+    // 0.48mm gouge), and even on a straight ruling the CDT cannot split a boundary segment, so an
+    // unsampled 12mm side beside 0.5mm interior spacing fans into 0.07° needles whose normals
+    // tilt 42° off the surface (jack_in_the_box cone #6986). So sample the side along its (u,v)
+    // segment at the face target; both sides reference the SAME evaluated points, so the weld
+    // still seals the seam. In (u,v) the samples lie on the original segment, so the polygon's
+    // simplicity is unchanged. (The seam-path and hole-splice rebuilds below sample the same way.)
     const joinRims = (b: { p3: Vec3[]; p2: P2[] }, t: { p3: Vec3[]; p2: P2[] }): { p3: Vec3[]; p2: P2[] } => {
       const plain = { p3: [...b.p3, ...t.p3.slice().reverse()], p2: [...b.p2, ...t.p2.slice().reverse()] };
-      const qB = b.p2[0]!, qT = t.p2[0]!, pB = b.p3[0]!, pT = t.p3[0]!;
+      const qB = b.p2[0]!, qT = t.p2[0]!, pB = b.p3[0]!;
       const at = (f: number): P2 => [qB[0] + (qT[0] - qB[0]) * f, qB[1] + (qT[1] - qB[1]) * f];
-      const ch = [pT[0] - pB[0], pT[1] - pB[1], pT[2] - pB[2]];
-      const chL2 = ch[0]! * ch[0]! + ch[1]! * ch[1]! + ch[2]! * ch[2]!;
-      let len = 0, sag = 0, prev = pB;
+      let len = 0, prev = pB;
       for (let i = 1; i <= 16; i++) {
         const p = surface.evaluate(...at(i / 16));
         len += Math.hypot(p[0] - prev[0], p[1] - prev[1], p[2] - prev[2]); prev = p;
-        const w = [p[0] - pB[0], p[1] - pB[1], p[2] - pB[2]];
-        const f = chL2 > 0 ? Math.max(0, Math.min(1, (w[0]! * ch[0]! + w[1]! * ch[1]! + w[2]! * ch[2]!) / chL2)) : 0;
-        sag = Math.max(sag, Math.hypot(w[0]! - ch[0]! * f, w[1]! - ch[1]! * f, w[2]! - ch[2]! * f));
       }
-      if (sag <= chordTol) return plain;
       const mid = at(0.5);
       const fT = faceTarget(surface, targetEdge, chordTol, normalDev, mid[0], mid[1]);
-      const n = Math.min(4096, Math.max(2, Math.ceil(len / Math.max(fT, 1e-9))));
+      const n = Math.min(4096, Math.ceil(len / Math.max(fT, 1e-9)));
+      if (n <= 1) return plain;
       const sq: P2[] = [], s3: Vec3[] = [];
       for (let i = 1; i < n; i++) { const q = at(i / n); sq.push(q); s3.push(surface.evaluate(q[0], q[1])); }
       const shiftQ = (q: P2): P2 => { const r: P2 = [q[0], q[1]]; r[c] += period; return r; };
@@ -2894,7 +2891,13 @@ function tessellateRevolutionBand(
       // 2-3x (Ontos tapered collet nut torus #92192: 7368 self-intersecting triangle pairs). This
       // was once exempted because the unroll then assumed a linear stack; it now unwraps periodic
       // stacks and samples curved seam sides (joinRims), so the torus band unrolls cleanly.
-      if (absWind > Math.abs(wind) + 0.05 * period) return false;
+      // NO slack beyond float noise: the loft runs every interior ring at the BOTTOM rim's angles, so
+      // even a 0.6° backtrack (a lobe B-spline leaving its rim slightly backwards, jack_in_the_box
+      // cone #6986) becomes a reversed column folded up the band's FULL height (covered 3x). The
+      // former 5% slack let four cone folds through (Ontos #92585/#94992 at 4.7%/1.3%). Measured
+      // over the local corpus: 1318 rims backtrack exactly 0, one by <1e-9 (noise), the rest by
+      // ≥ 2.7e-3 of a period — 1e-6 separates them with three decades to spare.
+      if (absWind > Math.abs(wind) + 1e-6 * period) return false;
       const h = stackPeriodic ? (Math.atan2(hsin, hcos) * stackPeriod) / TWO_PI : hsum / pts.length;
       rims.push({ pts, h, wind });
     }
@@ -3744,11 +3747,19 @@ function tessellateConeCap(
   }
   const rim: Vec3[] = [];
   const mouths: Vec3[] = []; // dropped edges' rim-side endpoints
+  const uses = new Map<number, number>();
+  for (const oe of outerLoop.edges) uses.set(oe.edgeId, (uses.get(oe.edgeId) ?? 0) + 1);
   for (const oe of outerLoop.edges) {
     const poly0 = sampled.get(oe.edgeId)!;
     const poly = oe.orient ? poly0 : poly0.slice().reverse();
     const a0 = dd(poly[0]!, apex) < 0.02 * slant, a1 = dd(poly[poly.length - 1]!, apex) < 0.02 * slant;
     if (a0 || a1) {
+      // Only a SLIT (walked out and back in this loop) or an edge collapsed onto the apex point is
+      // parametric. An apex-touching edge used ONCE is real boundary shared with a neighbour —
+      // a 16µm circle truncating the tip, closed by its own disc face (Voron Z-tensioner cone
+      // #74651): fanning over it orphaned the disc's rim and the micro-hole fill laid a second,
+      // reversed disc on top. Decline; the seam-bounded grid meshes the frustum on shared samples.
+      if (uses.get(oe.edgeId)! < 2 && poly.some((p) => dd(p, apex) > 1e-6)) return false;
       if (!(a0 && a1)) mouths.push(a0 ? poly[poly.length - 1]! : poly[0]!);
       continue;
     }
