@@ -2518,6 +2518,38 @@ function reorientSphere(s: Sphere, loops: BLoop[], sampled: Map<number, Vec3[]>)
   return new Sphere({ o: [c[0], c[1], c[2]], x: m, y: cross(z, m), z }, s.r);
 }
 
+/** The pole axis that keeps BOTH poles farthest from every boundary sample of a sphere patch (best
+ * of 256 Fibonacci directions on the half-sphere, by the smallest angular clearance), or null when
+ * no axis clears the boundary by at least ~3°, or the current axis already does as well. A
+ * last-resort reparametrisation for patches whose boundary crosses or grazes a pole, where the
+ * projected loop picks up arbitrary longitudes. */
+function sphereClearAxis(s: Sphere, loops: BLoop[], sampled: Map<number, Vec3[]>): Vec3 | null {
+  const c = s.f.o;
+  const dirs: Vec3[] = [];
+  for (const lp of loops) for (const oe of lp.edges) for (const p of sampled.get(oe.edgeId) ?? []) {
+    const dx = p[0] - c[0], dy = p[1] - c[1], dz = p[2] - c[2];
+    const L = Math.hypot(dx, dy, dz);
+    if (L > 1e-12) dirs.push([dx / L, dy / L, dz / L]);
+  }
+  if (dirs.length < 3) return null;
+  const stride = Math.max(1, Math.floor(dirs.length / 2000));
+  const clearance = (z: Vec3): number => { // max |cos| to either pole over the boundary: smaller is clearer
+    let m = 0;
+    for (let i = 0; i < dirs.length; i += stride) { const t = Math.abs(dot(dirs[i]!, z)); if (t > m) m = t; }
+    return m;
+  };
+  let best: Vec3 | null = null, bestC = clearance(s.f.z);
+  const N = 256, ga = Math.PI * (3 - Math.sqrt(5));
+  for (let i = 0; i < N; i++) {
+    const zc = 1 - (i + 0.5) / N; // upper half only: an axis and its negation are the same poles
+    const r = Math.sqrt(1 - zc * zc), th = ga * i;
+    const z: Vec3 = [r * Math.cos(th), r * Math.sin(th), zc];
+    const cl = clearance(z);
+    if (cl < bestC - 1e-9) { bestC = cl; best = z; }
+  }
+  return best && bestC < Math.cos(0.05) ? best : null;
+}
+
 /**
  * Strip zero-width POLE DARTS from a sphere face's loops. A face that contains a parametrisation
  * pole in its INTERIOR (an umbrella-valve dome: a full cap minus a slit lune that stops short of
@@ -5309,7 +5341,35 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
             || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
             || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
             || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)))
-            || (single && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)));
+            || (single && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+            // A BOUNDARY THROUGH A POLE (last resort — only reached when every mesher above
+            // declined). A perforated hemisphere whose great-circle rim runs over both default
+            // poles (ABC 00044535/00044791/00054689, 49 holes), a single loop climbing over a pole
+            // (00051856, 00048552), holes beside one (00048478, 00054220): pole samples project to
+            // arbitrary longitudes, the region band self-intersects and the grid drops constraints.
+            // Re-aim the sphere and retry region, then grid, per frame: the outer rim's plane
+            // normal (the rim becomes a parallel), the grid's patch-centred frame, and the axis
+            // whose poles clear every boundary sample the most.
+            || (() => {
+              const frames: Sphere[] = [];
+              const o = surface.f.o;
+              const frameOf = (z: Vec3): Sphere => {
+                const x = normalize(cross(z, Math.abs(z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+                return new Sphere({ o: [o[0], o[1], o[2]], x, y: cross(z, x), z }, surface.r);
+              };
+              const z = loopNormal(louter, sampled);
+              if (!single && z && Math.abs(dot(z, surface.f.z)) < 0.999) frames.push(frameOf(z));
+              const re = reorientSphere(surface, loops, sampled);
+              if (!single && re !== surface) frames.push(re);
+              const zc = sphereClearAxis(surface, loops, sampled);
+              if (zc) frames.push(frameOf(zc));
+              for (const fr of frames) {
+                if (DBG) console.error(`[tess] fid=${face.faceId} region/grid retried on a re-aimed sphere frame`);
+                if (mark(face.faceId, "region", tessellatePeriodicRegion(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
+                if (mark(face.faceId, "grid", tessellateParamGrid(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
+              }
+              return false;
+            })();
         }
       } else if (surface.kind === "CONICAL_SURFACE" && outer
         && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))
