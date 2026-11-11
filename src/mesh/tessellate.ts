@@ -27,6 +27,9 @@ const TWO_PI = Math.PI * 2;
 
 /** Diagnostics for the gapcheck harness (MESHSTEP_DEBUG=1); no-op in production/browser. */
 const DBG = typeof process !== "undefined" && !!process.env?.MESHSTEP_DEBUG;
+/** Grid results declined by the winding-outer under-coverage audit, kept per face so the dispatch
+ * can restore one when no later mesher takes the face (cleared per tessellate() call). */
+const declinedGrid = new Map<number, { verts: number[]; faceIds: number[] }>();
 type P2 = [number, number];
 
 export interface TessOptions {
@@ -1020,6 +1023,24 @@ function tessellateParamGrid(
       verts.length = v0; faceIds.length = f0; return false;
     }
     if (DBG) console.error(`[grid] fid=${fid} FOLD AUDIT: un-refined retry is fold-free`);
+  }
+  // WINDING-OUTER UNDER-COVERAGE. Under-coverage is normally tolerated (above), but a WINDING
+  // outer loop is closed by a period-spanning chord, and which side of the rim the CDT then fills
+  // is a guess: a single rim of a cap on a periodic B-spline can come back fully "realised" with
+  // the fill on the wrong side, leaving whole shared edges bare (ABC 00051576/00057267: three
+  // edges of a tip cap, 28 open edges against the neighbours). A dropped degenerate sliver bares
+  // a segment or two; bare whole edges prove the wrong region. Decline, so the cap and region
+  // meshers that own winding rims get the face. If none of them does, the dispatch restores this
+  // grid result (bare segments are often closed by the stitching passes, ABC 00031564), so the
+  // decline can never cost a face that meshes today.
+  if (outerWinds) {
+    let bare = 0, segs = 0;
+    for (const [k, m] of bound) { segs += m; if (!used.has(k)) bare++; }
+    if (bare > Math.max(3, 0.05 * segs)) {
+      if (DBG) console.error(`[grid] fid=${fid} winding outer leaves ${bare}/${segs} boundary segments bare — declined`);
+      declinedGrid.set(fid, { verts: verts.slice(v0), faceIds: faceIds.slice(f0) });
+      verts.length = v0; faceIds.length = f0; return false;
+    }
   }
   // SELF-OVERLAP SURGERY: a valid single-face triangulation is a disk — no 3D edge belongs to more
   // than two of its own triangles. Three or more means the projection folded and the CDT laid a
@@ -5211,6 +5232,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   let facesTotal = 0;
   let facesTessellated = 0;
   let facesDegenerate = 0;
+  declinedGrid.clear();
   // Collect diagnostics warnings for this run (module-level sink: tessellation is synchronous,
   // and the deep meshing code reports without threading a sink through every signature).
   beginWarnings();
@@ -5599,6 +5621,16 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       // apex projects to an arbitrary angle and the param grid loses a constraint.
       if (!ok && surface.kind === "CONICAL_SURFACE" && outer && face.loops.length === 1) {
         ok = mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign, true));
+      }
+      const kept = declinedGrid.get(face.faceId);
+      if (kept) {
+        declinedGrid.delete(face.faceId);
+        if (!ok) {
+          for (const x of kept.verts) verts.push(x);
+          for (const x of kept.faceIds) faceIds.push(x);
+          ok = mark(face.faceId, "grid", true);
+          if (DBG) console.error(`[tess] fid=${face.faceId} no mesher took the declined winding-outer face — grid result restored`);
+        }
       }
       // DEGENERATE face: its whole boundary samples to fewer than three weld-distinct points (a
       // face bounded only by a zero-length edge; a lens whose two arcs sag below chordTol and

@@ -487,16 +487,17 @@
     "error": "meshStep: one body needs at least 101M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/jack_in_the_box": {
-    "hash": "79db5dc043017e2d12463fd0676b0c19a677ffeee5e8c14275073d6932d3dfca",
-    "verts": 69402,
-    "tris": 138580,
+    "hash": "9d8c4131e61c5e4d5c5c173e9a00cc6642882b52f366c438de65192f95a6fc08",
+    "verts": 69471,
+    "tris": 138718,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12351.321,
+    "volume": 12350.521,
     "dispatch": {
       "band": 45,
       "coneCap": 1,
-      "grid": 287,
+      "grid": 286,
+      "region": 1,
       "sphereCap": 2,
       "sphereFull": 2
     },
