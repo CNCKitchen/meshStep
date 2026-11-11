@@ -30,6 +30,9 @@ const DBG = typeof process !== "undefined" && !!process.env?.MESHSTEP_DEBUG;
 /** Grid results declined by the winding-outer under-coverage audit, kept per face so the dispatch
  * can restore one when no later mesher takes the face (cleared per tessellate() call). */
 const declinedGrid = new Map<number, { verts: number[]; faceIds: number[] }>();
+/** Faces whose trim loops still self-intersect at 64× sampling (genuine overlap in the CAD file);
+ * cleared per tessellate() call. */
+const overlapFaces = new Set<number>();
 type P2 = [number, number];
 
 export interface TessOptions {
@@ -4343,10 +4346,11 @@ function tessellatePeriodicRegion(
   // A CONE's stack is open on one side only: its apex (v = -r/sin, where the ring collapses) is a
   // finite S-end. One rim + holes around the apex (a drill-point tip pierced by coolant holes,
   // ABC 00046271-77: 6 tips each) is a cap from the rim to the apex — every other mesher refuses
-  // it (coneCap takes a single loop, the grid sees zero area for a seam-winding rim). Holes are
-  // required: a lone rim is coneCap's/coneSlice's, and closing a self-overlapping micro-face rim
-  // to the apex invents a cap that is not there (ABC 00056420 fid 620).
-  const coneApexS = !sDom && rims.length === 1 && holes.length > 0 && surface.kind === "CONICAL_SURFACE"
+  // it (coneCap takes a single loop, the grid sees zero area for a seam-winding rim). A lone rim
+  // qualifies too when every cone mesher declined it (ABC 00036782), but not on a face whose trim
+  // loop genuinely overlaps itself: closing that micro-face rim to the apex invents a cap that is
+  // not there (00056420 fid 620).
+  const coneApexS = !sDom && rims.length === 1 && (holes.length > 0 || !overlapFaces.has(fid)) && surface.kind === "CONICAL_SURFACE"
     && (surface as unknown as { sin: number }).sin !== 0
     ? -(surface as unknown as { r: number }).r / (surface as unknown as { sin: number }).sin : null;
   if (rims.length < 2 && !sDom && coneApexS === null) return false; // open stack (cylinder) needs rims for S-bounds
@@ -5233,6 +5237,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   let facesTessellated = 0;
   let facesDegenerate = 0;
   declinedGrid.clear();
+  overlapFaces.clear();
   // Collect diagnostics warnings for this run (module-level sink: tessellation is synchronous,
   // and the deep meshing code reports without threading a sink through every signature).
   beginWarnings();
@@ -5412,6 +5417,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         }
         if (f === 64) {
           warn("boundary-self-intersects", face.faceId, "trim loops still self-intersect at 64× sampling density — genuine overlap in the CAD file, meshed as-is");
+          overlapFaces.add(face.faceId);
           if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} still self-intersecting at tol/64 — left as-is (genuine overlap)`);
           rescueCollapsed();
         }
