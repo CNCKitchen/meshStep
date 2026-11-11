@@ -283,6 +283,8 @@ class OffsetSurface implements Surface {
   base: Surface; dist: number;
   periodicU: boolean; periodicV?: boolean; uPeriod?: number; vPeriod?: number; uSeam?: number; vSeam?: number;
   uDomain?: [number, number]; vDomain?: [number, number];
+  /** Consecutive wrong-branch rescans in project() that found nothing closer (cost cap). */
+  private fruitlessScans = 0;
   constructor(base: Surface, dist: number) {
     this.base = base; this.dist = dist;
     this.periodicU = base.periodicU; this.periodicV = base.periodicV;
@@ -316,23 +318,73 @@ class OffsetSurface implements Surface {
     const clampU = (x: number): number => !this.periodicU && this.uDomain ? Math.min(Math.max(x, this.uDomain[0]), this.uDomain[1]) : x;
     const clampV = (x: number): number => !this.periodicV && this.vDomain ? Math.min(Math.max(x, this.vDomain[0]), this.vDomain[1]) : x;
     const res2 = (q: Vec3): number => (q[0] - p[0]) ** 2 + (q[1] - p[1]) ** 2 + (q[2] - p[2]) ** 2;
-    let S = this.evaluate(u, v), r2 = res2(S);
-    for (let it = 0; it < 8 && r2 > 1e-18; it++) {
-      const eu = 1e-7 * (1 + Math.abs(u)), ev = 1e-7 * (1 + Math.abs(v));
-      const a1 = this.evaluate(u + eu, v), a0 = this.evaluate(u - eu, v);
-      const b1 = this.evaluate(u, v + ev), b0 = this.evaluate(u, v - ev);
-      const Su: Vec3 = [(a1[0] - a0[0]) / (2 * eu), (a1[1] - a0[1]) / (2 * eu), (a1[2] - a0[2]) / (2 * eu)];
-      const Sv: Vec3 = [(b1[0] - b0[0]) / (2 * ev), (b1[1] - b0[1]) / (2 * ev), (b1[2] - b0[2]) / (2 * ev)];
-      const r: Vec3 = [S[0] - p[0], S[1] - p[1], S[2] - p[2]];
-      const A = dot(Su, Su), B = dot(Su, Sv), C = dot(Sv, Sv), det = A * C - B * B;
-      if (!(Math.abs(det) > 1e-24 * (A * C + 1e-300))) break;
-      const g1 = dot(Su, r), g2 = dot(Sv, r);
-      const nu = clampU(u - (C * g1 - B * g2) / det), nv = clampV(v - (A * g2 - B * g1) / det);
-      const S2 = this.evaluate(nu, nv), r2n = res2(S2);
-      if (!(r2n < r2)) break;
-      const moved = Math.abs(nu - u) + Math.abs(nv - v);
-      u = nu; v = nv; S = S2; r2 = r2n;
-      if (moved < 1e-12 * (1 + Math.abs(u) + Math.abs(v))) break;
+    const polish = (u: number, v: number): [number, number, number] => {
+      let S = this.evaluate(u, v), r2 = res2(S);
+      for (let it = 0; it < 8 && r2 > 1e-18; it++) {
+        const eu = 1e-7 * (1 + Math.abs(u)), ev = 1e-7 * (1 + Math.abs(v));
+        const a1 = this.evaluate(u + eu, v), a0 = this.evaluate(u - eu, v);
+        const b1 = this.evaluate(u, v + ev), b0 = this.evaluate(u, v - ev);
+        const Su: Vec3 = [(a1[0] - a0[0]) / (2 * eu), (a1[1] - a0[1]) / (2 * eu), (a1[2] - a0[2]) / (2 * eu)];
+        const Sv: Vec3 = [(b1[0] - b0[0]) / (2 * ev), (b1[1] - b0[1]) / (2 * ev), (b1[2] - b0[2]) / (2 * ev)];
+        const r: Vec3 = [S[0] - p[0], S[1] - p[1], S[2] - p[2]];
+        const A = dot(Su, Su), B = dot(Su, Sv), C = dot(Sv, Sv), det = A * C - B * B;
+        if (!(Math.abs(det) > 1e-24 * (A * C + 1e-300))) break;
+        const g1 = dot(Su, r), g2 = dot(Sv, r);
+        const nu = clampU(u - (C * g1 - B * g2) / det), nv = clampV(v - (A * g2 - B * g1) / det);
+        const S2 = this.evaluate(nu, nv), r2n = res2(S2);
+        if (!(r2n < r2)) break;
+        const moved = Math.abs(nu - u) + Math.abs(nv - v);
+        u = nu; v = nv; S = S2; r2 = r2n;
+        if (moved < 1e-12 * (1 + Math.abs(u) + Math.abs(v))) break;
+      }
+      return [u, v, r2];
+    };
+    let r2: number;
+    [u, v, r2] = polish(u, v);
+    // WRONG-BRANCH RESEED. When |dist| exceeds the basis's local radius of curvature, the basis
+    // nearest point of an offset-surface point can sit on ANOTHER stretch of the basis entirely
+    // (ABC 00056073: a -6.35 mm offset of an extruded profile — every point of one rail landed
+    // 11 mm off, all lifting to one (u,v) corner, and the face was dropped). Gauss-Newton cannot
+    // walk back from there. Only when the polished residual is still large: scan the parameter
+    // box on THIS surface for better seeds, polish the best few, and keep a strictly closer
+    // answer. The trigger is a miss well beyond what a legitimate off-surface query leaves:
+    // project() is routinely asked about points slightly OFF the surface (triangle centroids
+    // within chord tolerance), whose misses never improve. Measured: those stay ≤0.0132·|dist|
+    // (ABC 00040917, 43k queries — scanning them made that B-spline offset 6× slower), while
+    // real wrong branches start at 0.035·|dist| (00046089) and reach 1.74·|dist| (00056073).
+    // A rescan only ever keeps a strictly closer point, so a misplaced trigger costs time, not
+    // correctness — and that cost is capped: after 64 consecutive fruitless rescans this surface
+    // stops rescanning.
+    const tol = 0.02 * Math.abs(this.dist) + 1e-6;
+    if (r2 > tol * tol && this.fruitlessScans < 64) {
+      const curve = (this.base as { curve?: { t0: number; t1: number } }).curve;
+      const rangeOf = (dir: 0 | 1): [number, number] | null => {
+        const per = dir === 0 ? this.periodicU : this.periodicV;
+        const P = dir === 0 ? this.uPeriod : this.vPeriod;
+        const seam = (dir === 0 ? this.uSeam : this.vSeam) ?? 0;
+        if (per && P) return [seam, seam + P];
+        const dom = dir === 0 ? this.uDomain : this.vDomain;
+        if (dom) return dom;
+        if (dir === 0 && curve && this.base.kind === "SURFACE_OF_LINEAR_EXTRUSION") return [curve.t0, curve.t1];
+        return null;
+      };
+      const ru = rangeOf(0), rv = rangeOf(1);
+      if (ru || rv) {
+        const nU = ru ? 64 : 1, nV = rv ? 16 : 1;
+        const seeds: [number, number, number][] = [];
+        for (let i = 0; i < nU; i++) for (let j = 0; j < nV; j++) {
+          const su = ru ? ru[0] + ((ru[1] - ru[0]) * (i + 0.5)) / nU : u;
+          const sv = rv ? rv[0] + ((rv[1] - rv[0]) * (j + 0.5)) / nV : v;
+          seeds.push([su, sv, res2(this.evaluate(su, sv))]);
+        }
+        seeds.sort((a, b) => a[2] - b[2]);
+        const before = r2;
+        for (const [su, sv] of seeds.slice(0, 4)) {
+          const [pu, pv, pr2] = polish(su, sv);
+          if (pr2 < r2) { u = pu; v = pv; r2 = pr2; }
+        }
+        this.fruitlessScans = r2 < 0.25 * before ? 0 : this.fruitlessScans + 1;
+      }
     }
     return [u, v];
   }
