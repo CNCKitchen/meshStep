@@ -40,6 +40,13 @@ export interface Surface {
   spanRadius?(u0: number, u1: number, v0: number, v1: number): number;
   /** With spanRadius: the parameter direction (0 = u, 1 = v) along which the profile curves. */
   profileAxis?: 0 | 1;
+  /** Surfaces of revolution whose curvatureRadius() leaves out the bend AROUND the axis (torus).
+   *  The largest column angle du that keeps every parallel in [v0, v1] within chordTol and
+   *  normalDev, so a mesher that spaces columns uniformly in u can size them for the face's most
+   *  demanding parallel. A parallel whose columns are already shorter than `floor` (its radius
+   *  times du) asks for nothing finer: at a horn torus's pinch the parallels collapse to a point
+   *  while the normal still turns with u. Infinity when no parallel constrains. */
+  parallelColumnAngle?(v0: number, v1: number, chordTol: number, normalDev: number, floor: number): number;
 }
 
 class Plane implements Surface {
@@ -170,6 +177,30 @@ class Torus implements Surface {
     return normalize(add(scale(ring, Math.cos(v)), scale(this.f.z, Math.sin(v))));
   }
   curvatureRadius(): number { return this.rMin; } // tube radius dominates
+  // On the parallel at v (radius ρ = |R + r cos v|) a column chord du leaves the surface by
+  // K·du²/8 with K = ρ|cos v| and turns the normal by |cos v|·du. K peaks at an end of the range,
+  // on an equator (v = kπ), or where cos v = -R / 2r, and |cos v| at an end or an equator: those
+  // points are always sampled, so with floor 0 the result is exact. The floor term varies
+  // smoothly in between and is sampled.
+  parallelColumnAngle(v0: number, v1: number, chordTol: number, normalDev: number, floor: number): number {
+    const R = this.rMaj, r = this.rMin;
+    const T = 2 * Math.PI;
+    let lo = Math.min(v0, v1), hi = Math.max(v0, v1);
+    if (!(hi - lo < T)) { lo = 0; hi = T; } // a whole turn (or a wild range): every parallel
+    const at = [lo, hi];
+    const crit = [0, Math.PI];
+    if (Math.abs(R) < 2 * Math.abs(r)) { const a = Math.acos(-R / (2 * r)); crit.push(a, -a); }
+    for (const c of crit) for (let k = Math.ceil((lo - c) / T); c + k * T <= hi; k++) at.push(c + k * T);
+    if (floor > 0) for (let i = 1; i < 32; i++) at.push(lo + ((hi - lo) * i) / 32);
+    let du = Infinity;
+    for (const v of at) {
+      const cv = Math.abs(Math.cos(v)), rho = Math.abs(R + r * Math.cos(v));
+      const K = rho * cv;
+      const need = Math.min(K > 1e-300 ? Math.sqrt((8 * chordTol) / K) : Infinity, cv > 1e-12 ? normalDev / cv : Infinity);
+      du = Math.min(du, Math.max(need, rho > 0 ? floor / rho : Infinity));
+    }
+    return du;
+  }
 }
 
 /**

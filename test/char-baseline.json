@@ -439,12 +439,12 @@
     }
   },
   "newtestmodels/Ontos_V2": {
-    "hash": "79065d38c235485c883c2187f9554149ab7b30c7195271b0b8b7915709f5b6cb",
-    "verts": 2843830,
-    "tris": 5687988,
+    "hash": "f73d514f7d02757f0b9faec2f78c948e9dead7e3483f22eb58474762d5bae109",
+    "verts": 2843938,
+    "tris": 5688204,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2937305.518,
+    "volume": 2937305.516,
     "dispatch": {
       "band": 271,
       "cone": 7,
@@ -505,12 +505,12 @@
     }
   },
   "newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2": {
-    "hash": "d9c75a1c2c0b342107b567c1dbc9eacc369aba1769b145d81e737a6b94d77ddb",
-    "verts": 1726080,
-    "tris": 3452564,
+    "hash": "812f08765337d8dd71bb2c073d03d365ac682a9c13496d2866f53f3b45f1820f",
+    "verts": 1726187,
+    "tris": 3452778,
     "openEdges": 0,
     "nonManifoldEdges": 2,
-    "volume": 1258861.307,
+    "volume": 1258861.759,
     "dispatch": {
       "grid": 5880,
       "thinFace": 25
@@ -1309,12 +1309,12 @@
     }
   },
   "tool": {
-    "hash": "57bd8a28c87847cfbc27cfd894aefe2c8436b31d7e20697a938bb916903232ad",
-    "verts": 31137,
-    "tris": 62274,
+    "hash": "b946b35ba8e0440f62bef3f3388049240911594c5ce230fb69b942abb9cc98fb",
+    "verts": 31305,
+    "tris": 62610,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2438.024,
+    "volume": 2438.055,
     "dispatch": {
       "grid": 233
     },
@@ -1324,7 +1324,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 1.64,
-      "tiltMaxDeg": 8.4,
+      "tiltMaxDeg": 8.2,
       "slivers": 9
     }
   },

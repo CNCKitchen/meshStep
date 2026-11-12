@@ -389,5 +389,55 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   check("slotted rim under a coarse circle: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
 }
 
+// ---- fat torus (R < 2r), inner side (ABC 00036882 #255: R 240, r 239). The grid mesher spaces its
+// columns uniformly in u at the face's median parallel and sized them by the tube radius alone, but
+// here the bend around the axis is the tighter one: a chord spanning du on the parallel at v leaves
+// the surface by |(R + r cos v) cos v|·du²/8. The patch below (u 0-90°, v 127-170°) got 23° columns
+// and edge midpoints 4.8x the chord tolerance off the surface.
+{
+  const R = 240, r = 239, D = Math.PI / 180, u0 = 0, u1 = 90 * D, v0 = 127 * D, v1 = 170 * D, tol = 0.2;
+  const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
+  const dir = (id: number, d: number[]): string => `#${id}=DIRECTION('',(${d.map((x) => x.toFixed(12)).join(",")}));`;
+  const pt9 = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.map((x) => x.toFixed(9)).join(",")}));`;
+  const lines = [pt9(1, [0, 0, 0]), dir(2, [0, 0, 1]), dir(3, [1, 0, 0]), `#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);`, `#5=TOROIDAL_SURFACE('',#4,${R},${r});`,
+    pt9(20, onT(u0, v0)), pt9(21, onT(u1, v0)), pt9(22, onT(u1, v1)), pt9(23, onT(u0, v1)),
+    ...[10, 11, 12, 13].map((id) => `#${id}=VERTEX_POINT('',#${id + 10});`)];
+  // parallels at v0 (#30) and v1 (#31); tube circles at u0 (#32) and u1 (#33)
+  for (const [id, v] of [[30, v0], [31, v1]] as const) lines.push(pt9(id + 100, [0, 0, r * Math.sin(v)]), `#${id + 200}=AXIS2_PLACEMENT_3D('',#${id + 100},#2,#3);`, `#${id}=CIRCLE('',#${id + 200},${(R + r * Math.cos(v)).toFixed(9)});`);
+  for (const [id, u] of [[32, u0], [33, u1]] as const) lines.push(pt9(id + 100, [R * Math.cos(u), R * Math.sin(u), 0]), dir(id + 300, [-Math.sin(u), Math.cos(u), 0]), dir(id + 400, [Math.cos(u), Math.sin(u), 0]), `#${id + 200}=AXIS2_PLACEMENT_3D('',#${id + 100},#${id + 300},#${id + 400});`, `#${id}=CIRCLE('',#${id + 200},${r});`);
+  lines.push(`#40=EDGE_CURVE('',#10,#11,#30,.T.);`, `#41=EDGE_CURVE('',#12,#11,#33,.T.);`, `#42=EDGE_CURVE('',#13,#12,#31,.T.);`, `#43=EDGE_CURVE('',#13,#10,#32,.T.);`,
+    `#50=ORIENTED_EDGE('',*,*,#40,.T.);`, `#51=ORIENTED_EDGE('',*,*,#41,.F.);`, `#52=ORIENTED_EDGE('',*,*,#42,.F.);`, `#53=ORIENTED_EDGE('',*,*,#43,.T.);`,
+    `#60=EDGE_LOOP('',(#50,#51,#52,#53));`, `#61=FACE_OUTER_BOUND('',#60,.T.);`, `#62=ADVANCED_FACE('',(#61),#5,.T.);`, `#63=OPEN_SHELL('',(#62));`, `#64=SHELL_BASED_SURFACE_MODEL('',(#63));`);
+  const tor = makeSurface(table(lines.slice(0, 5).join("\n")), 5, 1)!;
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9 * Math.max(1, Math.abs(b));
+  // floor 0: the step is exact - the chord term at the most bent parallel, or the normal term
+  const col = (a: number, b: number, tolC: number, nd: number, fl = 0): number => tor.parallelColumnAngle!(a * D, b * D, tolC, nd, fl);
+  const K = (v: number): number => Math.abs((R + r * Math.cos(v)) * Math.cos(v));
+  const chordDu = (k: number, tolC: number): number => Math.sqrt((8 * tolC) / k);
+  check("fat torus: widest parallel of the patch sets the column angle", near(col(127, 170, tol, 1), chordDu(K(v0), tol)), `${col(127, 170, tol, 1)} vs ${chordDu(K(v0), tol)}`);
+  check("fat torus: column angle peaks inside the range where cos v = -R/2r", near(col(100, 140, tol, 1), chordDu((R * R) / (4 * r), tol)), `${col(100, 140, tol, 1)} vs ${chordDu((R * R) / (4 * r), tol)}`);
+  check("fat torus: a whole turn sees the outer equator", near(col(-180, 180, tol, 1), chordDu(R + r, tol)) && near(col(300, 400, tol, 1), chordDu(R + r, tol)), `${col(-180, 180, tol, 1)}, ${col(300, 400, tol, 1)}`);
+  check("fat torus: the normal term binds at the innermost parallel", near(col(127, 180, 1e3, 0.2), 0.2), `${col(127, 180, 1e3, 0.2)} vs 0.2`);
+  // the innermost parallel has radius 1 mm: a 6 mm floor exempts it; the 15 mm one at 160° binds
+  const rho160 = R + r * Math.cos(160 * D);
+  check("fat torus: parallels shorter than the floor ask for nothing finer", Math.abs(col(160, 180, 1e3, 0.2, 6) - 6 / rho160) < 0.05 * (6 / rho160), `${col(160, 180, 1e3, 0.2, 6)} vs ~${6 / rho160}`);
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src, { surfaceDeviation: tol, maxEdge: 200, normalDeviation: 60 });
+  const P = res.mesh.positions, I = res.mesh.indices;
+  const offT = (p: number[]): number => Math.abs(Math.hypot(Math.hypot(p[0]!, p[1]!) - R, p[2]!) - r);
+  let area = 0, devEdge = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const V = [0, 1, 2].map((k) => [P[I[t * 3 + k]! * 3]!, P[I[t * 3 + k]! * 3 + 1]!, P[I[t * 3 + k]! * 3 + 2]!]);
+    for (let e = 0; e < 3; e++) devEdge = Math.max(devEdge, offT([0, 1, 2].map((k) => (V[e]![k]! + V[(e + 1) % 3]![k]!) / 2)));
+    const e1 = [0, 1, 2].map((k) => V[1]![k]! - V[0]![k]!), e2 = [0, 1, 2].map((k) => V[2]![k]! - V[0]![k]!);
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  const exact = r * (u1 - u0) * (R * (v1 - v0) + r * (Math.sin(v1) - Math.sin(v0)));
+  const si = selfIntersections(P, I, res.faceOfTri);
+  check("fat torus inner patch: edge chords within 1.5x the chord tolerance", devEdge < 1.5 * tol, `${(devEdge / tol).toFixed(2)}x`);
+  check("fat torus inner patch: no fold", si.sameFace === 0, `${si.sameFace} crossing pairs`);
+  check("fat torus inner patch: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(2)} vs exact ${exact.toFixed(2)} mm²`);
+}
+
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
 console.log("geometry-regressions: all passed");
