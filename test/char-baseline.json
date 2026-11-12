@@ -141,9 +141,9 @@
     }
   },
   "ETA 6497-1 Movement Corrected": {
-    "hash": "77c78ac2ee97333b81d85da1cdd568bb0eec6cb357066babffb278876b5ae245",
-    "verts": 569399,
-    "tris": 1138974,
+    "hash": "3e264bdaca2639b553ee0b5cec1450f72cd4871e30cadd3a5b9c3f01d27371a8",
+    "verts": 569452,
+    "tris": 1139080,
     "openEdges": 0,
     "nonManifoldEdges": 0,
     "volume": 2735.764,
@@ -187,12 +187,12 @@
     }
   },
   "GoProHandlePod": {
-    "hash": "d78fb46e008efc1fde0bfcb472f63b150f38952d2b6ce5f858c2bb8b04c603fb",
-    "verts": 331984,
-    "tris": 663976,
+    "hash": "de12dece4d432f98698560e8855311680394a20cd96b983db96a0844318cca80",
+    "verts": 332072,
+    "tris": 664152,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 34354.523,
+    "volume": 34354.624,
     "dispatch": {
       "grid": 121
     },
@@ -201,7 +201,7 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.14,
+      "devRatio": 1.93,
       "tiltMaxDeg": 51,
       "slivers": 314
     }
@@ -247,12 +247,12 @@
     }
   },
   "Insta360GO3_case": {
-    "hash": "61f936cf6ea2e9ee805fd06a02c2e127ae93e133bba2cd1c8c34ee0294486f1c",
-    "verts": 29361,
-    "tris": 58742,
+    "hash": "76abe64219ccca9fc769c41cdda43815b98c44d70700f647f730405f0959c1e0",
+    "verts": 29427,
+    "tris": 58874,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 5324.203,
+    "volume": 5324.063,
     "dispatch": {
       "grid": 151
     },
@@ -261,7 +261,7 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.78,
+      "devRatio": 1.71,
       "tiltMaxDeg": 40.2,
       "slivers": 5
     }
@@ -295,12 +295,12 @@
     }
   },
   "MicHolder_Inserts": {
-    "hash": "96f0edb34de4768068802127d9dfe2498a4c57ee8af04fda8a1a086278d19985",
-    "verts": 73231,
-    "tris": 146462,
+    "hash": "2d82b4141e51cf46b4766fc76a2be61b87392546216c6911048163741875a92f",
+    "verts": 73505,
+    "tris": 147010,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 82619.875,
+    "volume": 82620.085,
     "dispatch": {
       "grid": 112
     },
@@ -397,12 +397,12 @@
     }
   },
   "newtestmodels/Goblin drone V3 (extra reinforced)": {
-    "hash": "a52f8e5ae15ded46f00aa101a05403112fdac492d02dbf1c01a656f5cdf95c18",
-    "verts": 124787,
-    "tris": 249818,
+    "hash": "b698aea8173a4ac6c0e9b1e55620059c09fbcd6d28b7f35406c3673a1d07fc52",
+    "verts": 124859,
+    "tris": 249962,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 28945.484,
+    "volume": 28945.516,
     "dispatch": {
       "grid": 912,
       "thinFace": 8
@@ -439,12 +439,12 @@
     }
   },
   "newtestmodels/Ontos_V2": {
-    "hash": "f73d514f7d02757f0b9faec2f78c948e9dead7e3483f22eb58474762d5bae109",
-    "verts": 2843938,
-    "tris": 5688204,
+    "hash": "94140ca8c7a3524efb43df896b022a0d54db9ecfd081c18817f5cb94a90bc09f",
+    "verts": 2843957,
+    "tris": 5688242,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2937305.516,
+    "volume": 2937305.53,
     "dispatch": {
       "band": 271,
       "cone": 7,
@@ -485,12 +485,12 @@
     }
   },
   "newtestmodels/Rugged Box Parametric V2": {
-    "hash": "28c64e9d605ccaea0d38426b369c76f63aa9b67b4e807a288b146dce5bdadb3f",
-    "verts": 223446,
-    "tris": 446940,
+    "hash": "8e2f5e785af116dec348d37f4debe29e44117281596b5b16599e70bacfeca2ca",
+    "verts": 223510,
+    "tris": 447068,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 110038.232,
+    "volume": 110038.288,
     "dispatch": {
       "grid": 634
     },
@@ -499,18 +499,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.78,
+      "devRatio": 1.45,
       "tiltMaxDeg": 4.5,
       "slivers": 0
     }
   },
   "newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2": {
-    "hash": "812f08765337d8dd71bb2c073d03d365ac682a9c13496d2866f53f3b45f1820f",
-    "verts": 1726187,
-    "tris": 3452778,
+    "hash": "3a2cf5ab5bfa9df1c6f4f79f0e1e5a90a43e0cfb649517f5d93727ceb96fd3e0",
+    "verts": 1728266,
+    "tris": 3456936,
     "openEdges": 0,
     "nonManifoldEdges": 2,
-    "volume": 1258861.759,
+    "volume": 1258862.076,
     "dispatch": {
       "grid": 5880,
       "thinFace": 25
@@ -520,7 +520,7 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.48,
+      "devRatio": 2.44,
       "tiltMaxDeg": 82.8,
       "slivers": 385
     }
@@ -546,12 +546,12 @@
     }
   },
   "newtestmodels/wallganizer": {
-    "hash": "4b3985036a91c61020c47ea61786c885b4bbcd9fcdbdbeab11ee01b8b05a1dde",
-    "verts": 29147622,
-    "tris": 58296708,
+    "hash": "787976fc911818b4824cdd54aeef8ed56c0fb0635ab1eef8abbdcc493c06096e",
+    "verts": 29150235,
+    "tris": 58301934,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 10244193.32,
+    "volume": 10244193.597,
     "dispatch": {
       "cone": 2,
       "grid": 13517,
@@ -712,12 +712,12 @@
     "error": "meshStep: one body needs at least 16M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/hose-fitting": {
-    "hash": "ca68035d60858d955391b6b07d402aa6c50573e297c6d7861d00ad90619e60c7",
-    "verts": 27296,
-    "tris": 54592,
+    "hash": "5d6311e8efacd51a7f9fdaa5d66953345ea3a878439735f85950e13325a9a0c6",
+    "verts": 27282,
+    "tris": 54564,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 14727.695,
+    "volume": 14727.65,
     "dispatch": {
       "grid": 70
     },
@@ -727,7 +727,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2.41,
-      "tiltMaxDeg": 4.6,
+      "tiltMaxDeg": 4,
       "slivers": 0
     }
   },
@@ -743,12 +743,12 @@
     "error": "meshStep: one body needs at least 101M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/jack_in_the_box": {
-    "hash": "15097167a909c071846d4291a72b3cc9121bf11e97db02759f68601a17f539d8",
-    "verts": 69394,
-    "tris": 138564,
+    "hash": "0330cc052fdeb85d8cb20994fc1e2b3db87757ec3342e456eb315d586944cc93",
+    "verts": 69396,
+    "tris": 138568,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12348.743,
+    "volume": 12348.742,
     "dispatch": {
       "band": 41,
       "coneCap": 1,
@@ -821,12 +821,12 @@
     }
   },
   "sourcemodels/nist_ctc_04_asme1_ap242-e1": {
-    "hash": "06bb991e20d4816cdf390ea30ccfd0e33743d50e27c42c2b4b4cfd4a433d9047",
-    "verts": 2638981,
-    "tris": 5277982,
+    "hash": "db3f25ae1798ebe5ee3a1066b7f98c65118cd365d376c6b601b7cc882a4f84a1",
+    "verts": 2639271,
+    "tris": 5278562,
     "openEdges": 110,
     "nonManifoldEdges": 0,
-    "volume": 17524431.796,
+    "volume": 17524432.223,
     "dispatch": {
       "grid": 484
     },
@@ -885,12 +885,12 @@
     }
   },
   "sourcemodels/nist_ftc_07_asme1_ap242-e2": {
-    "hash": "b213a333fbfe860b2dc79b21d7106bce4ab04abc3b43e11ccec244bdf19a2231",
-    "verts": 983903,
-    "tris": 1967824,
+    "hash": "d5706df0d4084de05b64f97a508bc3db41b6cf8c1c266934cb78b442310e3682",
+    "verts": 983948,
+    "tris": 1967914,
     "openEdges": 34,
     "nonManifoldEdges": 0,
-    "volume": 1726324.433,
+    "volume": 1726324.482,
     "dispatch": {
       "coneSlice": 16,
       "grid": 290
@@ -924,12 +924,12 @@
     }
   },
   "sourcemodels/nist_ftc_08_asme1_ap242-e2": {
-    "hash": "6b1a45332d09a076cc6c4134387e46928ace7dc53c32d1b898273da57cb20d92",
-    "verts": 454753,
-    "tris": 909602,
+    "hash": "a33d5ee51541fc8153b74bc0973dfa31b0322eb41958d08a57a8a5c820ac186e",
+    "verts": 454789,
+    "tris": 909674,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 503640.04,
+    "volume": 503640.028,
     "dispatch": {
       "band": 20,
       "grid": 227
@@ -940,7 +940,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2.2,
-      "tiltMaxDeg": 6.2,
+      "tiltMaxDeg": 5.2,
       "slivers": 0
     }
   },
@@ -965,12 +965,12 @@
     }
   },
   "sourcemodels/nist_ftc_10_asme1_ap242-e2": {
-    "hash": "b4c1bd8a9c04e37ad8051f7e94cc811df8579a9fdd9da0ebb59c530688f5d3e7",
-    "verts": 178778,
-    "tris": 356536,
+    "hash": "99e4b910ec1433433bf153e72d1c58494429d8a73abc6ea4ad7f6fecae2d8e08",
+    "verts": 178897,
+    "tris": 356774,
     "openEdges": 1112,
     "nonManifoldEdges": 0,
-    "volume": 187495.286,
+    "volume": 187495.366,
     "dispatch": {
       "coneSlice": 16,
       "grid": 266
@@ -1031,12 +1031,12 @@
     }
   },
   "sourcemodels/nist_stc_07_asme1_ap242-e3": {
-    "hash": "c4a1430147c070555a12f24524b79ba868938d9b3759f3b02861dc6e421980dd",
-    "verts": 981607,
-    "tris": 1963232,
+    "hash": "77bbe6911d36996f1160e9942b8aed7b9890e60030e33ec213d5148a8062da24",
+    "verts": 981651,
+    "tris": 1963320,
     "openEdges": 34,
     "nonManifoldEdges": 0,
-    "volume": 1726324.698,
+    "volume": 1726324.752,
     "dispatch": {
       "coneSlice": 16,
       "grid": 290
@@ -1052,12 +1052,12 @@
     }
   },
   "sourcemodels/nist_stc_08_asme1_ap242-e3": {
-    "hash": "02cfbb1d341cf49ccdd42fca4a34d3e44f62c55166aecfd73aa5b069d387d83b",
-    "verts": 470871,
-    "tris": 941564,
+    "hash": "f29a04e50d31d69ffc0ab8c114a8dfb4ed3cf0a38307bb2c09fc328c4efd1d77",
+    "verts": 470887,
+    "tris": 941596,
     "openEdges": 272,
     "nonManifoldEdges": 0,
-    "volume": 387254.104,
+    "volume": 387254.102,
     "dispatch": {
       "grid": 271
     },
@@ -1067,7 +1067,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2,
-      "tiltMaxDeg": 5.7,
+      "tiltMaxDeg": 5,
       "slivers": 4
     }
   },
@@ -1092,12 +1092,12 @@
     }
   },
   "sourcemodels/nist_stc_10_asme1_ap242-e2": {
-    "hash": "3987ff1bd24f1b81ad2dc7adcf9733b0a2ff2d7b182f37b6eb37de0f7e3aa99b",
-    "verts": 215070,
-    "tris": 430224,
+    "hash": "ceca511a308d3abbb3b0190bd799ca22cc0dc5728ab175f3a23fc35c50bd488d",
+    "verts": 215212,
+    "tris": 430508,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 188350.152,
+    "volume": 188350.273,
     "dispatch": {
       "band": 40,
       "cone": 8,
@@ -1115,12 +1115,12 @@
     }
   },
   "sourcemodels/OpenVessel": {
-    "hash": "07a9a3557f442e7ff7985a41689b6c9149e9739a7a43e846f4ca9697e9d4cadd",
-    "verts": 99512,
-    "tris": 199040,
+    "hash": "28825ac86f7295fde9906c1eb2e081cac0115975f4a1114b2c4ca4cc06d7cf0e",
+    "verts": 99600,
+    "tris": 199216,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17306.876,
+    "volume": 17306.859,
     "dispatch": {
       "grid": 319,
       "sphereCap": 1,
@@ -1158,12 +1158,12 @@
     }
   },
   "sourcemodels/OpenVessel_fusion360": {
-    "hash": "eb290e95ef737016573a6c91cc290264514ecb791246dab1e634ac1b8a1a96e5",
-    "verts": 101143,
-    "tris": 202302,
+    "hash": "6cb04b5ddaf5090ac4093a0bc2ab8696b516b2d7c544c30fe90cb026d0eabf6d",
+    "verts": 101285,
+    "tris": 202586,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17307.066,
+    "volume": 17307.051,
     "dispatch": {
       "grid": 312,
       "sphereCap": 1,
@@ -1309,12 +1309,12 @@
     }
   },
   "tool": {
-    "hash": "b946b35ba8e0440f62bef3f3388049240911594c5ce230fb69b942abb9cc98fb",
-    "verts": 31305,
-    "tris": 62610,
+    "hash": "aa23cae90cc19273e961058ae367e7b60b18f961c995d734c6d28e5c043cdf3a",
+    "verts": 31323,
+    "tris": 62646,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2438.055,
+    "volume": 2438.058,
     "dispatch": {
       "grid": 233
     },
@@ -1329,12 +1329,12 @@
     }
   },
   "Tool-free Z-Axis Belt Tensioner for Voron 2.4": {
-    "hash": "eb7f63957333ac929ace583b276e47e19097a9671aa7acf487aa9fb24b35a663",
-    "verts": 777198,
-    "tris": 1554428,
+    "hash": "dc1a56369c68d56708c51c7ae29d2685f9995bcfdaa4de9c6a3cac64f7bb0bfd",
+    "verts": 777488,
+    "tris": 1555008,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 222561.184,
+    "volume": 222561.225,
     "dispatch": {
       "cone": 4,
       "coneCap": 2,
@@ -1353,12 +1353,12 @@
     }
   },
   "WN1452 K25x10 TX7 screw": {
-    "hash": "84e94ad274d488ee76d227213bb69b799b4f6fcb33920e08204106691119cbbd",
-    "verts": 6874,
-    "tris": 13744,
+    "hash": "2364ffdbb9637ea8acf3c9daa9c14e12f28e17677b6dec87b5dc79142b90e2b5",
+    "verts": 6881,
+    "tris": 13758,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 41.421,
+    "volume": 41.423,
     "dispatch": {
       "grid": 35
     },

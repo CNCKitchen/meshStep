@@ -1344,10 +1344,18 @@ function gridCDT(
   // ruling. The local size field must then be capped by it too: it works in the stretched plane,
   // and the tube radius it reports there would let refinement grow triangles to (stretch x tube
   // step) along the tube (ABC 00052860: deviation 0.99 -> 1.76x the chord tolerance).
+  // The u STRETCH is capped by the column step on every torus face, not only where it becomes the
+  // target: stepOf(kU) is a 3D length at the sampled point, but the grid lays it out at the median
+  // parallel, so a tube spanning the outer equator stretched its columns past the angle that
+  // parallel allows (ABC 00032129's unrolled elbows: 3.9x; a ±150° patch: 2.8x). Allowing two
+  // column steps, relying on the refinement centres to halve each column, is not enough: full
+  // columns survive along the boundaries. Known limit: where both directions sit at their limit,
+  // a boundary cell's diagonal adds both sagittas (up to ~2x, ABC 00054705 #43).
   let sizeCap = Infinity;
   {
     const colStep = parallelStep(surface, vmin, vmax, uScale, targetEdge, chordTol, normalDev);
-    if (colStep < target) { target = colStep; stepU = Math.min(stepU, colStep); sizeCap = colStep; }
+    stepU = Math.min(stepU, colStep);
+    if (colStep < target) { target = colStep; sizeCap = colStep; }
   }
   // Anisotropy-adjusted axis scales for the CDT plane (capped so triangles never exceed ~6:1 —
   // beyond that slivers start to cost more numerically than the shading gains). uScale/vScale stay

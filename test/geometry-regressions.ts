@@ -389,13 +389,13 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   check("slotted rim under a coarse circle: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
 }
 
-// ---- fat torus (R < 2r), inner side (ABC 00036882 #255: R 240, r 239). The grid mesher spaces its
-// columns uniformly in u at the face's median parallel and sized them by the tube radius alone, but
-// here the bend around the axis is the tighter one: a chord spanning du on the parallel at v leaves
-// the surface by |(R + r cos v) cos v|·du²/8. The patch below (u 0-90°, v 127-170°) got 23° columns
-// and edge midpoints 4.8x the chord tolerance off the surface.
-{
-  const R = 240, r = 239, D = Math.PI / 180, u0 = 0, u1 = 90 * D, v0 = 127 * D, v1 = 170 * D, tol = 0.2;
+// ---- torus patches meshed by the param grid (u around the axis, v around the tube). The grid spaces
+// its columns uniformly in u at the face's MEDIAN parallel and sized them by the tube radius alone.
+// A chord spanning du on the parallel at v leaves the surface by |(R + r cos v) cos v|·du²/8, so
+// the face's most bent parallel must set the column angle, both for the isotropic target and for
+// the stretch along the parallels (whose step is a length at the median parallel).
+const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: number, tol: number, maxEdge: number) => {
+  const D = Math.PI / 180, u0 = 0, u1 = uDeg * D, v0 = v0Deg * D, v1 = v1Deg * D;
   const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
   const dir = (id: number, d: number[]): string => `#${id}=DIRECTION('',(${d.map((x) => x.toFixed(12)).join(",")}));`;
   const pt9 = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.map((x) => x.toFixed(9)).join(",")}));`;
@@ -408,21 +408,8 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   lines.push(`#40=EDGE_CURVE('',#10,#11,#30,.T.);`, `#41=EDGE_CURVE('',#12,#11,#33,.T.);`, `#42=EDGE_CURVE('',#13,#12,#31,.T.);`, `#43=EDGE_CURVE('',#13,#10,#32,.T.);`,
     `#50=ORIENTED_EDGE('',*,*,#40,.T.);`, `#51=ORIENTED_EDGE('',*,*,#41,.F.);`, `#52=ORIENTED_EDGE('',*,*,#42,.F.);`, `#53=ORIENTED_EDGE('',*,*,#43,.T.);`,
     `#60=EDGE_LOOP('',(#50,#51,#52,#53));`, `#61=FACE_OUTER_BOUND('',#60,.T.);`, `#62=ADVANCED_FACE('',(#61),#5,.T.);`, `#63=OPEN_SHELL('',(#62));`, `#64=SHELL_BASED_SURFACE_MODEL('',(#63));`);
-  const tor = makeSurface(table(lines.slice(0, 5).join("\n")), 5, 1)!;
-  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9 * Math.max(1, Math.abs(b));
-  // floor 0: the step is exact - the chord term at the most bent parallel, or the normal term
-  const col = (a: number, b: number, tolC: number, nd: number, fl = 0): number => tor.parallelColumnAngle!(a * D, b * D, tolC, nd, fl);
-  const K = (v: number): number => Math.abs((R + r * Math.cos(v)) * Math.cos(v));
-  const chordDu = (k: number, tolC: number): number => Math.sqrt((8 * tolC) / k);
-  check("fat torus: widest parallel of the patch sets the column angle", near(col(127, 170, tol, 1), chordDu(K(v0), tol)), `${col(127, 170, tol, 1)} vs ${chordDu(K(v0), tol)}`);
-  check("fat torus: column angle peaks inside the range where cos v = -R/2r", near(col(100, 140, tol, 1), chordDu((R * R) / (4 * r), tol)), `${col(100, 140, tol, 1)} vs ${chordDu((R * R) / (4 * r), tol)}`);
-  check("fat torus: a whole turn sees the outer equator", near(col(-180, 180, tol, 1), chordDu(R + r, tol)) && near(col(300, 400, tol, 1), chordDu(R + r, tol)), `${col(-180, 180, tol, 1)}, ${col(300, 400, tol, 1)}`);
-  check("fat torus: the normal term binds at the innermost parallel", near(col(127, 180, 1e3, 0.2), 0.2), `${col(127, 180, 1e3, 0.2)} vs 0.2`);
-  // the innermost parallel has radius 1 mm: a 6 mm floor exempts it; the 15 mm one at 160° binds
-  const rho160 = R + r * Math.cos(160 * D);
-  check("fat torus: parallels shorter than the floor ask for nothing finer", Math.abs(col(160, 180, 1e3, 0.2, 6) - 6 / rho160) < 0.05 * (6 / rho160), `${col(160, 180, 1e3, 0.2, 6)} vs ~${6 / rho160}`);
   const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
-  const res = importStep(src, { surfaceDeviation: tol, maxEdge: 200, normalDeviation: 60 });
+  const res = importStep(src, { surfaceDeviation: tol, maxEdge, normalDeviation: 60 });
   const P = res.mesh.positions, I = res.mesh.indices;
   const offT = (p: number[]): number => Math.abs(Math.hypot(Math.hypot(p[0]!, p[1]!) - R, p[2]!) - r);
   let area = 0, devEdge = 0;
@@ -433,10 +420,38 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
     area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
   }
   const exact = r * (u1 - u0) * (R * (v1 - v0) + r * (Math.sin(v1) - Math.sin(v0)));
-  const si = selfIntersections(P, I, res.faceOfTri);
-  check("fat torus inner patch: edge chords within 1.5x the chord tolerance", devEdge < 1.5 * tol, `${(devEdge / tol).toFixed(2)}x`);
-  check("fat torus inner patch: no fold", si.sameFace === 0, `${si.sameFace} crossing pairs`);
-  check("fat torus inner patch: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(2)} vs exact ${exact.toFixed(2)} mm²`);
+  return { surface: makeSurface(table(lines.slice(0, 5).join("\n")), 5, 1)!, devEdge: devEdge / tol, area, exact, folds: selfIntersections(P, I, res.faceOfTri).sameFace };
+};
+// Fat torus (R < 2r), inner side (ABC 00036882 #255: R 240, r 239): around the axis is the tighter
+// bend. The patch got 23° columns and edge midpoints 4.8x the chord tolerance off the surface.
+{
+  const R = 240, r = 239, D = Math.PI / 180, tol = 0.2;
+  const t = torusPatch(R, r, 90, 127, 170, tol, 200);
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9 * Math.max(1, Math.abs(b));
+  // floor 0: the step is exact - the chord term at the most bent parallel, or the normal term
+  const col = (a: number, b: number, tolC: number, nd: number, fl = 0): number => t.surface.parallelColumnAngle!(a * D, b * D, tolC, nd, fl);
+  const K = (v: number): number => Math.abs((R + r * Math.cos(v)) * Math.cos(v));
+  const chordDu = (k: number, tolC: number): number => Math.sqrt((8 * tolC) / k);
+  check("fat torus: widest parallel of the patch sets the column angle", near(col(127, 170, tol, 1), chordDu(K(127 * D), tol)), `${col(127, 170, tol, 1)} vs ${chordDu(K(127 * D), tol)}`);
+  check("fat torus: column angle peaks inside the range where cos v = -R/2r", near(col(100, 140, tol, 1), chordDu((R * R) / (4 * r), tol)), `${col(100, 140, tol, 1)} vs ${chordDu((R * R) / (4 * r), tol)}`);
+  check("fat torus: a whole turn sees the outer equator", near(col(-180, 180, tol, 1), chordDu(R + r, tol)) && near(col(300, 400, tol, 1), chordDu(R + r, tol)), `${col(-180, 180, tol, 1)}, ${col(300, 400, tol, 1)}`);
+  check("fat torus: the normal term binds at the innermost parallel", near(col(127, 180, 1e3, 0.2), 0.2), `${col(127, 180, 1e3, 0.2)} vs 0.2`);
+  // the innermost parallel has radius 1 mm: a 6 mm floor exempts it; the 15 mm one at 160° binds
+  const rho160 = R + r * Math.cos(160 * D);
+  check("fat torus: parallels shorter than the floor ask for nothing finer", Math.abs(col(160, 180, 1e3, 0.2, 6) - 6 / rho160) < 0.05 * (6 / rho160), `${col(160, 180, 1e3, 0.2, 6)} vs ~${6 / rho160}`);
+  check("fat torus inner patch: edge chords within 1.5x the chord tolerance", t.devEdge < 1.5, `${t.devEdge.toFixed(2)}x`);
+  check("fat torus inner patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("fat torus inner patch: area matches", Math.abs(t.area - t.exact) < 0.005 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+}
+// Ordinary torus (R 40, r 20), u 0-30°, v ±150°: the tube radius was the tighter bend, so the target
+// was right, but the grid stretched its columns to the u curvature step, a length it measured at
+// the outer equator and laid out at the median parallel (ρ ≈ 43 vs 60): 2.8x the chord tolerance
+// on the equator. The same stretch left 3.9x on unrolled elbow sections (ABC 00032129).
+{
+  const t = torusPatch(40, 20, 30, -150, 150, 0.05, 40);
+  check("wide torus patch: equator chords within 1.6x the chord tolerance", t.devEdge < 1.6, `${t.devEdge.toFixed(2)}x`);
+  check("wide torus patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("wide torus patch: area matches", Math.abs(t.area - t.exact) < 0.005 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
 }
 
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
