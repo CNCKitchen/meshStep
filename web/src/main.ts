@@ -314,6 +314,7 @@ function startConvert(): void {
     isotropic: isotropicEl.checked,
     growthRate: num("growthRate", 1.3),
     mappedFillets: $<HTMLInputElement>("mappedFillets").checked,
+    mergeTolerance: num("mergeTolerance", 0),
   };
   showOverlay("Starting…");
   maybeShowSponsor();

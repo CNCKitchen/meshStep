@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // meshStep — public API.
 import { buildBrep } from "./brep/build.ts";
+import { mergeShortEdges } from "./brep/defeature.ts";
 import { tessellate, type FaceTol, type MeshResult, type TessOptions } from "./mesh/tessellate.ts";
 import { remesh } from "./mesh/remesh.ts";
 import { orientConsistent } from "./mesh/orient.ts";
@@ -213,6 +214,13 @@ export interface ImportOptions {
    * triangles) so they print without the small contour wobbles free triangles cause there;
    * their triangles are right-angled instead of equilateral. Default true. */
   mappedFillets?: boolean;
+  /** Geometry clean-up before meshing, mm: an edge shorter than this collapses to a point (its
+   * two end vertices merge), so a small step or offset between faces no longer forces a tiny
+   * triangle and, in the isotropic mode, a patch of fine mesh around it. The surface moves by
+   * up to this distance at such a spot, independently of `surfaceDeviation`. An edge stays when
+   * merging it would pull a face beyond the end of its surface. Works in both mesh modes.
+   * Default 0 (off; output bit-identical to an import without the option). */
+  mergeTolerance?: number;
 }
 
 /** One face's tessellation override (`ImportOptions.faceOverrides`); same units as the globals. */
@@ -296,6 +304,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
   signal?.throwIfAborted();
   onProgress?.({ phase: "parse", done: 0, total: 0 });
   const brep = buildBrep(src);
+  if (opts.mergeTolerance !== undefined && opts.mergeTolerance > 0) mergeShortEdges(brep, opts.mergeTolerance);
   signal?.throwIfAborted();
   const colors = extractColors(brep.table, brep.solids);
   const structure = extractStructure(brep.table, brep.solids);

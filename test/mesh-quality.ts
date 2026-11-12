@@ -8,6 +8,7 @@
 //   node test/mesh-quality.ts <file.step> [--dev mm] [--edge mm] [--normal deg]
 //        [--iso] [--growth r] [--min-edge mm]   mesh in the isotropic mode (see TessOptions)
 //        [--no-mapped]                          isotropic mode without mapped fillets
+//        [--merge mm|auto]                      merge edges shorter than this first (auto = 5x deviation)
 //        [--compare]                            default and isotropic side by side
 //        [--runs n]                             time = median of n tessellations (default 3)
 //        [--detail]                             per-mesher and per-surface-kind rows
@@ -36,22 +37,33 @@
 //                   over the same triangles (the across-the-bend part is unavoidable: about a
 //                   sixth of the angular step)
 import { readFileSync, writeFileSync } from "node:fs";
-import { buildBrep } from "../src/brep/build.ts";
+import { buildBrep as buildBrep0 } from "../src/brep/build.ts";
 import { tessellate, type TessOptions } from "../src/mesh/tessellate.ts";
 import { estimateBrepSize, autoTessellation } from "../src/step/measure.ts";
 import { meshDefects } from "../src/mesh/diag.ts";
 import { writeBinarySTL } from "../src/io/stl.ts";
 import { auditMesh } from "./mesh-audit.ts";
 import { makeSurface, type Surface } from "../src/geom/surfaces.ts";
+import { mergeShortEdges } from "../src/brep/defeature.ts";
 
 const argv = process.argv.slice(2);
 const flag = (n: string): boolean => argv.includes(`--${n}`);
 const opt = (n: string): string | undefined => { const i = argv.indexOf(`--${n}`); return i >= 0 ? argv[i + 1] : undefined; };
-const valued = new Set(["dev", "edge", "normal", "growth", "min-edge", "runs", "worst", "stl", "json"]);
+const valued = new Set(["dev", "edge", "normal", "growth", "min-edge", "merge", "runs", "worst", "stl", "json"]);
 const file = argv.find((a, i) => !a.startsWith("--") && !(i > 0 && valued.has(argv[i - 1]!.slice(2))));
 if (!file) { console.error("usage: node test/mesh-quality.ts <file.step> [--compare] [--iso] ... (see file header)"); process.exit(2); }
 
 const src = readFileSync(file, "utf8");
+// --merge <mm | auto>: collapse edges shorter than this before meshing, in both modes ("auto" =
+// five times the surface deviation in use).
+const mergeArg = opt("merge");
+const buildBrep = (text: string): ReturnType<typeof buildBrep0> => {
+  const b = buildBrep0(text);
+  if (!mergeArg) return b;
+  const tol = mergeArg === "auto" ? 5 * Number(opt("dev") ?? autoTessellation(estimateBrepSize(b)?.diag ?? 100).surfaceDeviation) : Number(mergeArg);
+  if (tol > 0) mergeShortEdges(b, tol);
+  return b;
+};
 const pct = (a: number[], p: number): number => (a.length ? a[Math.min(a.length - 1, Math.floor(a.length * p))]! : NaN);
 
 interface Shape { n: number; lt20: number; lt30: number; gt120: number; sumQ: number; angs: number[] }

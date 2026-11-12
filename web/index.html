@@ -95,6 +95,10 @@
                 <label for="maxEdge">Max edge length <span class="unit">mm</span></label>
                 <input type="number" id="maxEdge" value="1" step="0.1" min="0.01" />
               </div>
+              <div class="field" title="Geometry clean-up: an edge shorter than this collapses to a point, so a small step or offset between faces no longer forces tiny triangles there. The surface moves by up to this distance at such a spot. 0 = off.">
+                <label for="mergeTolerance">Merge edges shorter than <span class="unit">mm</span></label>
+                <input type="number" id="mergeTolerance" value="0" step="0.01" min="0" />
+              </div>
               <label class="toggle" title="Near-equilateral triangles in the style of an FE pre-processor: edges are seeded evenly, triangle size grows smoothly away from fine features. Costs triangles on small fillets.">
                 <input type="checkbox" id="isotropic" /> Isotropic mesh (equilateral triangles)
               </label>

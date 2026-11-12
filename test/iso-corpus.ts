@@ -4,7 +4,7 @@
 // unmeshed faces, folds, flips) for both modes. This is the merge gate for the isotropic mode:
 // it may cost triangles and time, but it must not lose watertightness or add folds/flips.
 //
-//   node test/iso-corpus.ts [--full] [--jobs n] [--timeout s] [--no-audit] [name ...]
+//   node test/iso-corpus.ts [--full] [--jobs n] [--timeout s] [--no-audit] [--merge mm|auto] [name ...]
 //
 // Each model runs test/mesh-quality.ts in its own process (a crash or timeout costs one row).
 // Tolerances are the web viewer's auto settings for the model's size. Results: out/iso-corpus.json.
@@ -18,7 +18,9 @@ const argv = process.argv.slice(2);
 const num = (n: string, d: number): number => { const i = argv.indexOf(`--${n}`); return i >= 0 ? Number(argv[i + 1]) : d; };
 const jobs = num("jobs", 4), timeout = num("timeout", 600);
 const full = argv.includes("--full"), noAudit = argv.includes("--no-audit");
-const named = argv.filter((a, i) => !a.startsWith("--") && !["--jobs", "--timeout"].includes(argv[i - 1] ?? ""));
+const mergeIdx = argv.indexOf("--merge");
+const merge = mergeIdx >= 0 ? argv[mergeIdx + 1] : undefined;
+const named = argv.filter((a, i) => !a.startsWith("--") && !["--jobs", "--timeout", "--merge"].includes(argv[i - 1] ?? ""));
 // Same slow set as test/char.ts (kept out of the default run).
 const SLOW = /GoProHandlePod|ETA 6497|Belt Tensioner|wallganizer|Ontos_V2|boomerang-v2|bottle-cage|SMILEY|nist_ctc_0[1-5]|nist_ftc_0[678]_asme1_ap242-e2|nist_stc_0[78]|weldment_asm/;
 
@@ -44,7 +46,7 @@ const runOne = (): Promise<void> => new Promise((resolve) => {
   const m = models[next++];
   if (!m) return resolve();
   const json = join(tmp, `${next}.json`);
-  const child = spawn(process.execPath, ["--max-old-space-size=8192", join(root, "test", "mesh-quality.ts"), m.file, "--compare", "--runs", "1", "--json", json, ...(noAudit ? ["--no-audit"] : [])], { stdio: ["ignore", "ignore", "pipe"] });
+  const child = spawn(process.execPath, ["--max-old-space-size=8192", join(root, "test", "mesh-quality.ts"), m.file, "--compare", "--runs", "1", "--json", json, ...(noAudit ? ["--no-audit"] : []), ...(merge ? ["--merge", merge] : [])], { stdio: ["ignore", "ignore", "pipe"] });
   let err = "";
   child.stderr.on("data", (d) => { err += d; });
   const timer = setTimeout(() => { child.kill("SIGKILL"); err = `timeout ${timeout}s`; }, timeout * 1000);
@@ -64,7 +66,7 @@ const runOne = (): Promise<void> => new Promise((resolve) => {
 console.log(`${"model".padEnd(45)}${"tris def".padStart(9)}${"iso".padStart(9)}${"x".padStart(6)}${"ms def".padStart(8)}${"iso".padStart(8)}${"x".padStart(6)}${"Q def".padStart(7)}${"iso".padStart(7)}${"<20 def".padStart(7)}${"iso".padStart(7)}  ${"open/nm/unm/fold/flip def".padEnd(16)} iso            stubs`);
 await Promise.all(Array.from({ length: jobs }, runOne));
 rmSync(tmp, { recursive: true, force: true });
-writeFileSync(join(root, "out", "iso-corpus.json"), JSON.stringify(results, null, 1));
+writeFileSync(join(root, "out", merge ? "iso-corpus-merge.json" : "iso-corpus.json"), JSON.stringify(results, null, 1));
 
 // Verdict: the isotropic mode may never be less correct than the default on any model.
 let worse = 0, n = 0, tD = 0, tI = 0, msD = 0, msI = 0;

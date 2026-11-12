@@ -40,6 +40,7 @@
     "test:parse": "node test/parse-recovery.ts",
     "test:geometry": "node test/geometry-regressions.ts",
     "test:isotropic": "node test/size-field.ts && node test/isotropic.ts",
+    "test:defeature": "node test/defeature.ts",
     "test:3mf": "node test/threemf.ts",
     "char": "node --max-old-space-size=16384 test/char.ts",
     "inspect": "node test/inspect.ts",
