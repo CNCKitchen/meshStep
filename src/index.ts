@@ -204,7 +204,7 @@ export interface ImportOptions {
    * cost more triangles. Default false (output bit-identical to an import without the option). */
   isotropic?: boolean;
   /** Isotropic mode: size ratio allowed between neighbouring triangles, i.e. how fast the mesh
-   * coarsens away from a fine feature (FE "growth rate"). Default 1.3. */
+   * coarsens away from a fine feature (FE "growth rate"). Default 1.5. */
   growthRate?: number;
   /** Isotropic mode: smallest edge length the mesher may ask for, mm. Default
    * min(maxEdge / 40, 30 · surfaceDeviation). */

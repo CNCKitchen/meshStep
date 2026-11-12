@@ -75,7 +75,7 @@ export interface TessOptions {
    * build without this option. */
   isotropic?: boolean;
   /** Isotropic mode: how fast triangles may grow away from a fine feature, as the size ratio of
-   * neighbouring triangles (HyperMesh "growth rate"). 1.3 = 30% per row. Default 1.3. */
+   * neighbouring triangles (HyperMesh "growth rate"). 1.5 = 50% per row. Default 1.5. */
   growthRate?: number;
   /** Isotropic mode: smallest edge length the size field may ask for (mm). Features smaller than
    * this are meshed with stretched triangles instead of ever finer ones. Default: the same floor
@@ -5886,7 +5886,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   declinedGrid.clear();
   overlapFaces.clear();
   ISO = opts.isotropic ? {
-    g: Math.max(0.01, (opts.growthRate ?? 1.3) - 1),
+    g: Math.max(0.01, (opts.growthRate ?? 1.5) - 1),
     hMin: opts.minEdge !== undefined && opts.minEdge > 0 ? Math.min(opts.minEdge, targetEdge) : Math.min(targetEdge / 40, 30 * chordTol),
     mapped: opts.mappedFillets !== false,
     sizeAt: null,
@@ -5954,7 +5954,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // ISOTROPIC mode seeds the edges from a growth-limited size field instead (edge-seed.ts): even
   // spacing, graded toward fine neighbours, no stub at an edge end. Still one sampling per edge.
   const seeder = opts.isotropic
-    ? new EdgeSeeder(brep, faceSurf, tolOf, globalTol, opts.growthRate ?? 1.3, opts.minEdge)
+    ? new EdgeSeeder(brep, faceSurf, tolOf, globalTol, opts.growthRate ?? 1.5, opts.minEdge)
     : null;
   seeder?.prepare();
   for (const [id, e] of brep.edges) {

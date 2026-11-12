@@ -39,7 +39,7 @@ for (const [name, p5Min] of [["cube", 40], ["cylinder", 35], ["sphere", 30], ["e
   const p5 = a[Math.floor(a.length * 0.05)]!;
   check(p5 >= p5Min, `${name}: 5th-percentile smallest angle ${p5.toFixed(1)}° >= ${p5Min}°`);
   // Edge seeding: no stub at an edge end, and neighbouring segments within the growth rate
-  // (1.3) plus rounding slack.
+  // (1.5) plus rounding slack.
   let stubs = 0, worst = 1;
   for (const e of iso.measure?.edges ?? []) {
     const pl = iso.measure!.points, o = e.first * 3;

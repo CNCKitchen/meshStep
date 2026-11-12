@@ -312,7 +312,7 @@ function startConvert(): void {
     maxEdge: num("maxEdge", 1),
     remesh: false,
     isotropic: isotropicEl.checked,
-    growthRate: num("growthRate", 1.3),
+    growthRate: num("growthRate", 1.5),
     mappedFillets: $<HTMLInputElement>("mappedFillets").checked,
     mergeTolerance: num("mergeTolerance", 0),
   };
