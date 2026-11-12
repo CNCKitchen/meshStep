@@ -59,6 +59,20 @@ export interface TessOptions {
    * at the finest values of the faces it bounds, so the mesh stays watertight. Absent faces (and
    * an absent map) use the global options: the same numbers, so the output is bit-identical. */
   faceTol?: Map<number, FaceTol>;
+  /** ISOTROPIC ("pretty") mode: near-equilateral triangles, FE-pre-processor style, instead of
+   * the default ruling-aligned ones. Every B-rep edge is seeded from one growth-limited 3D size
+   * field (even spacing, no stub segment at an edge end), faces are meshed without the fillet
+   * stretch, and a per-face optimiser equalises the triangles. Costs triangles on small fillets
+   * (they are no longer stretched along the fillet). Default false: output bit-identical to a
+   * build without this option. */
+  isotropic?: boolean;
+  /** Isotropic mode: how fast triangles may grow away from a fine feature, as the size ratio of
+   * neighbouring triangles (HyperMesh "growth rate"). 1.3 = 30% per row. Default 1.3. */
+  growthRate?: number;
+  /** Isotropic mode: smallest edge length the size field may ask for (mm). Features smaller than
+   * this are meshed with stretched triangles instead of ever finer ones. Default: the same floor
+   * the default mode uses, min(targetEdge/40, 30·chordTol). */
+  minEdge?: number;
 }
 
 /** One face's tessellation tolerances (internal units: mm, mm, radians). */
