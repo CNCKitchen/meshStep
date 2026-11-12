@@ -18,6 +18,7 @@ import type { IndexedMesh } from "../io/stl.ts";
 import type { Surface } from "../geom/surfaces.ts";
 import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
 import { sampleEdgePolyline } from "../geom/curves.ts";
+import { EdgeSeeder } from "./edge-seed.ts";
 import { constrainedTriangulate, type CdtOut } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
@@ -5418,9 +5419,17 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const edgeChord = (id: number): number => edgeTol.get(id)?.chordTol ?? chordTol;
   const edgeNdev = (id: number): number => edgeTol.get(id)?.normalDev ?? normalDev;
   const sampled = new Map<number, Vec3[]>();
+  // ISOTROPIC mode seeds the edges from a growth-limited size field instead (edge-seed.ts): even
+  // spacing, graded toward fine neighbours, no stub at an edge end. Still one sampling per edge.
+  const seeder = opts.isotropic
+    ? new EdgeSeeder(brep, faceSurf, tolOf, globalTol, opts.growthRate ?? 1.3, opts.minEdge)
+    : null;
+  seeder?.prepare();
   for (const [id, e] of brep.edges) {
     const te = edgeMaxLen.get(id) ?? targetEdge;
-    sampled.set(id, sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
+    sampled.set(id, seeder
+      ? seeder.seed(id)
+      : sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
     tick(1);
   }
   // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
@@ -5440,6 +5449,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   {
     const level = new Map<number, number>(); // edgeId -> finest committed refinement factor
     const resample = (id: number, f: number): Vec3[] => {
+      if (seeder) return seeder.seed(id, f); // isotropic mode: the same seeding at f times the density
       const e = brep.edges.get(id)!;
       const te = Math.max((edgeMaxLen.get(id) ?? targetEdge) / f, edgeChord(id));
       return sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id) / f, te, brep.units.radPerAngle, edgeNdev(id));

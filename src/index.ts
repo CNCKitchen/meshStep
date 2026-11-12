@@ -197,6 +197,17 @@ export interface ImportOptions {
    * instance of that part. Not applied by the optional `remesh` pass. Default: none (output
    * bit-identical to an import without the option). */
   faceOverrides?: Record<number, FaceOverride> | Map<number, FaceOverride>;
+  /** Isotropic ("pretty") mesh mode: near-equilateral triangles in the style of an FE
+   * pre-processor instead of the default ruling-aligned ones. Edges are seeded evenly from one
+   * growth-limited size field and faces are meshed without the fillet stretch, so small fillets
+   * cost more triangles. Default false (output bit-identical to an import without the option). */
+  isotropic?: boolean;
+  /** Isotropic mode: size ratio allowed between neighbouring triangles, i.e. how fast the mesh
+   * coarsens away from a fine feature (FE "growth rate"). Default 1.3. */
+  growthRate?: number;
+  /** Isotropic mode: smallest edge length the mesher may ask for, mm. Default
+   * min(maxEdge / 40, 30 · surfaceDeviation). */
+  minEdge?: number;
 }
 
 /** One face's tessellation override (`ImportOptions.faceOverrides`); same units as the globals. */
@@ -297,6 +308,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
     }),
     collectEdgePolylines: opts.measureGeometry,
     faceTol: resolveFaceOverrides(opts.faceOverrides, surfaceDev, maxEdge, normalDevRad),
+    isotropic: opts.isotropic, growthRate: opts.growthRate, minEdge: opts.minEdge,
   };
   const result = tessellate(brep, tess);
   signal?.throwIfAborted();
