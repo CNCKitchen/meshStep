@@ -1753,7 +1753,12 @@ function gridCDT(
         if (!inRegion([u, v])) { if (memo) skipTri.add(key); continue; }
         [sz, dist] = sizeDist(px, py); // moved to the centroid — re-query there
       }
-      if (dist < 0.5 * sz) { if (memo) skipTri.add(key); continue; }
+      // A centre exactly half a size from the boundary is kept: with no stretch, the centres next to a
+      // column-aligned boundary land there, and losing them on a float tie left the boundary cells'
+      // (full column, full row) diagonal, which adds both sagittas where both directions curve (ABC
+      // 00026167 #52: 1.36x the chord tolerance). It also stops identical faces meshing differently
+      // (roundedCube's 12 fillets: 478-490 triangles, now 496 each).
+      if (dist < 0.5 * sz * (1 - 1e-9)) { if (memo) skipTri.add(key); continue; }
       fresh.push([px, py, sz, key]);
     }
     if (!fresh.length) break;

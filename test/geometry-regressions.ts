@@ -440,7 +440,7 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
 // A chord spanning du on the parallel at v leaves the surface by |(R + r cos v) cos v|·du²/8, so
 // the face's most bent parallel must set the column angle, both for the isotropic target and for
 // the stretch along the parallels (whose step is a length at the median parallel).
-const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: number, tol: number, maxEdge: number) => {
+const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: number, tol: number, maxEdge: number, normalDeviation = 60) => {
   const D = Math.PI / 180, u0 = 0, u1 = uDeg * D, v0 = v0Deg * D, v1 = v1Deg * D;
   const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
   const dir = (id: number, d: number[]): string => `#${id}=DIRECTION('',(${d.map((x) => x.toFixed(12)).join(",")}));`;
@@ -455,7 +455,7 @@ const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: nu
     `#50=ORIENTED_EDGE('',*,*,#40,.T.);`, `#51=ORIENTED_EDGE('',*,*,#41,.F.);`, `#52=ORIENTED_EDGE('',*,*,#42,.F.);`, `#53=ORIENTED_EDGE('',*,*,#43,.T.);`,
     `#60=EDGE_LOOP('',(#50,#51,#52,#53));`, `#61=FACE_OUTER_BOUND('',#60,.T.);`, `#62=ADVANCED_FACE('',(#61),#5,.T.);`, `#63=OPEN_SHELL('',(#62));`, `#64=SHELL_BASED_SURFACE_MODEL('',(#63));`);
   const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
-  const res = importStep(src, { surfaceDeviation: tol, maxEdge, normalDeviation: 60 });
+  const res = importStep(src, { surfaceDeviation: tol, maxEdge, normalDeviation });
   const P = res.mesh.positions, I = res.mesh.indices;
   const offT = (p: number[]): number => Math.abs(Math.hypot(Math.hypot(p[0]!, p[1]!) - R, p[2]!) - r);
   let area = 0, devEdge = 0;
@@ -498,6 +498,16 @@ const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: nu
   check("wide torus patch: equator chords within 1.6x the chord tolerance", t.devEdge < 1.6, `${t.devEdge.toFixed(2)}x`);
   check("wide torus patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
   check("wide torus patch: area matches", Math.abs(t.area - t.exact) < 0.005 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+}
+// Horn torus (R = r = 4), outer half, u 0-90° (ABC 00026167 #52): columns and rows both sit at the
+// chord limit with no stretch. The refinement centres next to a column-aligned boundary land exactly
+// half a size from it and lost the boundary-clearance check on a float tie, so the boundary cells
+// kept their (full column, full row) diagonal, which adds both sagittas: 1.27x the chord tolerance.
+{
+  const t = torusPatch(4, 4, 90, -90, 90, 0.0748, 7.484, 15);
+  check("horn torus outer half: edge chords within the chord tolerance", t.devEdge < 1, `${t.devEdge.toFixed(2)}x`);
+  check("horn torus outer half: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("horn torus outer half: area matches", Math.abs(t.area - t.exact) < 0.01 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
 }
 
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
