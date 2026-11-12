@@ -208,9 +208,10 @@ export interface ImportOptions {
   /** Isotropic mode: smallest edge length the mesher may ask for, mm. Default
    * min(maxEdge / 40, 30 · surfaceDeviation). */
   minEdge?: number;
-  /** Isotropic mode: mesh fillets and other single-curved four-sided faces as a mapped mesh
-   * (structured strips along the fillet) so they print without the small contour wobbles free
-   * triangles cause there; their triangles are isosceles instead of equilateral. Default true. */
+  /** Isotropic mode: mesh fillets and other single-curved four-sided faces as a mapped mesh (a
+   * grid of near-square cells, two sides along the fillet and two across it, each cut into two
+   * triangles) so they print without the small contour wobbles free triangles cause there;
+   * their triangles are right-angled instead of equilateral. Default true. */
   mappedFillets?: boolean;
 }
 

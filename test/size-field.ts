@@ -38,5 +38,15 @@ for (const [n, growth, hMin, hMax] of [[0, 1.3, 0.02, 1], [1, 1.3, 0.02, 1], [7,
   check(f.size <= n, `n=${n}: more sources than added`);
   console.log(`n=${n}: ${f.size} sources kept, max query error ${worst.toExponential(1)}`);
 }
+// A built field takes further sources and a rebuild: the old sources stay in force.
+{
+  const f = new SizeField(1.3, 0.01, 1);
+  f.add(0, 0, 0, 0.1); f.build();
+  const before = f.at(5, 0, 0);
+  f.add(5, 0, 0, 0.2); f.build();
+  check(Math.abs(f.at(0, 0, 0) - 0.1) < 1e-12, `rebuild: the first source is still there (${f.at(0, 0, 0)})`);
+  check(before === 1 && Math.abs(f.at(5, 0, 0) - 0.2) < 1e-12, `rebuild: the added source took effect (${before} -> ${f.at(5, 0, 0)})`);
+  check(Math.abs(f.at(1, 0, 0) - 0.4) < 1e-12 && Math.abs(f.at(4, 0, 0) - 0.5) < 1e-12, "rebuild: both sources grade the space between them");
+}
 if (failed) { console.error(`${failed} check(s) failed`); process.exit(1); }
 console.log("size-field: ok");

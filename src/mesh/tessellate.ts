@@ -20,7 +20,7 @@ import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from ".
 import { sampleEdgePolyline } from "../geom/curves.ts";
 import { EdgeSeeder } from "./edge-seed.ts";
 import { optimizeFace } from "./optimize.ts";
-import { isoCurvature, mappedMesh, type MappedSide } from "./mapped.ts";
+import { isoCurvature, mappedMesh, matchRailStations, type MappedSide } from "./mapped.ts";
 import { constrainedTriangulate, type CdtOut } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
@@ -40,7 +40,7 @@ const overlapFaces = new Set<number>();
  * like the two sinks above: the meshers are synchronous and many signatures deep.
  * `g` is the size growth per unit distance, growthRate − 1; `hMin` the smallest edge length the
  * size field asks for. */
-let ISO: { g: number; hMin: number; mapped: boolean } | null = null;
+let ISO: { g: number; hMin: number; mapped: boolean; /** Size field of the body being meshed (3D position -> allowed edge length). */ sizeAt: ((x: number, y: number, z: number) => number) | null } | null = null;
 type P2 = [number, number];
 
 export interface TessOptions {
@@ -82,10 +82,11 @@ export interface TessOptions {
    * the default mode uses, min(targetEdge/40, 30·chordTol). */
   minEdge?: number;
   /** Isotropic mode: mesh single-curved four-sided faces (fillets, cylinder and cone patches) as
-   * a MAPPED mesh — structured strips along the face's flat direction — instead of free
-   * triangles. Free triangles on a fillet tilt irregularly against its straight direction, which
-   * a slicer turns into wobbling layer contours that show on prints; mapped strips are flat
-   * along the fillet. Their triangles are isosceles rather than equilateral. Default true. */
+   * a MAPPED mesh — a grid of near-square cells with two sides along the face's flat direction
+   * and two across it, each cut into two triangles — instead of free triangles. Free triangles
+   * on a fillet tilt irregularly against its straight direction, which a slicer turns into
+   * wobbling layer contours that show on prints; the grid's strips are flat along the fillet.
+   * Its triangles are right-angled rather than equilateral. Default true. */
   mappedFillets?: boolean;
 }
 
@@ -2088,16 +2089,57 @@ function gridCDT(
   return tris.length > 0;
 }
 
+interface RailEdge { id: number; fwd: boolean; n: number }
+/** A face the mapped mesher can take, with the boundary samplings it was last examined with. */
+interface MappedCand { face: BFace; surface: Surface; seen: (Vec3[] | undefined)[] | null }
+
+/** Largest side ratio a cell of a mapped grid should have (1 = squares). Along a fillet nothing
+ * but looks asks for short cells, so every step toward 1 is paid in triangles; and the two
+ * rules that enforce it (more strips / shorter cells) each round a count up, so a limit close
+ * to 1 would have them raise each other on faces of only a few cells. */
+const MAPPED_ASPECT = 1.35;
+
+function polyLen(p: Vec3[]): number {
+  let L = 0;
+  for (let i = 1; i < p.length; i++) L += Math.hypot(p[i]![0] - p[i - 1]![0], p[i]![1] - p[i - 1]![1], p[i]![2] - p[i - 1]![2]);
+  return L;
+}
+
 /** A face recognised as MAPPABLE (isotropic mode, see mapped.ts): single-curved and four-sided,
  * with its boundary split into the two cross sides (across the bend) and the two rails. */
 interface MappedPlan {
   crossA: MappedSide; crossB: MappedSide; rail0: MappedSide; rail1: MappedSide;
   /** Edge ids making up each cross side (the seeder equalises the node counts of single-edge sides). */
   edgesA: number[]; edgesB: number[];
+  /** The edges of each rail in the rail's own direction (P00 -> P01, P10 -> P11): edge id,
+   * whether its v0 -> v1 runs that way, and its segment count. */
+  edges0: RailEdge[]; edges1: RailEdge[];
+  /** The same for the cross sides (P00 -> P10, P01 -> P11). */
+  crossEdgesA: RailEdge[]; crossEdgesB: RailEdge[];
   mU: number; mV: number;
   /** Index of the curved parameter (0 = u, 1 = v). */
   C: 0 | 1;
 }
+
+/**
+ * Parameter curve of an edge polyline on a surface, remembered per polyline OBJECT. Seeding the
+ * sides of mapped faces alike looks at every such face again each time one of its edges is
+ * re-seeded, and projecting the boundary onto a spline surface is the whole cost of a look; an
+ * edge that was not re-seeded is still the same array and is projected once.
+ * The result is shared: callers must not modify it.
+ */
+const pcurveCache = new WeakMap<Vec3[], Map<Surface, { fwd?: P2[]; rev?: P2[] }>>();
+function pcurveMemo(surface: Surface, base: Vec3[], forward: boolean): P2[] {
+  let bySurf = pcurveCache.get(base);
+  if (!bySurf) pcurveCache.set(base, (bySurf = new Map()));
+  let e = bySurf.get(surface);
+  if (!e) bySurf.set(surface, (e = {}));
+  if (forward) return (e.fwd ??= edgePcurve(surface, base).p2);
+  return (e.rev ??= edgePcurve(surface, base.slice().reverse()).p2);
+}
+
+/** Debug only: why the last mappedPlan call declined. */
+let mappedWhy = "";
 
 /**
  * Recognise a mappable face from its single boundary loop. The surface must bend along one
@@ -2109,7 +2151,8 @@ interface MappedPlan {
  *     fillet's two tangent edges;
  *   - a CROSS side is a run of edges going monotonically from one rail to the other.
  * Anything else (three-sided blends, faces cut by oblique or helical trims, windows, loops that
- * wind a periodic direction) is not mappable and returns null.
+ * wind a periodic direction) is not mappable and returns null; nor is a surface whose two
+ * parameter directions cross at less than 60 degrees somewhere.
  *
  * It must also MAKE SENSE: the strips are as wide as the cross sides are seeded, and a mapped
  * mesh is for faces where that width is about the face's own curvature step. A gently curved
@@ -2119,6 +2162,8 @@ interface MappedPlan {
  */
 function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, tol: FaceTol): MappedPlan | null {
   const nE = loop.edges.length;
+  const why = (r: string): null => { if (DBG) mappedWhy = r; return null; };
+  if (DBG) mappedWhy = "";
   if (nE < 4 || surface.kind === "PLANE" || isSphere(surface)) return null;
   const uP = surface.periodicU ? surface.uPeriod || TWO_PI : 0;
   const vP = surface.periodicV ? surface.vPeriod || TWO_PI : 0;
@@ -2128,15 +2173,15 @@ function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>,
   for (let k = 0; k < nE; k++) {
     const oe = loop.edges[k]!;
     const base = sampled.get(oe.edgeId);
-    if (!base || base.length < 2) return null;
+    if (!base || base.length < 2) return why("edge without samples");
     const poly = oe.orient ? base : base.slice().reverse();
-    const pc = edgePcurve(surface, poly);
+    const pc2 = pcurveMemo(surface, base, oe.orient);
     let du = 0, dv = 0;
     if (k > 0) {
-      if (uP) du = Math.round((eu - pc.p2[0]![0]) / uP) * uP;
-      if (vP) dv = Math.round((ev - pc.p2[0]![1]) / vP) * vP;
+      if (uP) du = Math.round((eu - pc2[0]![0]) / uP) * uP;
+      if (vP) dv = Math.round((ev - pc2[0]![1]) / vP) * vP;
     }
-    const q = pc.p2.map((x): P2 => [x[0] + du, x[1] + dv]);
+    const q = pc2.map((x): P2 => [x[0] + du, x[1] + dv]);
     ep2.push(q); ep3.push(poly);
     eu = q[q.length - 1]![0]; ev = q[q.length - 1]![1];
   }
@@ -2145,16 +2190,19 @@ function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>,
     if (q[0] < umin) umin = q[0]; if (q[0] > umax) umax = q[0];
     if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1];
   }
-  if (!(umax > umin) || !(vmax > vmin)) return null;
-  const { kU, kV, mU, mV } = isoCurvature(surface, umin, umax, vmin, vmax);
+  if (!(umax > umin) || !(vmax > vmin)) return why("empty parameter box");
+  const { kU, kV, mU, mV, skew } = isoCurvature(surface, umin, umax, vmin, vmax);
   const C: 0 | 1 = kU >= kV ? 0 : 1;
   const kC = Math.max(kU, kV), kF = Math.min(kU, kV);
-  if (!(kC > 1e-9) || kC < 4 * kF) return null;
+  if (!(kC > 1e-9) || kC < 4 * kF) return why("not single-curved");
+  // The mesh follows the parameter lines: where they cross at a slant (a helical sweep's
+  // surface) its cells would be sheared rhombi, slivers whichever way they are cut.
+  if (skew > 0.5) return why("parameter lines cross at a slant");
   const span = C === 0 ? umax - umin : vmax - vmin;
   const mC = C === 0 ? mU : mV, mF = C === 0 ? mV : mU;
   // The loop must close in the parameter plane (a loop winding a periodic direction does not).
   const first = ep2[0]![0]!, last = ep2[nE - 1]![ep2[nE - 1]!.length - 1]!;
-  if (Math.hypot((last[0] - first[0]) * mU, (last[1] - first[1]) * mV) > 1e-6 * Math.hypot((umax - umin) * mU, (vmax - vmin) * mV)) return null;
+  if (Math.hypot((last[0] - first[0]) * mU, (last[1] - first[1]) * mV) > 1e-6 * Math.hypot((umax - umin) * mU, (vmax - vmin) * mV)) return why("loop does not close in (u,v)");
   // An edge is rail-like when it stays at one value of the curved parameter AND actually runs
   // along the flat one. The second half matters for short edges: a sliver edge that continues a
   // cross side for a hundredth of a millimetre also covers under 2% of the span, but it belongs
@@ -2167,14 +2215,14 @@ function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>,
   // Sides = maximal runs of one class around the loop; start the walk at a class change.
   let start = -1;
   for (let k = 0; k < nE; k++) if (isRail[k] !== isRail[(k + nE - 1) % nE]) { start = k; break; }
-  if (start < 0) return null;
+  if (start < 0) return why("no rail / no cross edge");
   const sides: { rail: boolean; edges: number[] }[] = [];
   for (let i = 0; i < nE; i++) {
     const k = (start + i) % nE;
     const cur = sides[sides.length - 1];
     if (cur && cur.rail === isRail[k]) cur.edges.push(k); else sides.push({ rail: isRail[k]!, edges: [k] });
   }
-  if (sides.length !== 4) return null;
+  if (sides.length !== 4) return why(`not four sides (${isRail.map((r) => (r ? "R" : "c")).join("")})`);
   if (sides[0]!.rail) sides.push(sides.shift()!); // cross, rail, cross, rail
   const build = (edges: number[]): MappedSide => {
     const p2: P2[] = [], p3: Vec3[] = [];
@@ -2186,38 +2234,199 @@ function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>,
   // A cross side runs monotonically from rail to rail in the curved parameter.
   for (const cs of [crossA, crossB]) {
     const a = cs.p2[0]![C], b = cs.p2[cs.p2.length - 1]![C];
-    if (Math.abs(b - a) < 0.96 * span) return null;
+    if (Math.abs(b - a) < 0.96 * span) return why("cross side does not span the face");
     const dir = Math.sign(b - a);
-    for (let i = 1; i < cs.p2.length; i++) if ((cs.p2[i]![C] - cs.p2[i - 1]![C]) * dir < -0.01 * span) return null;
+    for (let i = 1; i < cs.p2.length; i++) if ((cs.p2[i]![C] - cs.p2[i - 1]![C]) * dir < -0.01 * span) return why("cross side not monotone");
+    // ... and it must really go ACROSS: a side that drifts along the face over more than twice
+    // the face's width (the run-out of a thread flank, a long oblique trim) would be cut into
+    // strips far thinner at one end of the face than at the other.
+    let flo = Infinity, fhi = -Infinity;
+    for (const x of cs.p2) { if (x[1 - C] < flo) flo = x[1 - C]; if (x[1 - C] > fhi) fhi = x[1 - C]; }
+    if ((fhi - flo) * mF > 2 * span * mC) return why("cross side runs along the face");
   }
   // Each rail must stay on its ruling as a whole and have real length (a rail shrunk to a point
   // makes the face three-sided).
   for (const r of [rail0, rail1]) {
     let lo = Infinity, hi = -Infinity;
     for (const x of r.p2) { if (x[C] < lo) lo = x[C]; if (x[C] > hi) hi = x[C]; }
-    if (hi - lo > 0.02 * span) return null;
+    if (hi - lo > 0.02 * span) return why("rail leaves its ruling");
     const a = r.p2[0]!, b = r.p2[r.p2.length - 1]!;
-    if (Math.abs(b[1 - C] - a[1 - C]) * mF < 1e-3 * span * mC) return null;
+    if (Math.abs(b[1 - C] - a[1 - C]) * mF < 1e-3 * span * mC) return why("rail without length");
   }
   {
     let len = 0;
     for (const cs of [crossA, crossB]) for (let i = 1; i < cs.p3.length; i++) len += Math.hypot(cs.p3[i]![0] - cs.p3[i - 1]![0], cs.p3[i]![1] - cs.p3[i - 1]![1], cs.p3[i]![2] - cs.p3[i - 1]![2]);
     const width = len / (crossA.p3.length - 1 + crossB.p3.length - 1);
-    if (width < 0.3 * targetForRadius(1 / kC, tol.targetEdge, tol.chordTol, tol.normalDev)) return null;
+    // ... unless the face is a narrow band, only a few cells long along its rulings: there is
+    // no room to grade anyway, and a regular grid costs next to nothing.
+    const along = (polyLen(rail0.p3) + polyLen(rail1.p3)) / 2;
+    if (width < 0.3 * targetForRadius(1 / kC, tol.targetEdge, tol.chordTol, tol.normalDev) && along > 18 * width) return why("over-resolved");
   }
+  const railEdge = (k: number, along: boolean): RailEdge => ({ id: loop.edges[k]!.edgeId, fwd: loop.edges[k]!.orient === along, n: ep2[k]!.length - 1 });
   return {
     crossA, crossB, rail0, rail1, mU, mV, C,
     edgesA: sides[0]!.edges.map((k) => loop.edges[k]!.edgeId), edgesB: sides[2]!.edges.map((k) => loop.edges[k]!.edgeId),
+    // rail1 runs with the loop, rail0 against it.
+    edges1: sides[1]!.edges.map((k) => railEdge(k, true)), edges0: sides[3]!.edges.slice().reverse().map((k) => railEdge(k, false)),
+    // crossA runs with the loop, crossB against it.
+    crossEdgesA: sides[0]!.edges.map((k) => railEdge(k, true)), crossEdgesB: sides[2]!.edges.slice().reverse().map((k) => railEdge(k, false)),
   };
 }
 
-/** Isotropic mode: mesh a mappable face (see mappedPlan) as ruled strips. Returns false, emitting
- * nothing, for any face that is not mappable or whose cross sides carry different node counts. */
+/**
+ * Arc-length fractions (v0 -> v1, ascending) at which an edge reaches the given fractions
+ * (ascending, strictly inside 0..1) of its run in surface parameter `comp`, read off the edge's
+ * dense trace. Null when the trace does not advance monotonically in that parameter.
+ */
+function arcFractionsAtParam(surface: Surface, tr: { G: Vec3[]; S: Float64Array }, comp: 0 | 1, mus: number[]): number[] | null {
+  const n = tr.G.length;
+  if (n < 2) return null;
+  const cs = pcurveMemo(surface, tr.G, true).map((q) => q[comp]);
+  const c0 = cs[0]!, c1 = cs[n - 1]!, L = tr.S[n - 1]!;
+  if (!(Math.abs(c1 - c0) > 0) || !(L > 0)) return null;
+  const out: number[] = [];
+  let j = 1;
+  for (const mu of mus) {
+    const target = c0 + mu * (c1 - c0);
+    while (j < n - 1 && (cs[j]! - target) * (c1 - c0) < 0) j++;
+    const d = cs[j]! - cs[j - 1]!;
+    const w = Math.abs(d) > 0 ? (target - cs[j - 1]!) / d : 0;
+    if (!(w >= -1e-6 && w <= 1 + 1e-6)) return null;
+    const f = (tr.S[j - 1]! + (tr.S[j]! - tr.S[j - 1]!) * Math.min(1, Math.max(0, w))) / L;
+    if (!(f > 0 && f < 1) || (out.length && f <= out[out.length - 1]!)) return null;
+    out.push(f);
+  }
+  return out;
+}
+
+/** A side's nodes as positions 0..1 of its run in surface parameter `comp` (null: the side does
+ * not advance monotonically in it). */
+function sidePositions(r: MappedSide, comp: 0 | 1): number[] | null {
+  const f0 = r.p2[0]![comp], f1 = r.p2[r.p2.length - 1]![comp];
+  if (!(Math.abs(f1 - f0) > 0)) return null;
+  const x = r.p2.map((q) => (q[comp] - f0) / (f1 - f0));
+  for (let k = 1; k < x.length; k++) if (!(x[k]! > x[k - 1]!)) return null;
+  x[0] = 0; x[x.length - 1] = 1;
+  return x;
+}
+
+/** Node indices of the B-rep vertices inside a side (the joints between its edges). */
+function sideJoints(es: RailEdge[]): number[] {
+  const v: number[] = [];
+  let k = 0;
+  for (let i = 0; i + 1 < es.length; i++) { k += es[i]!.n; v.push(k); }
+  return v;
+}
+
+/** Node index ranges of the locked edges of a side (see matchRailStations). */
+function sideLocks(es: RailEdge[], locked: (e: RailEdge) => boolean): [number, number][] {
+  const out: [number, number][] = [];
+  let k = 0;
+  for (const e of es) { if (locked(e)) out.push([k, k + e.n]); k += e.n; }
+  return out;
+}
+
+/**
+ * Pin the edges of one side of a mapped face so that its nodes sit at the stations `s`
+ * (positions 0..1 in surface parameter `comp`, joints included), given its present positions
+ * `x`. Returns the ids of the edges that were re-seeded (none when the side is already there,
+ * to a twentieth of a cell), or null when an edge cannot take its stations; `sampled` is
+ * updated for every edge that changed. `locked` edges are left as they are.
+ */
+function pinSide(
+  surface: Surface, comp: 0 | 1, x: number[], s: number[], es: RailEdge[], seeder: EdgeSeeder, sampled: Map<number, Vec3[]>,
+  locked: (e: RailEdge) => boolean = () => false,
+): number[] | null {
+  let same = s.length === x.length;
+  for (let k = 1; same && k < s.length - 1; k++) if (Math.abs(s[k]! - x[k]!) > 0.05 * Math.min(x[k]! - x[k - 1]!, x[k + 1]! - x[k]!)) same = false;
+  if (same) return [];
+  const done: number[] = [];
+  let k0 = 0, j = 1, ok = true;
+  for (const e of es) {
+    const xa = x[k0]!, xb = x[k0 + e.n]!;
+    k0 += e.n;
+    const mus: number[] = [];
+    while (j < s.length - 1 && s[j]! < xb - 1e-12) { if (s[j]! > xa + 1e-12) mus.push((s[j]! - xa) / (xb - xa)); j++; }
+    j++; // the station at the joint itself
+    if (locked(e)) continue; // another face owns this edge; the stations inside it are its nodes
+    const tr = seeder.trace(e.id);
+    const fr = tr && arcFractionsAtParam(surface, tr, comp, e.fwd ? mus : mus.map((u) => 1 - u).reverse());
+    if (!fr || !seeder.pin(e.id, fr, true)) { ok = false; continue; }
+    done.push(e.id);
+    for (const id of seeder.group(e.id)) sampled.set(id, seeder.seed(id));
+  }
+  return ok ? done : done.length ? done : null;
+}
+
+/**
+ * Isotropic mode, after the cross sides of the mapped faces are settled: seed the two RAILS of
+ * each mapped face alike, so the face takes the grid layout (quads with two sides along the
+ * fillet and two across it, see mapped.ts) instead of strips of free triangles.
+ *
+ * Each rail's nodes are read as positions along the face's flat parameter; matchRailStations
+ * merges the two sets (every B-rep vertex kept, the denser rail's spacing everywhere), and each
+ * rail edge is pinned to the merged positions. A rail is usually shared with the next face, and
+ * when that is a mapped face too the change travels on, so this repeats until nothing moves.
+ * An edge that is a CROSS side of some mapped face is never touched here (its nodes are that
+ * face's rulings); the other rail takes its nodes over that stretch. Faces that cannot be
+ * matched keep their rails and are meshed as strips.
+ */
+function matchMappedRails(cand: MappedCand[], tolOf: (fid: number) => FaceTol, seeder: EdgeSeeder, sampled: Map<number, Vec3[]>): void {
+  const faces: MappedCand[] = [];
+  const crossFixed = new Set<number>();
+  const facesOfEdge = new Map<number, number[]>();
+  for (const c of cand) {
+    const plan = mappedPlan(c.surface, c.face.loops[0]!, sampled, tolOf(c.face.faceId));
+    if (!plan) continue;
+    for (const id of plan.edgesA) crossFixed.add(seeder.canon(id));
+    for (const id of plan.edgesB) crossFixed.add(seeder.canon(id));
+    for (const e of [...plan.edges0, ...plan.edges1]) {
+      const k = seeder.canon(e.id);
+      (facesOfEdge.get(k) ?? facesOfEdge.set(k, []).get(k)!).push(faces.length);
+    }
+    faces.push(c);
+  }
+  if (faces.length === 0) return;
+  const settled = new Uint8Array(faces.length);
+  for (let round = 0; round < 8; round++) {
+    let changed = false;
+    for (let fi = 0; fi < faces.length; fi++) {
+      if (settled[fi]) continue;
+      settled[fi] = 1;
+      const { face, surface } = faces[fi]!;
+      const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
+      if (!plan) continue;
+      const F = (1 - plan.C) as 0 | 1;
+      const positions = (r: MappedSide): number[] | null => sidePositions(r, F);
+      const x0 = positions(plan.rail0), x1 = positions(plan.rail1);
+      const dbg = (r: string): void => { if (DBG && plan.rail0.p2.length !== plan.rail1.p2.length) console.error(`[mapped] fid=${face.faceId} rails ${plan.rail0.p2.length - 1}/${plan.rail1.p2.length - 1} stay unmatched: ${r}`); };
+      if (!x0 || !x1) { dbg("a rail does not advance monotonically"); continue; }
+      const v0 = sideJoints(plan.edges0), v1 = sideJoints(plan.edges1);
+      const locked = (e: RailEdge): boolean => crossFixed.has(seeder.canon(e.id));
+      const l0 = sideLocks(plan.edges0, locked), l1 = sideLocks(plan.edges1, locked);
+      const m = matchRailStations(x0, v0, x1, v1, l0, l1);
+      if (!m) { dbg(`no common stations (joints ${v0.length}/${v1.length}, edges owned by other faces ${l0.length}/${l1.length})`); continue; }
+      for (const [x, s, es] of [[x0, m.sa, plan.edges0], [x1, m.sb, plan.edges1]] as const) {
+        const done = pinSide(surface, F, x, s, es, seeder, sampled, locked);
+        if (done === null) { dbg("a rail edge cannot take the stations (not monotone in the flat parameter, or the chords would leave the tolerance)"); continue; }
+        if (done.length === 0) continue;
+        changed = true;
+        // Every other mapped face along a changed edge must look again.
+        for (const id of done) for (const other of facesOfEdge.get(seeder.canon(id)) ?? []) if (other !== fi) settled[other] = 0;
+      }
+    }
+    if (!changed) break;
+  }
+}
+
+/** Isotropic mode: mesh a mappable face (see mappedPlan) as a mapped grid, or as ruled strips
+ * when its rails carry different node counts. Returns false, emitting nothing, for any face
+ * that is not mappable or whose cross sides carry different node counts. */
 function tessellateMapped(
   surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number, verts: number[], faceIds: number[], sign: number, tol: FaceTol,
 ): boolean {
   const plan = mappedPlan(surface, loop, sampled, tol);
-  if (!plan) return false;
+  if (!plan) { if (DBG && mappedWhy) console.error(`[mapped] fid=${fid} not mappable: ${mappedWhy}`); return false; }
   const m = mappedMesh(surface, plan.crossA, plan.crossB, plan.rail0, plan.rail1, plan.mU, plan.mV);
   if (!m) {
     if (DBG) console.error(`[mapped] fid=${fid} declined (cross sides ${plan.crossA.p2.length - 1}/${plan.crossB.p2.length - 1} segments, or folded grid)`);
@@ -2245,14 +2454,17 @@ function segLen(p: Vec3[], i: number): number {
  * grows by g per unit length and is capped at hMax; the run gets as many segments as that size
  * asks for (rounded), spread at equal steps of the integral of 1/size. Empty = one segment.
  */
-function gradedFractions(len: number, h0: number, h1: number, hMax: number, g: number): number[] {
+function gradedFractions(len: number, h0: number, h1: number, hMax: number, g: number, fieldAt?: (f: number) => number): number[] {
   if (!(len > 0) || !(hMax > 0)) return [];
   const floor = hMax / 40;
-  const size = (s: number): number => Math.max(floor, Math.min(hMax, h0 + g * s, h1 + g * (len - s)));
+  // `fieldAt` (fraction of the run -> size) is the body's size field along the run: a run that
+  // passes close to something fine must be seeded finely there too, not only near its ends.
+  const size = (s: number): number => Math.max(floor, Math.min(hMax, h0 + g * s, h1 + g * (len - s), fieldAt ? fieldAt(s / len) : Infinity));
   // Integrate 1/size with steps no longer than a quarter of the smallest size involved.
-  const M = Math.min(8192, Math.max(8, Math.ceil(len / (0.25 * Math.max(floor, Math.min(hMax, h0, h1))))));
+  const M = Math.min(fieldAt ? 1024 : 8192, Math.max(8, Math.ceil(len / (0.25 * Math.max(floor, Math.min(hMax, h0, h1))))));
   const A = new Float64Array(M + 1);
-  for (let i = 1; i <= M; i++) A[i] = A[i - 1]! + (0.5 * (1 / size(((i - 1) * len) / M) + 1 / size((i * len) / M)) * len) / M;
+  let inv0 = 1 / size(0);
+  for (let i = 1; i <= M; i++) { const inv1 = 1 / size((i * len) / M); A[i] = A[i - 1]! + (0.5 * (inv0 + inv1) * len) / M; inv0 = inv1; }
   const N = Math.min(4096, Math.max(1, Math.ceil(A[M]! - 0.3)));
   const out: number[] = [];
   let j = 1;
@@ -2427,7 +2639,8 @@ function tessellatePeriodicUnroll(
       // like one — starting at each rim's local spacing and growing toward the face target,
       // instead of meeting a finely seeded rim with a full-size first step.
       const fr = ISO
-        ? gradedFractions(len, Math.min(segLen(b.p3, 0), segLen(b.p3, b.p3.length - 2)), Math.min(segLen(t.p3, 0), segLen(t.p3, t.p3.length - 2)), fT, ISO.g)
+        ? gradedFractions(len, Math.min(segLen(b.p3, 0), segLen(b.p3, b.p3.length - 2)), Math.min(segLen(t.p3, 0), segLen(t.p3, t.p3.length - 2)), fT, ISO.g,
+          ISO.sizeAt ? (f) => { const p = surface.evaluate(...at(f)); return ISO!.sizeAt!(p[0], p[1], p[2]); } : undefined)
         : null;
       if (fr ? fr.length === 0 : n <= 1) return plain;
       const sq: P2[] = [], s3: Vec3[] = [];
@@ -5639,6 +5852,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     g: Math.max(0.01, (opts.growthRate ?? 1.3) - 1),
     hMin: opts.minEdge !== undefined && opts.minEdge > 0 ? Math.min(opts.minEdge, targetEdge) : Math.min(targetEdge / 40, 30 * chordTol),
     mapped: opts.mappedFillets !== false,
+    sizeAt: null,
   } : null;
   // Collect diagnostics warnings for this run (module-level sink: tessellation is synchronous,
   // and the deep meshing code reports without threading a sink through every signature).
@@ -5719,78 +5933,149 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   // whatever is fine near either end). Take the larger of the two counts for both, re-seed, and
   // repeat: an arc is shared by the next fillet along a chain, so a raise can propagate.
   if (seeder && ISO?.mapped) {
-    for (let round = 0; round < 6; round++) {
-      let changed = false;
-      for (const solid of brep.solids) for (const face of solid.faces) {
-        const surface = faceSurf.get(face.faceId);
-        if (!surface || face.loops.length !== 1) continue;
-        const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
-        if (!plan) continue;
-        const n = Math.max(plan.crossA.p2.length - 1, plan.crossB.p2.length - 1);
-        for (const ids of [plan.edgesA, plan.edgesB]) {
-          if (ids.length === 1) { if (seeder.requireUniform(ids[0]!, n)) changed = true; continue; }
-          // A cross side made of several edges keeps their seeding; if it is short of nodes, its
-          // longest edge takes the difference.
-          const counts = ids.map((id) => (sampled.get(id)?.length ?? 2) - 1);
-          const sum = counts.reduce((x, y) => x + y, 0);
-          if (sum >= n) continue;
-          let big = 0;
-          for (let k = 1; k < ids.length; k++) if (counts[k]! > counts[big]!) big = k;
-          if (seeder.requireUniform(ids[big]!, counts[big]! + n - sum)) changed = true;
-        }
-      }
-      if (!changed) break;
-      for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
-    }
-    // Same COUNT is not yet same POSITIONS: node i of the two cross sides must sit at the same
-    // value of the curved parameter, or the "rulings" between them run askew and the strips
-    // twist. Even spacing in arc length only guarantees that when both sides have the same
-    // shape (two circular arcs); a fillet that runs into a slanted face ends in an ellipse arc.
-    // So one side keeps its uniform nodes and the other is pinned to the same parameter values,
-    // read off a dense trace of its curve. A side already fixed by the neighbouring fillet is
-    // the reference; if both are, the face keeps what it has.
-    let anyPin = false;
+    // The mappable faces, found once: a face that is not mappable with the field's own seeding
+    // does not become so by seeding other faces' sides alike. `seen` holds the boundary
+    // samplings a face was last looked at with, so a round only revisits faces that changed.
+    const cand: MappedCand[] = [];
     for (const solid of brep.solids) for (const face of solid.faces) {
       const surface = faceSurf.get(face.faceId);
       if (!surface || face.loops.length !== 1) continue;
-      const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
-      if (!plan || plan.edgesA.length !== 1 || plan.edgesB.length !== 1) continue;
-      const N = plan.crossA.p2.length - 1;
-      if (N < 2 || plan.crossB.p2.length - 1 !== N) continue;
-      const aFixed = seeder.isPinned(plan.edgesA[0]!), bFixed = seeder.isPinned(plan.edgesB[0]!);
-      if (aFixed && bFixed) continue;
-      const [ref, dep, depId] = bFixed ? [plan.crossB, plan.crossA, plan.edgesA[0]!] : [plan.crossA, plan.crossB, plan.edgesB[0]!];
-      seeder.lock(bFixed ? plan.edgesB[0]! : plan.edgesA[0]!);
-      const C = plan.C;
-      const tr = seeder.trace(depId);
-      if (!tr || tr.G.length < 2) continue;
-      // Trace of the dependent side in the side's own direction, projected to the face.
-      const along = Math.hypot(tr.G[0]![0] - dep.p3[0]![0], tr.G[0]![1] - dep.p3[0]![1], tr.G[0]![2] - dep.p3[0]![2])
-        <= Math.hypot(tr.G[tr.G.length - 1]![0] - dep.p3[0]![0], tr.G[tr.G.length - 1]![1] - dep.p3[0]![1], tr.G[tr.G.length - 1]![2] - dep.p3[0]![2]);
-      const G = along ? tr.G : tr.G.slice().reverse();
-      const L = tr.S[tr.S.length - 1]!;
-      const sOf = (j: number): number => (along ? tr.S[j]! : L - tr.S[tr.S.length - 1 - j]!);
-      const cs = edgePcurve(surface, G).p2.map((q) => q[C]);
-      const c0 = cs[0]!, c1 = cs[cs.length - 1]!, r0 = ref.p2[0]![C], r1 = ref.p2[N]![C];
-      if (!(Math.abs(c1 - c0) > 0) || !(Math.abs(r1 - r0) > 0)) continue;
-      const fr: number[] = [];
-      let j = 1, ok = true;
-      for (let i = 1; i < N && ok; i++) {
-        const target = c0 + ((ref.p2[i]![C] - r0) / (r1 - r0)) * (c1 - c0);
-        while (j < cs.length - 1 && (cs[j]! - target) * (c1 - c0) < 0) j++;
-        const d = cs[j]! - cs[j - 1]!;
-        const w = Math.abs(d) > 0 ? (target - cs[j - 1]!) / d : 0;
-        if (!(w >= -1e-6 && w <= 1 + 1e-6)) { ok = false; break; } // the trace is not monotone here
-        const f = (sOf(j - 1) + (sOf(j) - sOf(j - 1)) * Math.min(1, Math.max(0, w))) / L;
-        if (fr.length && f <= fr[fr.length - 1]!) { ok = false; break; }
-        fr.push(f);
-      }
-      if (!ok || fr.length !== N - 1 || fr[0]! <= 0 || fr[fr.length - 1]! >= 1) continue;
-      // Fractions are in the side's direction; the seeder wants them v0 -> v1.
-      seeder.pin(depId, along ? fr : fr.map((x) => 1 - x).reverse());
-      anyPin = true;
+      if (mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId))) cand.push({ face, surface, seen: null });
     }
-    if (anyPin) for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+    const settle = (): void => {
+      for (const c of cand) c.seen = null;
+      for (let round = 0; round < 10; round++) {
+        let changed = false;
+        for (const c of cand) {
+          const { face, surface } = c;
+          const cur = face.loops[0]!.edges.map((oe) => sampled.get(oe.edgeId));
+          if (c.seen && cur.every((x, k) => x === c.seen![k])) continue;
+          c.seen = cur;
+          const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
+          if (!plan) continue;
+          let n = Math.max(plan.crossA.p2.length - 1, plan.crossB.p2.length - 1);
+          // SQUARE CELLS. With the rails seeded alike (matchMappedRails) the face becomes a grid
+          // of N strips by M cells, and each cell should be close to a square: strips no wider
+          // than MAPPED_ASPECT cell lengths (more strips otherwise), cells no longer than
+          // MAPPED_ASPECT strip widths (the rails are capped at that size otherwise).
+          const crossLen = (polyLen(plan.crossA.p3) + polyLen(plan.crossB.p3)) / 2;
+          const M0 = plan.rail0.p2.length - 1, M1 = plan.rail1.p2.length - 1;
+          // The cell length that counts is the rails' usual one (the median): a rail graded
+          // toward one fine corner must not thin every strip of the face.
+          const cells: number[] = [];
+          for (const r of [plan.rail0, plan.rail1]) for (let k = 1; k < r.p3.length; k++) cells.push(segLen(r.p3, k - 1));
+          cells.sort((x, y) => x - y);
+          n = Math.min(4096, Math.max(n, Math.ceil(crossLen / (MAPPED_ASPECT * cells[cells.length >> 1]!) - 1e-6)));
+          for (const e of [...plan.edges0, ...plan.edges1]) if (seeder.limitSize(e.id, (MAPPED_ASPECT * crossLen) / n)) changed = true;
+          // Two rails that are both cross sides of other mapped faces (uniform, one edge each)
+          // can only agree by count.
+          if (plan.edges0.length === 1 && plan.edges1.length === 1 && M0 !== M1 && seeder.isUniform(plan.edges0[0]!.id) && seeder.isUniform(plan.edges1[0]!.id)) {
+            for (const e of [plan.edges0[0]!, plan.edges1[0]!]) if (seeder.requireUniform(e.id, Math.max(M0, M1))) changed = true;
+          }
+          // A cross side of one edge is seeded uniformly with that count. One made of several
+          // edges keeps the field's seeding here and is pinned to the other side's stations below.
+          for (const ids of [plan.edgesA, plan.edgesB]) if (ids.length === 1 && seeder.requireUniform(ids[0]!, n)) changed = true;
+        }
+        if (!changed) break;
+        for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+      }
+      // Same COUNT is not yet same POSITIONS: node i of the two cross sides must sit at the same
+      // value of the curved parameter, or the "rulings" between them run askew and the strips
+      // twist. Even spacing in arc length only guarantees that when both sides have the same
+      // shape (two circular arcs); a fillet that runs into a slanted face ends in an ellipse arc.
+      // So one side keeps its uniform nodes and the other is pinned to the same parameter values,
+      // read off a dense trace of its curve. A side already fixed by the neighbouring fillet is
+      // the reference; if both are, the face keeps what it has.
+      let anyPin = false;
+      for (const { face, surface } of cand) {
+        const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
+        if (!plan) continue;
+        if (plan.edgesA.length !== 1 || plan.edgesB.length !== 1) {
+          // A cross side made of SEVERAL edges: its B-rep vertices cannot move, so the two
+          // sides get common stations the way rails do (matchRailStations), in the curved
+          // parameter. A one-edge side is the uniform reference and the other side takes its
+          // stations, each vertex at the nearest; two many-edge sides are merged.
+          const xa = sidePositions(plan.crossA, plan.C), xb = sidePositions(plan.crossB, plan.C);
+          if (!xa || !xb) continue;
+          // Not to be changed: a one-edge side (the uniform reference) and any edge whose nodes
+          // another mapped face has already fixed.
+          const lockedOf = (es: RailEdge[]) => (e: RailEdge): boolean => es.length === 1 || seeder.isPinned(e.id);
+          const la = lockedOf(plan.crossEdgesA), lb = lockedOf(plan.crossEdgesB);
+          const m = matchRailStations(xa, sideJoints(plan.crossEdgesA), xb, sideJoints(plan.crossEdgesB), sideLocks(plan.crossEdgesA, la), sideLocks(plan.crossEdgesB, lb));
+          if (!m) continue;
+          for (const [x, st, es, lk] of [[xa, m.sa, plan.crossEdgesA, la], [xb, m.sb, plan.crossEdgesB, lb]] as const) {
+            if (pinSide(surface, plan.C, x, st, es, seeder, sampled, lk)?.length) anyPin = true;
+            for (const e of es) seeder.lock(e.id);
+          }
+          continue;
+        }
+        const N = plan.crossA.p2.length - 1;
+        if (N < 2 || plan.crossB.p2.length - 1 !== N) continue;
+        const aFixed = seeder.isPinned(plan.edgesA[0]!), bFixed = seeder.isPinned(plan.edgesB[0]!);
+        if (aFixed && bFixed) continue;
+        const [ref, dep, depId] = bFixed ? [plan.crossB, plan.crossA, plan.edgesA[0]!] : [plan.crossA, plan.crossB, plan.edgesB[0]!];
+        seeder.lock(bFixed ? plan.edgesB[0]! : plan.edgesA[0]!);
+        const C = plan.C;
+        const tr = seeder.trace(depId);
+        if (!tr || tr.G.length < 2) continue;
+        // Trace of the dependent side in the side's own direction, projected to the face.
+        const along = Math.hypot(tr.G[0]![0] - dep.p3[0]![0], tr.G[0]![1] - dep.p3[0]![1], tr.G[0]![2] - dep.p3[0]![2])
+          <= Math.hypot(tr.G[tr.G.length - 1]![0] - dep.p3[0]![0], tr.G[tr.G.length - 1]![1] - dep.p3[0]![1], tr.G[tr.G.length - 1]![2] - dep.p3[0]![2]);
+        const G = along ? tr.G : tr.G.slice().reverse();
+        const L = tr.S[tr.S.length - 1]!;
+        const sOf = (j: number): number => (along ? tr.S[j]! : L - tr.S[tr.S.length - 1 - j]!);
+        const cs = edgePcurve(surface, G).p2.map((q) => q[C]);
+        const c0 = cs[0]!, c1 = cs[cs.length - 1]!, r0 = ref.p2[0]![C], r1 = ref.p2[N]![C];
+        if (!(Math.abs(c1 - c0) > 0) || !(Math.abs(r1 - r0) > 0)) continue;
+        const fr: number[] = [];
+        let j = 1, ok = true;
+        for (let i = 1; i < N && ok; i++) {
+          const target = c0 + ((ref.p2[i]![C] - r0) / (r1 - r0)) * (c1 - c0);
+          while (j < cs.length - 1 && (cs[j]! - target) * (c1 - c0) < 0) j++;
+          const d = cs[j]! - cs[j - 1]!;
+          const w = Math.abs(d) > 0 ? (target - cs[j - 1]!) / d : 0;
+          if (!(w >= -1e-6 && w <= 1 + 1e-6)) { ok = false; break; } // the trace is not monotone here
+          const f = (sOf(j - 1) + (sOf(j) - sOf(j - 1)) * Math.min(1, Math.max(0, w))) / L;
+          if (fr.length && f <= fr[fr.length - 1]!) { ok = false; break; }
+          fr.push(f);
+        }
+        if (!ok || fr.length !== N - 1 || fr[0]! <= 0 || fr[fr.length - 1]! >= 1) continue;
+        // Fractions are in the side's direction; the seeder wants them v0 -> v1.
+        seeder.pin(depId, along ? fr : fr.map((x) => 1 - x).reverse());
+        anyPin = true;
+      }
+      if (anyPin) for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+      matchMappedRails(cand, tolOf, seeder, sampled);
+    };
+    // Seeding the sides alike can itself make a face unmappable: a neighbour's demand raises
+    // its strip count until the strips are far thinner than its curvature asks (the gate in
+    // mappedPlan), its cross sides cannot be brought to the same stations after all, or a
+    // side seeded evenly is far too coarse for a fine spot it passes. Such a face must be
+    // meshed freely, and for that its sides should be seeded
+    // by the field again, not uniformly. So it leaves the candidates, every demand made so
+    // far is withdrawn, and the rest settle anew.
+    for (let again = 0; cand.length; again++) {
+      settle();
+      const keep = again < 4 ? cand.filter((c) => {
+        const plan = mappedPlan(c.surface, c.face.loops[0]!, sampled, tolOf(c.face.faceId));
+        if (!plan || plan.crossA.p2.length !== plan.crossB.p2.length) return false; // unequal cross sides cannot be mapped either
+        // Nor a face whose cross side, evenly divided, strides over something the size field
+        // wants meshed several times finer (a sliver edge at its end): the faces around that
+        // spot need the side graded down to it.
+        return ![...plan.edgesA, ...plan.edgesB].some((id) => seeder.coarseness(id) > 3);
+      }) : cand;
+      if (keep.length === cand.length) break;
+      cand.length = 0; cand.push(...keep);
+      seeder.resetMapped();
+      for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+    }
+    // The mapped faces have refined some edges beyond what the size field knew when every edge
+    // was seeded. Let the field take that in, seed again and settle again (twice at most: the
+    // second pass changes little, and whatever it still refines is refined by a small step).
+    for (let pass = 0; pass < 2 && cand.length && seeder.absorb(); pass++) {
+      for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+      settle();
+    }
   }
   // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
   // run-out at 0.7mm chord tolerance) samples its edges with so few points that the boundary
@@ -5933,6 +6218,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     }
     const verts: number[] = [];
     const faceIds: number[] = [];
+    if (ISO) { const field = seeder?.fields.get(solid.id); ISO.sizeAt = field ? (x, y, z) => field.at(x, y, z) : null; }
     for (const face of solid.faces) {
       facesTotal++;
       tick(W_FACE);

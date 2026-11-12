@@ -430,6 +430,78 @@ export class EdgeSeeder {
     return true;
   }
 
+  /** True when the edge is seeded uniformly (it is a cross side of some mapped face). */
+  isUniform(id: number): boolean { return this.uniform.has(this.twin.get(id)?.of ?? id); }
+
+  /** Cap the segment length along edge `id` at `h` (a rail of a mapped face: its cells should
+   * not be much longer than the face's strips are wide). The field still grades the edge below
+   * the cap. Returns true if the cap is new or lower than before. */
+  limitSize(id: number, h: number): boolean {
+    const canon = this.twin.get(id)?.of ?? id;
+    const g = this.geom.get(canon);
+    if (!g || !(h > 0)) return false;
+    h = Math.max(h, g.hMin);
+    if (h >= 0.99 * (this.cap.get(canon) ?? Infinity)) return false;
+    this.cap.set(canon, h);
+    this.seeded.delete(canon);
+    return true;
+  }
+  private cap = new Map<number, number>();
+
+  /**
+   * Teach the size field what the mapped faces did. An edge seeded uniformly, capped or pinned
+   * for a mapped face can end up finer than the field asked for, and the field is what every
+   * OTHER edge is seeded from: an edge that meets such a one at a vertex would start with a
+   * segment several times longer than its neighbour's, and the face between them gets a sliver
+   * in that corner. So every segment clearly shorter than the field allows becomes a source of
+   * its own, the fields are rebuilt, and all seedings are dropped (uniform counts and caps
+   * stay; pins are positions on the old seeding and are dropped too). The caller then seeds
+   * again and repeats the mapped-face passes. Returns false when there was nothing to add.
+   */
+  absorb(): boolean {
+    const dirty = new Set<SizeField>();
+    for (const id of new Set([...this.uniform.keys(), ...this.pinned.keys(), ...this.cap.keys()])) {
+      const pts = this.seeded.get(id);
+      const solid = this.solidOf.get(id);
+      if (!pts || solid === undefined) continue;
+      const fields = [solid, ...(this.twinSolids.get(id) ?? [])].map((so) => this.fields.get(so)).filter((x): x is SizeField => !!x);
+      for (let i = 0; i + 1 < pts.length; i++) {
+        const a = pts[i]!, b = pts[i + 1]!, len = d3(a, b);
+        const m = mix(a, b, 0.5);
+        for (const f of fields) {
+          if (len >= 0.8 * f.at(m[0], m[1], m[2])) continue;
+          f.add(a[0], a[1], a[2], len); f.add(m[0], m[1], m[2], len); f.add(b[0], b[1], b[2], len);
+          dirty.add(f);
+        }
+      }
+    }
+    if (dirty.size === 0) return false;
+    for (const f of dirty) f.build();
+    this.seeded.clear(); this.pinned.clear(); this.locked.clear();
+    return true;
+  }
+
+  /** How much coarser than the size field edge `id` is seeded at its worst segment (segment
+   * length over the field's size at its middle; about 1 for an edge the field seeded). A
+   * uniformly seeded edge that runs into something fine exceeds it there. */
+  coarseness(id: number): number {
+    const canon = this.twin.get(id)?.of ?? id;
+    const pts = this.seed(canon), solid = this.solidOf.get(canon);
+    const fields = solid === undefined ? [] : [solid, ...(this.twinSolids.get(canon) ?? [])].map((so) => this.fields.get(so)).filter((x): x is SizeField => !!x);
+    let worst = 0;
+    for (let i = 0; i + 1 < pts.length; i++) {
+      const m = mix(pts[i]!, pts[i + 1]!, 0.5), len = d3(pts[i]!, pts[i + 1]!);
+      for (const f of fields) worst = Math.max(worst, len / f.at(m[0], m[1], m[2]));
+    }
+    return worst;
+  }
+
+  /** Withdraw everything the mapped faces asked for (uniform counts, caps, pins): every edge is
+   * seeded by the field alone again. */
+  resetMapped(): void {
+    this.uniform.clear(); this.cap.clear(); this.pinned.clear(); this.locked.clear(); this.seeded.clear();
+  }
+
   /** True once the edge's node positions are fixed by a mapped face (as its first cross side,
    * whose uniform nodes the second side copied, or as that second side). */
   isPinned(id: number): boolean { const c = this.twin.get(id)?.of ?? id; return this.pinned.has(c) || this.locked.has(c); }
@@ -442,18 +514,50 @@ export class EdgeSeeder {
     const g = this.geom.get(tw?.of ?? id);
     if (!g) return null;
     if (!tw?.reversed) return { G: g.G, S: g.S };
+    const hit = this.revTrace.get(id);
+    if (hit) return hit;
     const n = g.G.length, L = g.S[n - 1]!;
     const S = new Float64Array(n);
     for (let i = 0; i < n; i++) S[i] = L - g.S[n - 1 - i]!;
-    return { G: g.G.slice().reverse(), S };
+    const out = { G: g.G.slice().reverse(), S };
+    this.revTrace.set(id, out);
+    return out;
   }
-  /** Fix the interior nodes of edge `id` at the given arc-length fractions (ascending, v0 -> v1). */
-  pin(id: number, fractions: number[]): void {
+  private revTrace = new Map<number, { G: Vec3[]; S: Float64Array }>();
+  /** Fix the interior nodes of edge `id` at the given arc-length fractions (ascending, v0 -> v1).
+   * With `check`, the pin is refused (false, nothing changes) if the chords between those nodes
+   * would leave the curve by more than its chord tolerance. */
+  pin(id: number, fractions: number[], check = false): boolean {
     const tw = this.twin.get(id);
     const canon = tw?.of ?? id;
-    this.pinned.set(canon, tw?.reversed ? fractions.map((x) => 1 - x).reverse() : fractions.slice());
+    const fr = tw?.reversed ? fractions.map((x) => 1 - x).reverse() : fractions.slice();
+    if (check) {
+      const g = this.geom.get(canon);
+      if (!g) return false;
+      const n = g.G.length, L = g.S[n - 1]!;
+      const nodes: Vec3[] = [g.G[0]!, ...fr.map((x) => EdgeSeeder.pointAt(g, x * L)), g.G[n - 1]!];
+      let k = 0;
+      for (let i = 1; i < n - 1; i++) {
+        while (k < fr.length && fr[k]! * L < g.S[i]!) k++;
+        if (segDist(g.G[i]!, nodes[k]!, nodes[k + 1]!) > g.chordTol) return false;
+      }
+    }
+    this.pinned.set(canon, fr);
     this.seeded.delete(canon);
+    return true;
   }
+  /** The edge that is actually seeded for `id`: itself, or its twin group's canonical edge. */
+  canon(id: number): number { return this.twin.get(id)?.of ?? id; }
+  /** Every edge that shares `id`'s seeding (itself and its twins). */
+  group(id: number): number[] {
+    if (!this.members) {
+      this.members = new Map();
+      for (const [m, t] of this.twin) (this.members.get(t.of) ?? this.members.set(t.of, [t.of]).get(t.of)!).push(m);
+    }
+    const c = this.canon(id);
+    return this.members.get(c) ?? [c];
+  }
+  private members: Map<number, number[]> | null = null;
 
   /** The nodes of edge `id`, v0 to v1 inclusive. `f` > 1 asks for f times the density. */
   seed(id: number, f = 1): Vec3[] {
@@ -462,9 +566,14 @@ export class EdgeSeeder {
       // Copy the canonical edge's nodes; only the two ends are this edge's own vertices (equal to
       // the canonical ones at the weld scale, but they must be THIS edge's exact points).
       const base = this.seed(tw.of, f);
+      // Same canonical nodes as last time: hand back the same copy, so a caller can tell an
+      // unchanged edge by identity for twins as it can for every other edge.
+      const hit = f === 1 ? this.twinOut.get(id) : undefined;
+      if (hit && hit.base === base) return hit.out;
       const e = this.brep.edges.get(id) as BEdge;
       const out = tw.reversed ? base.slice().reverse() : base.slice();
       out[0] = e.v0; out[out.length - 1] = e.v1;
+      if (f === 1) this.twinOut.set(id, { base, out });
       return out;
     }
     if (f === 1) {
@@ -476,6 +585,8 @@ export class EdgeSeeder {
     }
     return this.seedOwn(id, f);
   }
+
+  private twinOut = new Map<number, { base: Vec3[]; out: Vec3[] }>();
 
   private seedOwn(id: number, f: number): Vec3[] {
     const e = this.brep.edges.get(id) as BEdge;
@@ -490,12 +601,14 @@ export class EdgeSeeder {
     if (!g) return [e.v0, e.v1];
     // Size along the edge: this body's field, and for a twin group spanning bodies theirs too.
     const others = (this.twinSolids.get(id) ?? []).map((so) => this.fields.get(so)).filter((x): x is SizeField => !!x);
-    const sizeAt = others.length === 0
+    const cap = f === 1 ? this.cap.get(id) ?? Infinity : Infinity;
+    const sizeAt = others.length === 0 && cap === Infinity
       ? (x: number, y: number, z: number): number => field.at(x, y, z)
-      : (x: number, y: number, z: number): number => { let h = field.at(x, y, z); for (const o of others) h = Math.min(h, o.at(x, y, z)); return h; };
+      : (x: number, y: number, z: number): number => { let h = Math.min(cap, field.at(x, y, z)); for (const o of others) h = Math.min(h, o.at(x, y, z)); return h; };
     const out: Vec3[] = [g.G[0]!];
     const single = g.breaks.length === 2;
-    const uni = f === 1 ? this.uniform.get(id) : undefined;
+    let uni = f === 1 ? this.uniform.get(id) : undefined;
+    if (uni !== undefined && cap < Infinity) uni = Math.max(uni, Math.min(4096, Math.ceil(g.S[g.G.length - 1]! / cap - 1e-6)));
     const pins = f === 1 ? this.pinned.get(id) : undefined;
     if (pins) {
       const L = g.S[g.G.length - 1]!;

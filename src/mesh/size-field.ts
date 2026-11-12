@@ -51,11 +51,13 @@ export class SizeField {
     this.stage.push(x, y, z, Math.max(h, this.hMin));
   }
 
-  /** Build the tree from the staged sources. DOMINATED sources (another source already implies
+  /** Build the tree from the staged sources (callable again after further `add`s). DOMINATED sources (another source already implies
    * a smaller size at their position) can never win a query, so they are dropped first: a fine
    * fillet rail makes the coarse sources of every edge that runs into it redundant near the
    * junction, and without them the tree is smaller and its bounds tighter. */
   build(): void {
+    // A rebuild (sources added to a built field) keeps the sources already in it.
+    for (let k = 0; k < this.ph.length; k++) this.stage.push(this.px[k * 3]!, this.px[k * 3 + 1]!, this.px[k * 3 + 2]!, this.ph[k]!);
     this.index(this.stage);
     const st = this.stage, keep: number[] = [];
     for (let i = 0; i < st.length; i += 4) {

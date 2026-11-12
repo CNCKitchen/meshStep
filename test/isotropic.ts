@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 import { importStep } from "../src/index.ts";
 import { optimizeFace } from "../src/mesh/optimize.ts";
 import { constrainedTriangulate } from "../src/mesh/cdt2d.ts";
-import { mappedMesh } from "../src/mesh/mapped.ts";
+import { mappedMesh, matchRailStations } from "../src/mesh/mapped.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 let failed = 0;
@@ -128,12 +128,33 @@ for (const [name, p5Min] of [["cube", 40], ["cylinder", 35], ["sphere", 30], ["e
     }
   }
   check(n > 0 && worst < 1e-6, `cylinder: all ${n} wall facets are parallel to the axis (worst lean ${worst.toExponential(1)})`);
+  // ... and the wall is a GRID: every triangle is half of a quad, with one edge along the axis
+  // and one square to it (around the wall), and the quads are close to squares.
+  let offGrid = 0, worstAspect = 1;
+  for (const [fid, info] of iso.faces) {
+    const axis = info.surface.kind === "CYLINDRICAL_SURFACE" ? info.surface.axis : undefined;
+    if (!axis) continue;
+    for (let t = 0; t < I.length / 3; t++) {
+      if (iso.faceOfTri[t] !== fid) continue;
+      let along = 0, across = 0, la = 0, lc = 0;
+      for (let k = 0; k < 3; k++) {
+        const a = I[t * 3 + k]! * 3, b = I[t * 3 + ((k + 1) % 3)]! * 3;
+        const d = [P[b]! - P[a]!, P[b + 1]! - P[a + 1]!, P[b + 2]! - P[a + 2]!];
+        const l = Math.hypot(d[0]!, d[1]!, d[2]!), c = Math.abs(d[0]! * axis[0] + d[1]! * axis[1] + d[2]! * axis[2]) / l;
+        if (c > 1 - 1e-9) { along++; la = l; } else if (c < 1e-6) { across++; lc = l; }
+      }
+      if (along !== 1 || across !== 1) offGrid++;
+      else worstAspect = Math.max(worstAspect, la / lc, lc / la);
+    }
+  }
+  check(offGrid === 0, `cylinder: every wall triangle has one edge along the axis and one around it (${offGrid} do not)`);
+  check(worstAspect < 1.6, `cylinder: the wall's cells are close to squares (worst side ratio ${worstAspect.toFixed(2)})`);
   const free: Record<string, number> = {};
   const off = importStep(src, { isotropic: true, mappedFillets: false, trace: (_f, m) => { free[m] = (free[m] ?? 0) + 1; } });
   check(!free.mapped && off.diagnostics.ok, `cylinder: mappedFillets: false meshes it freely and cleanly (${JSON.stringify(free)})`);
 }
 // The mesher alone, on a quarter cylinder (radius 2, height 5) whose rails carry different,
-// graded node counts and whose cross arcs have 6 segments.
+// graded node counts (the strips layout) and whose cross arcs have 6 segments.
 {
   const R = 2;
   const surface = { evaluate: (u: number, v: number): [number, number, number] => [R * Math.cos(u), R * Math.sin(u), v] } as unknown as Parameters<typeof mappedMesh>[0];
@@ -159,6 +180,60 @@ for (const [name, p5Min] of [["cube", 40], ["cylinder", 35], ["sphere", 30], ["e
     const a = minAngles(m.p3.flat(), m.tris.flat());
     check(a[0]! > 10 && a[Math.floor(a.length / 2)]! > 35, `mapped mesher: smallest angle ${a[0]!.toFixed(1)}°, median ${a[Math.floor(a.length / 2)]!.toFixed(1)}° (${m.tris.length} triangles)`);
   }
+}
+// Rails with EQUAL node counts give the grid layout: N x M quads, each cut in two, every
+// triangle with one edge along the axis and one along an arc.
+{
+  const R = 2, N = 6, M = 12;
+  const surface = { evaluate: (u: number, v: number): [number, number, number] => [R * Math.cos(u), R * Math.sin(u), v] } as unknown as Parameters<typeof mappedMesh>[0];
+  const side = (pts: [number, number][]): { p2: [number, number][]; p3: [number, number, number][] } => ({ p2: pts, p3: pts.map(([u, v]) => surface.evaluate(u, v) as [number, number, number]) });
+  const arc = (v: number): [number, number][] => Array.from({ length: N + 1 }, (_, i) => [(i * Math.PI) / 12, v] as [number, number]);
+  const rail = (u: number, grade = 1.15): [number, number][] => Array.from({ length: M + 1 }, (_, k) => [u, 5 * (k / M) ** grade] as [number, number]);
+  const m = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0)), side(rail(Math.PI / 2)), R, 1);
+  check(m !== null && m.tris.length === 2 * N * M && m.p2.length === (N + 1) * (M + 1), `mapped grid: ${N} x ${M} quads, two triangles each (${m?.tris.length} triangles, ${m?.p2.length} nodes)`);
+  if (m) {
+    let bad = 0;
+    for (const t of m.tris) {
+      let along = 0, across = 0;
+      for (let k = 0; k < 3; k++) {
+        const a = m.p2[t[k]!]!, b = m.p2[t[(k + 1) % 3]!]!;
+        if (Math.abs(a[0] - b[0]) < 1e-12) along++; else if (Math.abs(a[1] - b[1]) < 1e-12) across++;
+      }
+      if (along !== 1 || across !== 1) bad++;
+    }
+    check(bad === 0, `mapped grid: every triangle has one edge along a ruling and one along a rib (${bad} do not)`);
+    const ribs = new Set(m.p2.map((q) => Math.round(q[1] * 1e9)));
+    check(ribs.size === M + 1, `mapped grid: the nodes lie on ${M + 1} ribs, graded like the rails (${ribs.size})`);
+  }
+  // Rails graded down to cells far thinner than the strips are wide: a grid would repeat that
+  // row of needles on every ruling, so the strips layout is used instead.
+  const steep = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0, 2.5)), side(rail(Math.PI / 2, 2.5)), R, 1);
+  check(steep !== null && steep.p2.length !== (N + 1) * (M + 1), `mapped grid: steeply graded rails fall back to strips (${steep?.p2.length} nodes, a grid has ${(N + 1) * (M + 1)})`);
+}
+// Common stations for two rails (what makes the grid layout possible).
+{
+  const uni = (n: number): number[] => Array.from({ length: n + 1 }, (_, k) => k / n);
+  const close = (a: number[], b: number[]): boolean => a.length === b.length && a.every((x, k) => Math.abs(x - b[k]!) < 1e-9);
+  const same = matchRailStations(uni(8), [], uni(8), []);
+  check(!!same && close(same.sa, uni(8)) && close(same.sb, uni(8)), "rail stations: equal rails stay as they are");
+  const up = matchRailStations(uni(10), [], uni(14), []);
+  check(!!up && close(up.sa, uni(14)) && close(up.sb, uni(14)), `rail stations: 10 and 14 uniform cells become 14 on both (${up ? up.sa.length - 1 : "none"})`);
+  // A vertex inside each rail, a tenth of a cell apart: one shared station, each rail keeps its own.
+  const a = [0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875, 1], b = [0, 0.128, 0.256, 0.384, 0.512, 0.634, 0.756, 0.878, 1];
+  const j = matchRailStations(a, [4], b, [4]);
+  check(!!j && j.sa.length === 9 && j.sb.length === 9 && j.sa[4] === 0.5 && j.sb[4] === 0.512, `rail stations: vertices close together share a station and stay put (${j ? `${j.sa[4]} / ${j.sb[4]}` : "none"})`);
+  // Both vertices kept when they are a cell or more apart.
+  const k = matchRailStations(uni(8), [2], uni(8), [5]);
+  check(!!k && k.sa.includes(0.25) && k.sa.includes(0.625) && close(k.sa, k.sb), "rail stations: vertices far apart both become stations of both rails");
+  // One rail graded toward a fine end the other knows nothing about: no common set.
+  const fine = [0, 0.01, 0.025, 0.05, 0.09, 0.15, 0.25, 0.4, 0.6, 0.8, 1];
+  check(matchRailStations(uni(5), [], fine, []) === null, "rail stations: rails with very different grading are left alone");
+  // A fixed rail is copied exactly.
+  const fx = matchRailStations(uni(9), [], uni(8), [], [[0, 9]]);
+  check(!!fx && close(fx.sa, uni(9)) && close(fx.sb, uni(9)), "rail stations: a free rail takes a fixed rail's stations");
+  // Only the first half of one rail is fixed (4 cells): kept there, merged with the denser rail beyond.
+  const half = matchRailStations(uni(8), [4], uni(12), [], [[0, 4]]);
+  check(!!half && close(half.sa.slice(0, 5), uni(8).slice(0, 5)) && half.sa.length === 4 + 6 + 1 && close(half.sa, half.sb), `rail stations: a partly fixed rail keeps its fixed stretch (${half ? half.sa.length - 1 : "none"} cells)`);
 }
 
 if (failed) { console.error(`isotropic: ${failed} check(s) failed`); process.exit(1); }
