@@ -83,6 +83,18 @@ export class EdgeSeeder {
   /** Fewest segments an edge may get so its loop keeps at least three distinct nodes. */
   private nMin = new Map<number, number>();
   private geom = new Map<number, EdgeGeom | null>();
+  /** TWIN edges: distinct EDGE_CURVEs that trace the same curve between the same two points.
+   * Exporters that do not share topology give each face its own copy of a common edge, and the
+   * two faces only meet because both copies are sampled identically. Seeding depends on the
+   * neighbourhood (each copy sees only its own face), so twins are seeded ONCE, on the lowest id
+   * of the group with the smallest intrinsic size of all members, and the others copy its nodes.
+   * Value: the group's canonical edge and whether this member runs the other way. */
+  private twin = new Map<number, { of: number; reversed: boolean }>();
+  /** Canonical twin edge -> the bodies of its other members. Each body has its own size field,
+   * and a twin group that spans bodies (a sheet model: one body per face) must honour the fine
+   * features of every one of them, so its seeding reads all those fields. */
+  private twinSolids = new Map<number, number[]>();
+  private seeded = new Map<number, Vec3[]>();
   /** One field per body: bodies are meshed and welded independently. */
   readonly fields = new Map<number, SizeField>();
 
@@ -141,32 +153,87 @@ export class EdgeSeeder {
     for (let i = 1; i < n; i++) S[i] = S[i - 1]! + d3(G[i - 1]!, G[i]!);
     if (!(S[n - 1]! > 1e-12)) return null;
 
-    // Curve curvature from consecutive triples of G (their circumradius; exact on a circle), and
-    // kinks. A circle uses its exact radius.
+    // A circle keeps its exact radius and has no corners; everything else is measured from G.
     let circle: EdgeGeom["circle"] = null;
     try {
       const info = analyzeEdgeCurve(this.brep.table, e.curveId, e.v0, e.v1, e.sameSense, sc);
       if (info.kind === "circle" && info.center && info.axis && info.radius! > 0) circle = { c: info.center, n: info.axis, r: info.radius! };
     } catch { /* unreadable curve record: G is still valid, treat as a general curve */ }
-    const breaks: number[] = [0];
-    const R = new Float64Array(n).fill(Infinity);
-    for (let i = 1; i < n - 1; i++) {
-      const a = G[i - 1]!, b = G[i]!, c = G[i + 1]!;
+    // Point of G at arc length s (used for the lagged curvature and corner tests below).
+    const at = (s: number): Vec3 => {
+      let lo = 0, hi = n - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (S[m]! <= s) lo = m; else hi = m; }
+      const l = S[hi]! - S[lo]!;
+      return l > 0 ? mix(G[lo]!, G[hi]!, Math.min(1, Math.max(0, (s - S[lo]!) / l))) : G[lo]!;
+    };
+    /** Turn angle and circumradius of the three points a, b, c. */
+    const bend = (a: Vec3, b: Vec3, c: Vec3): [number, number] => {
       const ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
       const vx = c[0] - b[0], vy = c[1] - b[1], vz = c[2] - b[2];
       const lu = Math.hypot(ux, uy, uz), lv = Math.hypot(vx, vy, vz);
-      const cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
-      const cr = Math.hypot(cx, cy, cz);
+      const cr = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
       const turn = Math.atan2(cr, ux * vx + uy * vy + uz * vz);
-      if (!circle && turn > Math.max(KINK, 2 * tol.normalDev)) { breaks.push(i); continue; }
       // circumradius = |a-c| / (2 sin(turn)), with sin(turn) = cr / (lu·lv)
-      if (cr > 1e-14 * lu * lv) R[i] = (d3(a, c) * lu * lv) / (2 * cr);
-    }
-    breaks.push(n - 1);
-    if (circle) R.fill(circle.r);
+      return [turn, cr > 1e-14 * lu * lv ? (d3(a, c) * lu * lv) / (2 * cr) : Infinity];
+    };
+    const L = S[n - 1]!;
+    const breaks: number[] = [0];
+    const R = new Float64Array(n).fill(Infinity);
+    // The curve's own tolerance step for a radius: the chord's sagitta and twice the normal
+    // deviation, the same rule as the default arc sampler.
+    const stepFor = (r: number): number => {
+      if (!Number.isFinite(r)) return Infinity;
+      const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - tol.chordTol / Math.max(r, 1e-12))));
+      return r * Math.min(dChord, 2 * tol.normalDev);
+    };
+    if (circle) { R.fill(circle.r); breaks.push(n - 1); }
     else {
-      // Ends and kinks have no triple of their own: take the radius of the neighbour inside the
-      // same smooth piece (a kink's two sides may differ, the tighter one is the safe choice).
+      // CORNERS. A corner of the curve (a spline with a tangent break, a polyline) always carries
+      // a node; it is not curvature and must not pull the size down around it. It is judged
+      // between two chords of length hMin, the smallest step the seeding ever takes: a bend
+      // tighter than that cannot be resolved by nodes anyway, while exporter noise — a sub-micron
+      // spike on a blend rail turns the polyline by tens of degrees over a micro-segment —
+      // disappears at that scale. One node per corner: the local maximum of the turn.
+      const lagC = hMin;
+      const turnAt = new Float64Array(n);
+      if (L > 4 * lagC) {
+        for (let i = 1; i < n - 1; i++) {
+          if (S[i]! < lagC || L - S[i]! < lagC) continue;
+          turnAt[i] = bend(at(S[i]! - lagC), G[i]!, at(S[i]! + lagC))[0];
+        }
+        const limit = Math.max(KINK, 2 * tol.normalDev);
+        for (let i = 1; i < n - 1; i++) {
+          if (turnAt[i]! <= limit) continue;
+          let isMax = true;
+          for (let j = i - 1; j > 0 && S[i]! - S[j]! <= lagC && isMax; j--) if (turnAt[j]! > turnAt[i]!) isMax = false;
+          for (let j = i + 1; j < n - 1 && S[j]! - S[i]! <= lagC && isMax; j++) if (turnAt[j]! >= turnAt[i]!) isMax = false;
+          if (isMax) breaks.push(i);
+        }
+      }
+      breaks.push(n - 1);
+      // CURVATURE, per smooth piece, from a three-point circle through the point and the curve
+      // one LAG to either side. The lag starts at hMin/2 and grows to half the step the radius
+      // found so far allows, until the two agree: the radius is then measured over the very
+      // chord it is going to permit. Read over consecutive points of G instead, it would be the
+      // curvature of the exporter's noise.
+      for (let b = 0; b + 1 < breaks.length; b++) {
+        const sLo = S[breaks[b]!]!, sHi = S[breaks[b + 1]!]!;
+        for (let i = breaks[b]! + 1; i < breaks[b + 1]!; i++) {
+          let lag = hMin / 2, r = Infinity;
+          for (let it = 0; it < 6; it++) {
+            const sa = Math.max(sLo, S[i]! - lag), sb = Math.min(sHi, S[i]! + lag);
+            if (!(S[i]! - sa > 1e-12) || !(sb - S[i]! > 1e-12)) break;
+            r = bend(at(sa), G[i]!, at(sb))[1];
+            const next = Math.min(hMax, stepFor(r)) / 2;
+            if (!(next > 1.5 * lag)) break;
+            lag = next;
+          }
+          R[i] = r;
+        }
+      }
+      // Ends and corners have no two-sided neighbourhood of their own: take the radius of the
+      // neighbour inside the same smooth piece (a corner's two sides may differ, the tighter
+      // one is the safe choice).
       const isBreak = new Uint8Array(n);
       for (const b of breaks) isBreak[b] = 1;
       for (const b of breaks) {
@@ -178,23 +245,13 @@ export class EdgeSeeder {
     }
     const invTol = new Float64Array(n);
     for (let i = 0; i < n; i++) {
-      const r = R[i]!;
-      if (!Number.isFinite(r)) continue;
-      // Same rule as the default arc sampler: the chord's sagitta and twice the normal deviation.
-      const dChord = 2 * Math.acos(Math.max(0, Math.min(1, 1 - tol.chordTol / Math.max(r, 1e-12))));
-      const step = r * Math.min(dChord, 2 * tol.normalDev);
-      invTol[i] = step > 0 ? 1 / step : 0;
+      const step = stepFor(R[i]!);
+      invTol[i] = Number.isFinite(step) && step > 0 ? 1 / step : 0;
     }
 
     // Intrinsic size: curve tolerance, adjacent faces' curvature at the point, max edge.
     const h0 = new Float64Array(n);
     for (let i = 0; i < n; i++) h0[i] = invTol[i]! > 0 ? Math.min(hMax, 1 / invTol[i]!) : hMax;
-    const at = (s: number): Vec3 => {
-      let lo = 0, hi = n - 1;
-      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (S[m]! <= s) lo = m; else hi = m; }
-      const l = S[hi]! - S[lo]!;
-      return l > 0 ? mix(G[lo]!, G[hi]!, (s - S[lo]!) / l) : G[lo]!;
-    };
     for (const fid of this.facesOf.get(id) ?? []) {
       const surface = this.faceSurf.get(fid);
       if (!surface || surface.kind === "PLANE") continue;
@@ -207,7 +264,6 @@ export class EdgeSeeder {
       }
       // Curvature varies over the face: read it at stations along the edge, chaining each
       // projection from the previous one, and bisect where the size changes quickly.
-      const L = S[n - 1]!;
       let ss: number[] = [], hs: number[] = [];
       let hu: number | undefined, hv: number | undefined;
       const sizeAt = (s: number): number => {
@@ -251,8 +307,72 @@ export class EdgeSeeder {
     return { G, S, h0, invTol, breaks, circle, hMin, chordTol: tol.chordTol };
   }
 
+  /** Point of G at arc length s. */
+  private static pointAt(g: EdgeGeom, s: number): Vec3 {
+    const { G, S } = g;
+    let lo = 0, hi = G.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (S[m]! <= s) lo = m; else hi = m; }
+    const l = S[hi]! - S[lo]!;
+    return l > 0 ? mix(G[lo]!, G[hi]!, Math.min(1, Math.max(0, (s - S[lo]!) / l))) : G[lo]!;
+  }
+
+  /** Group twin edges and give each group's canonical edge the smallest intrinsic size any
+   * member asks for. Twins are recognised by their end points, their length and three points
+   * along the curve (all at the weld scale), never by curve records: two exporters' copies of
+   * one edge rarely share an entity. */
+  private pairTwins(): void {
+    const q = (x: number): number => Math.round(x * 1e4);
+    const pk = (p: Vec3): string => `${q(p[0])},${q(p[1])},${q(p[2])}`;
+    const groups = new Map<string, number[]>();
+    for (const [id, g] of this.geom) {
+      if (!g) continue;
+      const L = g.S[g.G.length - 1]!;
+      const a = pk(g.G[0]!), b = pk(g.G[g.G.length - 1]!);
+      const q1 = pk(EdgeSeeder.pointAt(g, L / 4)), q3 = pk(EdgeSeeder.pointAt(g, (3 * L) / 4));
+      // Direction-independent key: sorted ends, the midpoint, the sorted quarter points.
+      const key = `${a < b ? a + "|" + b : b + "|" + a}|${pk(EdgeSeeder.pointAt(g, L / 2))}|${q1 < q3 ? q1 + "|" + q3 : q3 + "|" + q1}|${q(L)}`;
+      (groups.get(key) ?? groups.set(key, []).get(key)!).push(id);
+    }
+    for (const ids of groups.values()) {
+      if (ids.length < 2) continue;
+      ids.sort((x, y) => x - y);
+      const canon = this.geom.get(ids[0]!)!;
+      const L = canon.S[canon.G.length - 1]!;
+      const c1 = EdgeSeeder.pointAt(canon, L / 4);
+      for (let k = 1; k < ids.length; k++) {
+        const g = this.geom.get(ids[k]!)!;
+        const Lg = g.S[g.G.length - 1]!;
+        const reversed = d3(EdgeSeeder.pointAt(g, Lg / 4), c1) > d3(EdgeSeeder.pointAt(g, (3 * Lg) / 4), c1);
+        this.twin.set(ids[k]!, { of: ids[0]!, reversed });
+        const so = this.solidOf.get(ids[k]!);
+        if (so !== undefined && so !== this.solidOf.get(ids[0]!)) {
+          const list = this.twinSolids.get(ids[0]!) ?? this.twinSolids.set(ids[0]!, []).get(ids[0]!)!;
+          if (!list.includes(so)) list.push(so);
+        }
+        this.nMin.set(ids[0]!, Math.max(this.nMin.get(ids[0]!) ?? 1, this.nMin.get(ids[k]!) ?? 1));
+        // Pointwise minimum of the two intrinsic sizes (and tolerance steps), read by arc length.
+        for (let i = 0; i < canon.G.length; i++) {
+          const s = reversed ? Lg - (canon.S[i]! * Lg) / L : (canon.S[i]! * Lg) / L;
+          let lo = 0, hi = g.G.length - 1;
+          while (hi - lo > 1) { const m = (lo + hi) >> 1; if (g.S[m]! <= s) lo = m; else hi = m; }
+          const l = g.S[hi]! - g.S[lo]!;
+          const w = l > 0 ? Math.min(1, Math.max(0, (s - g.S[lo]!) / l)) : 0;
+          const h = g.h0[lo]! + (g.h0[hi]! - g.h0[lo]!) * w, it = g.invTol[lo]! + (g.invTol[hi]! - g.invTol[lo]!) * w;
+          if (h < canon.h0[i]!) canon.h0[i] = h;
+          if (it > canon.invTol[i]!) canon.invTol[i] = it;
+        }
+        canon.hMin = Math.min(canon.hMin, g.hMin);
+        canon.chordTol = Math.min(canon.chordTol, g.chordTol);
+      }
+    }
+  }
+
   /** Measure every edge and build each body's size field. Call once, before `seed`. */
   prepare(): void {
+    for (const solid of this.brep.solids) for (const face of solid.faces) for (const lp of face.loops) for (const oe of lp.edges) {
+      if (!this.geom.has(oe.edgeId) && this.brep.edges.has(oe.edgeId)) this.geom.set(oe.edgeId, this.measure(oe.edgeId));
+    }
+    this.pairTwins();
     for (const solid of this.brep.solids) {
       let hMin = Infinity, hMax = 0;
       const ids = new Set<number>();
@@ -265,8 +385,8 @@ export class EdgeSeeder {
       const field = new SizeField(this.growth, hMin, hMax);
       for (const id of ids) {
         if (!this.brep.edges.has(id)) continue;
-        let g = this.geom.get(id);
-        if (g === undefined) { g = this.measure(id); this.geom.set(id, g); }
+        // A twin contributes through its canonical edge (which already carries the group minimum).
+        const g = this.geom.get(this.twin.get(id)?.of ?? id);
         if (!g) continue;
         // Sources every half local size along the edge: between two of them the field can
         // overshoot the intrinsic size by at most g·h/4, and the seeding below also reads the
@@ -293,6 +413,27 @@ export class EdgeSeeder {
 
   /** The nodes of edge `id`, v0 to v1 inclusive. `f` > 1 asks for f times the density. */
   seed(id: number, f = 1): Vec3[] {
+    const tw = this.twin.get(id);
+    if (tw) {
+      // Copy the canonical edge's nodes; only the two ends are this edge's own vertices (equal to
+      // the canonical ones at the weld scale, but they must be THIS edge's exact points).
+      const base = this.seed(tw.of, f);
+      const e = this.brep.edges.get(id) as BEdge;
+      const out = tw.reversed ? base.slice().reverse() : base.slice();
+      out[0] = e.v0; out[out.length - 1] = e.v1;
+      return out;
+    }
+    if (f === 1) {
+      const hit = this.seeded.get(id);
+      if (hit) return hit;
+      const out = this.seedOwn(id, 1);
+      this.seeded.set(id, out);
+      return out;
+    }
+    return this.seedOwn(id, f);
+  }
+
+  private seedOwn(id: number, f: number): Vec3[] {
     const e = this.brep.edges.get(id) as BEdge;
     const solid = this.solidOf.get(id);
     const field = solid !== undefined ? this.fields.get(solid) : undefined;
@@ -303,10 +444,15 @@ export class EdgeSeeder {
     }
     const g = f === 1 ? this.geom.get(id) : this.measure(id, f);
     if (!g) return [e.v0, e.v1];
+    // Size along the edge: this body's field, and for a twin group spanning bodies theirs too.
+    const others = (this.twinSolids.get(id) ?? []).map((so) => this.fields.get(so)).filter((x): x is SizeField => !!x);
+    const sizeAt = others.length === 0
+      ? (x: number, y: number, z: number): number => field.at(x, y, z)
+      : (x: number, y: number, z: number): number => { let h = field.at(x, y, z); for (const o of others) h = Math.min(h, o.at(x, y, z)); return h; };
     const out: Vec3[] = [g.G[0]!];
     const single = g.breaks.length === 2;
     for (let b = 0; b + 1 < g.breaks.length; b++) {
-      seedSpan(g, field, f, g.breaks[b]!, g.breaks[b + 1]!, single ? (this.nMin.get(id) ?? 1) : 1, 0, out);
+      seedSpan(g, sizeAt, f, g.breaks[b]!, g.breaks[b + 1]!, single ? (this.nMin.get(id) ?? 1) : 1, 0, out);
     }
     if (g.circle) {
       // Interpolated nodes sit on G's chords, a hair inside the circle: put them back on it.
@@ -320,6 +466,7 @@ export class EdgeSeeder {
         if (l > 1e-12) out[i] = [c[0] + (dx * r) / l + along * n[0], c[1] + (dy * r) / l + along * n[1], c[2] + (dz * r) / l + along * n[2]];
       }
     }
+    if (out.length < 2) return [e.v0, e.v1]; // never hand a face less than a segment
     out[0] = e.v0; out[out.length - 1] = e.v1;
     return out;
   }
@@ -349,14 +496,14 @@ function segDist(p: Vec3, a: Vec3, b: Vec3): number {
  * is re-seeded with more segments, and if that does not converge it is cut at the worst point
  * (a corner the kink test missed) and both halves are seeded on their own.
  */
-function seedSpan(g: EdgeGeom, field: SizeField, f: number, i0: number, i1: number, nMin: number, depth: number, out: Vec3[]): void {
+function seedSpan(g: EdgeGeom, field: (x: number, y: number, z: number) => number, f: number, i0: number, i1: number, nMin: number, depth: number, out: Vec3[]): void {
   const { G, S, h0, invTol } = g;
   // Stations: the points of G, bisected until no step is longer than half the size at either of
   // its ends. A straight edge has few points of G, yet the field can fall to a fraction of the
   // edge's own size within one of them (a fine neighbour passing close by). The field grows at
   // most g per unit length, so once a step is that short the size cannot dip unseen inside it.
   const ss: number[] = [], ps: Vec3[] = [], A: number[] = [], AT: number[] = [];
-  const sizeAt = (p: Vec3, hIntr: number): number => Math.max(g.hMin, Math.min(hIntr, field.at(p[0], p[1], p[2]) / f));
+  const sizeAt = (p: Vec3, hIntr: number): number => Math.max(g.hMin, Math.min(hIntr, field(p[0], p[1], p[2]) / f));
   let prevInv = 0, prevInvT = 0;
   const push = (s: number, p: Vec3, h: number, invT: number): void => {
     const inv = 1 / h;

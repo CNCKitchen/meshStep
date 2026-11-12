@@ -83,6 +83,9 @@ const partsHideAll = $<HTMLButtonElement>("partsHideAll");
 const autoNote = $("autoNote");
 const surfaceDeviationEl = $<HTMLInputElement>("surfaceDeviation");
 const maxEdgeEl = $<HTMLInputElement>("maxEdge");
+const isotropicEl = $<HTMLInputElement>("isotropic");
+// The growth rate only means something in the isotropic mode: show it with the toggle.
+isotropicEl.addEventListener("change", () => { $<HTMLElement>("growthField").hidden = !isotropicEl.checked; });
 
 // info panel
 const infoPanel = $("infoPanel");
@@ -308,6 +311,8 @@ function startConvert(): void {
     normalDeviation: num("normalDeviation", 15),
     maxEdge: num("maxEdge", 1),
     remesh: false,
+    isotropic: isotropicEl.checked,
+    growthRate: num("growthRate", 1.3),
   };
   showOverlay("Starting…");
   maybeShowSponsor();

@@ -19,6 +19,7 @@ import type { Surface } from "../geom/surfaces.ts";
 import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
 import { sampleEdgePolyline } from "../geom/curves.ts";
 import { EdgeSeeder } from "./edge-seed.ts";
+import { optimizeFace } from "./optimize.ts";
 import { constrainedTriangulate, type CdtOut } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
@@ -34,6 +35,11 @@ const declinedGrid = new Map<number, { verts: number[]; faceIds: number[] }>();
 /** Faces whose trim loops still self-intersect at 64× sampling (genuine overlap in the CAD file);
  * cleared per tessellate() call. */
 const overlapFaces = new Set<number>();
+/** ISOTROPIC mode state for the current tessellate() call (null = default mode). Module-level
+ * like the two sinks above: the meshers are synchronous and many signatures deep.
+ * `g` is the size growth per unit distance, growthRate − 1; `hMin` the smallest edge length the
+ * size field asks for. */
+let ISO: { g: number; hMin: number } | null = null;
 type P2 = [number, number];
 
 export interface TessOptions {
@@ -1173,6 +1179,8 @@ function gridCDT(
   verts: number[], faceIds: number[], targetEdge: number, chordTol: number, normalDev: number, sign: number,
   allowAniso = true, noRefine = false, forceDeslit = false, requireClosed = false,
 ): boolean {
+  // ISOTROPIC mode wants equilateral triangles: no ruling-aligned stretch on any face.
+  if (ISO) allowAniso = false;
   let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
   for (const q of outer.p2) {
     if (q[0] < umin) umin = q[0]; if (q[0] > umax) umax = q[0];
@@ -1370,6 +1378,8 @@ function gridCDT(
   };
   const outerIdx = pushLoop(outer);
   const holeIdx = holes.map(pushLoop);
+  // Every point pushed so far is a boundary sample; interior points only ever come after.
+  const nLoopPts = allP2.length;
 
   // Everything below works in METRIC-SCALED parameter space (scale u,v by the local surface metric
   // so 2D distance ≈ 3D arc length, then divide by the per-direction anisotropy): a plain Delaunay
@@ -1389,7 +1399,12 @@ function gridCDT(
     const ax = SX(a[0]), ay = SY(a[1]), bx = SX(b[0]), by = SY(b[1]);
     sseg.push([ax, ay, bx, by, Math.hypot((b[0] - a[0]) * uScale, (b[1] - a[1]) * vScale)]);
   }
-  const csz = Math.max(target, 1e-6);
+  // Size growth away from a boundary segment: 0.45 per unit distance by default, the requested
+  // growth rate in isotropic mode. The segment hash is scanned two cells around a query, which
+  // must reach as far as a segment can still limit the size: (target − ln)/g <= target/g. At
+  // g = 0.45 two target-sized cells cover that; a slower growth needs proportionally larger cells.
+  const gGrow = ISO ? ISO.g : 0.45, gGrow2 = ISO ? ISO.g * ISO.g : 0.2025;
+  const csz = Math.max(target, 1e-6) * (ISO ? Math.max(1, 0.5 / ISO.g) : 1);
   const hkey = (ix: number, iy: number): number => Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663);
   const segHash = new Map<number, number[]>();
   for (let i = 0; i < sseg.length; i++) { const k = hkey(Math.floor((sseg[i]![0] + sseg[i]![2]) / 2 / csz), Math.floor((sseg[i]![1] + sseg[i]![3]) / 2 / csz)); (segHash.get(k) ?? segHash.set(k, []).get(k)!).push(i); }
@@ -1423,7 +1438,7 @@ function gridCDT(
         if (d2 < d2min) { d2min = d2; dxMin = dx; dyMin = dy; }
         if (ln < size) { // s = ln + 0.45·d can only tighten when ln alone is under the bound
           const lim = size - ln;
-          if (0.2025 * d2 < lim * lim) { const s = ln + 0.45 * Math.hypot(dx, dy); if (s < size) size = s; }
+          if (gGrow2 * d2 < lim * lim) { const s = ln + gGrow * Math.hypot(dx, dy); if (s < size) size = s; }
         }
       }
     }
@@ -1437,6 +1452,16 @@ function gridCDT(
     if (dist < 0.3 * sz) return; // hugs a boundary edge -> would make it un-enforceable
     interiorIdx.push(allP2.length); allP2.push([u, v]); allP3.push(surface.evaluate(u, v));
   };
+  if (ISO) {
+    // ISOTROPIC mode: an equilateral (hexagonal) lattice — rows 0.866 of the spacing apart, every
+    // other row shifted by half a step. A square lattice is a trap for the optimiser: its right
+    // triangles have no edge long enough to split, no diagonal Delaunay would flip and, by
+    // symmetry, no vertex relaxation would move, so they would simply stay.
+    const nR = Math.min(GRID_N, Math.max(1, Math.round(((vmax - vmin) * vSc) / (0.866 * target))));
+    for (let j = 1; j < nR; j++) for (let i = j & 1 ? 0 : 1; i < nU; i++) {
+      tryAdd(umin + ((umax - umin) * (i + (j & 1 ? 0.5 : 0))) / nU, vmin + ((vmax - vmin) * j) / nR);
+    }
+  } else
   for (let i = 1; i < nU; i++) for (let j = 1; j < nV; j++) tryAdd(umin + ((umax - umin) * i) / nU, vmin + ((vmax - vmin) * j) / nV);
   // OFFSET ROW along fine boundaries (advancing-front seed). Where a boundary is sampled far finer
   // than this face's own target — a 0.5mm thread-root fillet's rail shared with a 1mm-target plane —
@@ -1655,7 +1680,9 @@ function gridCDT(
   // thread rails, tens of thousands of samples) that multiplies an already-fine mesh for minutes.
   // Those boundaries are far below the size field everywhere — refinement has nothing real to add.
   const nBoundaryPts = outerIdx.length + holeIdx.reduce((s, h) => s + h.length, 0);
-  const maxIter = noRefine ? 0 : nBoundaryPts > 20000 ? 0 : nBoundaryPts > 8000 ? 1 : 4;
+  // ISOTROPIC mode skips this refinement: the optimiser below splits edges down to the same size
+  // field with local operations, where every round here re-triangulates the whole face.
+  const maxIter = noRefine || ISO ? 0 : nBoundaryPts > 20000 ? 0 : nBoundaryPts > 8000 ? 1 : 4;
   // A refinement iteration may never trade a fully-constrained triangulation for a rescued one.
   // Inserted circumcentres can push the re-run CDT into a collinear degeneracy (a straight boundary
   // rail on a coarse periodic band) where a constraint becomes unrealisable; the ear-clip rescue
@@ -1788,7 +1815,7 @@ function gridCDT(
   // inherent to that trade, and measured relaxation sweeps change nothing visible — they only cost
   // a CDT re-run per sweep on every thread flank of a screw.
   const minBLn = sseg.reduce((m, s) => Math.min(m, s[4] > 1e-9 ? s[4] : m), Infinity);
-  if (!noRefine && prevMissing === 0 && !prevRescue && interiorIdx.length > 0
+  if (!ISO && !noRefine && prevMissing === 0 && !prevRescue && interiorIdx.length > 0
     && nBoundaryPts <= 8000 && minBLn < 0.35 * target && uSc === uScale && vSc === vScale) {
     const interior = new Set(interiorIdx);
     for (let sweep = 0; sweep < 6; sweep++) {
@@ -1860,6 +1887,40 @@ function gridCDT(
   // actually kept (a rolled-back refinement run's counts are discarded with its triangles).
   if (prevMissing > 0) warn("cdt-degenerate-boundary", fid, `${prevMissing} boundary constraint(s) unenforceable — region rebuilt by rescue fill`);
   else if (prevRescue) warn("cdt-degenerate-boundary", fid, `degenerate boundary (duplicate/collinear vertices) — region rebuilt by ${prevRescue} fill`);
+  // ISOTROPIC mode: hand the triangulation to the per-face optimiser (optimize.ts), which reworks
+  // the interior toward equilateral triangles at the size field by local splits, collapses,
+  // flips and relaxation — in this face's parameter plane, boundary samples frozen. It replaces
+  // the relaxation sweeps above and the shading-driven diagonal flips below. Only a natively
+  // realised triangulation qualifies (a rescued or equivalence-realised region is too delicate
+  // to rework), and never the fold audit's un-refined retry, which exists to get a face out
+  // with as little processing as possible.
+  if (ISO && !noRefine && prevMissing === 0 && !prevRescue && cdtOut.equiv === undefined && tris.length > 0) {
+    const X = cdtPts.map((q) => q[0]), Y = cdtPts.map((q) => q[1]);
+    const P: number[] = [];
+    for (const q of allP3) P.push(q[0], q[1], q[2]);
+    const K = 0x4000000;
+    const con = new Set<number>();
+    for (const idx of [outerIdx, ...holeIdx]) for (let i = 0; i < idx.length; i++) {
+      const a = idx[i]!, b = idx[(i + 1) % idx.length]!;
+      con.add(a < b ? a * K + b : b * K + a);
+    }
+    const res = optimizeFace({
+      x: X, y: Y, p: P, tris, nFrozen: nLoopPts,
+      isConstrained: (a, b) => con.has(a < b ? a * K + b : b * K + a),
+      evalAt: (x, y) => surface.evaluate(x / uSc, y / vSc),
+      sizeAt: (x, y) => sizeDist(x, y)[0],
+    });
+    if (res) {
+      // Boundary samples stay the shared 3D points verbatim; only interior points are rewritten.
+      for (let i = nLoopPts; i < X.length; i++) {
+        const q2: P2 = [X[i]!, Y[i]!], uv: P2 = [X[i]! / uSc, Y[i]! / vSc], q3: Vec3 = [P[i * 3]!, P[i * 3 + 1]!, P[i * 3 + 2]!];
+        if (i < cdtPts.length) { cdtPts[i] = q2; allP2[i] = uv; allP3[i] = q3; }
+        else { cdtPts.push(q2); allP2.push(uv); allP3.push(q3); }
+      }
+      tris = res.tris;
+      if (DBG) console.error(`[grid] fid=${fid} optimiser: ${res.splits} splits, ${res.collapses} collapses, ${res.flips} flips, ${res.moves} moves -> ${tris.length} tris`);
+    } else if (DBG) console.error(`[grid] fid=${fid} optimiser declined (degenerate or non-manifold triangulation)`);
+  }
   // Delaunay picks each quad's diagonal by circumcircle in the (flat) scaled plane, which on a
   // curved face alternates diagonal direction from quad to quad — and every alternation is a
   // shading crease (the diamond moiré on fillets). Kernel meshers look smooth because their
@@ -1909,7 +1970,7 @@ function gridCDT(
     const d = Math.abs(ringPos[i]! - ringPos[j]!);
     return Math.min(d, L - d) <= 4;
   };
-  for (let pass = 0; pass < 6; pass++) {
+  for (let pass = 0; pass < (ISO ? 0 : 6); pass++) {
     const use = new Map<number, [number, number][]>(); // edge -> [triIndex, oppositeVertex]
     for (let ti = 0; ti < tris.length; ti++) {
       const t = tris[ti]!;
@@ -1994,6 +2055,38 @@ function gridCDT(
     emitTri(verts, faceIds, allP3[a]!, allP3[b]!, allP3[c]!, fid, surface, sign, nrm);
   }
   return tris.length > 0;
+}
+
+/** Length of segment i of a polyline (Infinity when it has no such segment). */
+function segLen(p: Vec3[], i: number): number {
+  const a = p[i], b = p[i + 1];
+  return a && b ? Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) : Infinity;
+}
+
+/**
+ * Interior node positions, as fractions of the length, for a straight run of length `len` seeded
+ * the isotropic way (see edge-seed.ts): the size starts at h0 at one end and h1 at the other,
+ * grows by g per unit length and is capped at hMax; the run gets as many segments as that size
+ * asks for (rounded), spread at equal steps of the integral of 1/size. Empty = one segment.
+ */
+function gradedFractions(len: number, h0: number, h1: number, hMax: number, g: number): number[] {
+  if (!(len > 0) || !(hMax > 0)) return [];
+  const floor = hMax / 40;
+  const size = (s: number): number => Math.max(floor, Math.min(hMax, h0 + g * s, h1 + g * (len - s)));
+  // Integrate 1/size with steps no longer than a quarter of the smallest size involved.
+  const M = Math.min(8192, Math.max(8, Math.ceil(len / (0.25 * Math.max(floor, Math.min(hMax, h0, h1))))));
+  const A = new Float64Array(M + 1);
+  for (let i = 1; i <= M; i++) A[i] = A[i - 1]! + (0.5 * (1 / size(((i - 1) * len) / M) + 1 / size((i * len) / M)) * len) / M;
+  const N = Math.min(4096, Math.max(1, Math.ceil(A[M]! - 0.3)));
+  const out: number[] = [];
+  let j = 1;
+  for (let k = 1; k < N; k++) {
+    const target = (A[M]! * k) / N;
+    while (j < M && A[j]! < target) j++;
+    const da = A[j]! - A[j - 1]!;
+    out.push((j - 1 + (da > 0 ? (target - A[j - 1]!) / da : 0)) / M);
+  }
+  return out;
 }
 
 /**
@@ -2154,9 +2247,16 @@ function tessellatePeriodicUnroll(
       const mid = at(0.5);
       const fT = faceTarget(surface, targetEdge, chordTol, normalDev, mid[0], mid[1]);
       const n = Math.min(4096, Math.ceil(len / Math.max(fT, 1e-9)));
-      if (n <= 1) return plain;
+      // ISOTROPIC mode: the seam side is a boundary of this face like any other, so it is seeded
+      // like one — starting at each rim's local spacing and growing toward the face target,
+      // instead of meeting a finely seeded rim with a full-size first step.
+      const fr = ISO
+        ? gradedFractions(len, Math.min(segLen(b.p3, 0), segLen(b.p3, b.p3.length - 2)), Math.min(segLen(t.p3, 0), segLen(t.p3, t.p3.length - 2)), fT, ISO.g)
+        : null;
+      if (fr ? fr.length === 0 : n <= 1) return plain;
       const sq: P2[] = [], s3: Vec3[] = [];
-      for (let i = 1; i < n; i++) { const q = at(i / n); sq.push(q); s3.push(surface.evaluate(q[0], q[1])); }
+      if (fr) for (const f of fr) { const q = at(f); sq.push(q); s3.push(surface.evaluate(q[0], q[1])); }
+      else for (let i = 1; i < n; i++) { const q = at(i / n); sq.push(q); s3.push(surface.evaluate(q[0], q[1])); }
       const shiftQ = (q: P2): P2 => { const r: P2 = [q[0], q[1]]; r[c] += period; return r; };
       return {
         p3: [...b.p3, ...s3, ...t.p3.slice().reverse(), ...s3.slice().reverse()],
@@ -5359,6 +5459,10 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   let facesDegenerate = 0;
   declinedGrid.clear();
   overlapFaces.clear();
+  ISO = opts.isotropic ? {
+    g: Math.max(0.01, (opts.growthRate ?? 1.3) - 1),
+    hMin: opts.minEdge !== undefined && opts.minEdge > 0 ? Math.min(opts.minEdge, targetEdge) : Math.min(targetEdge / 40, 30 * chordTol),
+  } : null;
   // Collect diagnostics warnings for this run (module-level sink: tessellation is synchronous,
   // and the deep meshing code reports without threading a sink through every signature).
   beginWarnings();
@@ -5726,8 +5830,12 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         //     domain and CDT with the windows as holes. Bails unless there are exactly two rims.
         //  3. param grid: everything with a proper seam-bounded outer loop (the common case).
         const periodic = surface.periodicU || surface.periodicV;
-        ok = (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || (periodic && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+        // ISOTROPIC mode prefers the unroll for a plain band too: it meshes the band through the
+        // CDT + optimiser (equilateral triangles) where the band mesher lays structured rings of
+        // right triangles. The band mesher stays as the fallback right behind it.
+        ok = (periodic && !!ISO && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (periodic && !ISO && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
           || (periodic && face.loops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
           || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign))
@@ -5833,7 +5941,9 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     const stitchQ = solid.faces.length;
     const { mesh } = weld(verts);
     tick(stitchQ);
-    const z = zipSlivers(mesh, 0.05);
+    // Isotropic mode seeds boundaries down to hMin, so the zip's absolute 10 µm weld floor must
+    // stay below half of that or it would merge neighbouring nodes of a fine open rim.
+    const z = zipSlivers(mesh, 0.05, ISO ? Math.min(1e-2, 0.5 * ISO.hMin) : 1e-2);
     tick(stitchQ);
     const keptFaceIds: number[] = [];
     for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) keptFaceIds.push(faceIds[t]!);
@@ -5930,7 +6040,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
  * EDGE_CURVEs sampled at non-matching positions, so we match vertex-to-nearest-vertex rather than
  * edge-to-edge. Triangles that collapse to a repeated vertex are dropped.
  */
-function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; indices: Uint32Array; keep: boolean[] } {
+function zipSlivers(mesh: IndexedMesh, tol: number, capFloor = 1e-2): { positions: Float64Array; indices: Uint32Array; keep: boolean[] } {
   const I = mesh.indices, P = mesh.positions, nv = P.length / 3, nt = I.length / 3;
   const keepAll = (): boolean[] => { const k = new Array(nt); for (let t = 0; t < nt; t++) k[t] = true; return k; };
   const KEY = 2 ** 26;
@@ -5970,7 +6080,9 @@ function zipSlivers(mesh: IndexedMesh, tol: number): { positions: Float64Array; 
     // the rail segments themselves shrink to microns, so half-a-segment blocks the very zip the
     // crack needs (wallganizer's 4 µm crumb edges pinned a 9 µm crack open at the old 3 µm floor).
     // No real CAD feature lives at 10 µm, so the floor cannot weld distinct geometry.
-    const cap = Math.min(tol, Math.max(0.5 * (vCap.get(v) ?? Infinity), 1e-2));
+    // (The isotropic mode passes a smaller floor on models whose own minimum edge length is
+    // below 20 µm: there its boundary nodes do sit that close to each other.)
+    const cap = Math.min(tol, Math.max(0.5 * (vCap.get(v) ?? Infinity), capFloor));
     let best = -1, bestD = cap * cap;
     const cx = Math.round(px(v) / cell), cy = Math.round(py(v) / cell), cz = Math.round(pz(v) / cell);
     for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) for (let gz = -1; gz <= 1; gz++) {
