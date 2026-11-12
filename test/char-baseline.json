@@ -227,12 +227,12 @@
     }
   },
   "INDX XT30 connector (818 sheets)": {
-    "hash": "b5bd4f57ba6a75ccaf505f540916bfc5a91ac220dd8916cb0a0fb685a5ca2353",
+    "hash": "48fb9e1aa7148e65c6a4096921ac58f8250a455b4b6e4d5dc95a722d0cfcbd94",
     "verts": 14934,
-    "tris": 19419,
-    "openEdges": 8879,
+    "tris": 19411,
+    "openEdges": 8887,
     "nonManifoldEdges": 0,
-    "volume": 398.447,
+    "volume": 398.449,
     "dispatch": {
       "grid": 818
     },
@@ -243,7 +243,7 @@
       "flips": 0,
       "devRatio": 1.63,
       "tiltMaxDeg": 7.4,
-      "slivers": 73
+      "slivers": 69
     }
   },
   "Insta360GO3_case": {

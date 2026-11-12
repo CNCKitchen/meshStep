@@ -7178,7 +7178,7 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
     }
     r0 = r1;
   }
-  type Ring = { v: number[]; solid: number; fid: number; per: number; frac: number[]; cx: number; cy: number; cz: number; r: number };
+  type Ring = { v: number[]; solid: number; fid: number; per: number; frac: number[]; cx: number; cy: number; cz: number; r: number; thin: number };
   const rings: Ring[] = [];
   const seen = new Set<number>();
   for (const start of nxt.keys()) {
@@ -7211,7 +7211,17 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
       frac.push(frac[i - 1]! + Math.hypot(P[b * 3]! - P[a * 3]!, P[b * 3 + 1]! - P[a * 3 + 1]!, P[b * 3 + 2]! - P[a * 3 + 2]!));
     }
     const tot = frac[frac.length - 1]! || 1;
-    rings.push({ v, solid: solidOfTri[t0]!, fid: faceOfTri[t0]!, per, frac: frac.slice(0, v.length).map((x) => x / tot), cx, cy, cz, r });
+    // Enclosed area over perimeter: half the width of a long strip, half the radius of a circle.
+    // Two rings can only be "the same curve" to within a distance well below this (see the gate).
+    let nx = 0, ny = 0, nz = 0;
+    for (let i = 0; i < v.length; i++) {
+      const a = v[i]!, b = v[(i + 1) % v.length]!;
+      const ax = P[a * 3]! - cx, ay = P[a * 3 + 1]! - cy, az = P[a * 3 + 2]! - cz;
+      const bx = P[b * 3]! - cx, by = P[b * 3 + 1]! - cy, bz = P[b * 3 + 2]! - cz;
+      nx += ay * bz - az * by; ny += az * bx - ax * bz; nz += ax * by - ay * bx;
+    }
+    const thin = per > 0 ? (0.5 * Math.hypot(nx, ny, nz)) / per : 0;
+    rings.push({ v, solid: solidOfTri[t0]!, fid: faceOfTri[t0]!, per, frac: frac.slice(0, v.length).map((x) => x / tot), cx, cy, cz, r, thin });
   }
   if (DBG) console.error(`[tess] sewSolids: ${rings.length} open rings: ${rings.slice(0, 12).map((r) => `s${r.solid}×${r.v.length}(per=${r.per.toFixed(2)})`).join(" ")}`);
   if (rings.length < 2) {
@@ -7264,6 +7274,11 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
     }
     if (bj < 0 || bScore > tol) continue;
     const B = rings[bj]!;
+    // Two rings that enclose strips NARROWER than their distance from each other are not one
+    // curve sampled twice: they are the rims of two neighbouring slivers that merely fit inside
+    // the sew tolerance together (INDX XT30, 818 one-face sheets: strips 5 and 10 µm wide side
+    // by side — the ribbon between their rims covered both faces a second time).
+    if (bScore > Math.min(A.thin, B.thin)) continue;
     paired.add(i); paired.add(bj);
     sewnSolids?.add(A.solid); sewnSolids?.add(B.solid);
     // Ribbon: rails = A REVERSED and B in the direction that tracks it — the loft's triangles then
