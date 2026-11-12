@@ -2119,6 +2119,9 @@ interface MappedPlan {
   mU: number; mV: number;
   /** Index of the curved parameter (0 = u, 1 = v). */
   C: 0 | 1;
+  /** The face has no second rail: the cross sides meet in a vertex, which `rail1` holds as its
+   * single point (`edges1` is empty). */
+  pointed: boolean;
 }
 
 /**
@@ -2145,7 +2148,9 @@ let mappedWhy = "";
  * Recognise a mappable face from its single boundary loop. The surface must bend along one
  * parameter and be (nearly) flat along the other everywhere on the face — at least 4:1 in normal
  * curvature over a 3x3 probe, the same test the default mode's fillet stretch uses — and the loop
- * must read, in the parameter plane, as cross side / rail / cross side / rail:
+ * must read, in the parameter plane, as cross side / rail / cross side / rail — or, with one rail
+ * only, as rail / cross side / cross side, the two cross sides meeting in a vertex (a face that
+ * ends in a slant or a point):
  *   - a RAIL is a run of edges at a constant value of the curved parameter (within 2% of the
  *     face's span in it) that run along the flat one: a ruling-direction boundary, such as a
  *     fillet's two tangent edges;
@@ -2157,8 +2162,10 @@ let mappedWhy = "";
  * It must also MAKE SENSE: the strips are as wide as the cross sides are seeded, and a mapped
  * mesh is for faces where that width is about the face's own curvature step. A gently curved
  * face whose cross sides are seeded more than three times finer than its curvature asks (a
- * tight neighbour runs along them) would get dozens of thin strips between coarse rails; its
- * facets turn so little across that free triangles do no harm there, and they grade far better.
+ * tight neighbour runs along them) would get dozens of thin strips, and its far side would
+ * carry that neighbour's fineness on to the next face (a wall beside a fine fillet costs five
+ * times the triangles as a grid). Its facets turn so little across that free triangles do no
+ * harm there, and they grade from the fine side to the coarse one.
  */
 function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, tol: FaceTol): MappedPlan | null {
   const nE = loop.edges.length;
@@ -2222,15 +2229,33 @@ function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>,
     const cur = sides[sides.length - 1];
     if (cur && cur.rail === isRail[k]) cur.edges.push(k); else sides.push({ rail: isRail[k]!, edges: [k] });
   }
-  if (sides.length !== 4) return why(`not four sides (${isRail.map((r) => (r ? "R" : "c")).join("")})`);
-  if (sides[0]!.rail) sides.push(sides.shift()!); // cross, rail, cross, rail
   const build = (edges: number[]): MappedSide => {
     const p2: P2[] = [], p3: Vec3[] = [];
     for (const k of edges) for (let i = p2.length === 0 ? 0 : 1; i < ep2[k]!.length; i++) { p2.push(ep2[k]![i]!); p3.push(ep3[k]![i]!); }
     return { p2, p3 };
   };
   const rev = (s: MappedSide): MappedSide => ({ p2: s.p2.slice().reverse(), p3: s.p3.slice().reverse() });
-  const crossA = build(sides[0]!.edges), rail1 = build(sides[1]!.edges), crossB = rev(build(sides[2]!.edges)), rail0 = rev(build(sides[3]!.edges));
+  // Loop order of the four sides: crossA, rail1, crossB (backwards), rail0 (backwards).
+  let eA: number[], e1: number[], eB: number[], e0: number[];
+  if (sides.length === 4) {
+    if (sides[0]!.rail) sides.push(sides.shift()!); // cross, rail, cross, rail
+    eA = sides[0]!.edges; e1 = sides[1]!.edges; eB = sides[2]!.edges; e0 = sides[3]!.edges;
+  } else if (sides.length === 2) {
+    // ONE rail: the rest of the loop leaves it, runs across the face and comes back, as on a
+    // face that ends in a slant or a point. It is cut at the vertex farthest from the rail into
+    // the two cross sides, which then meet there instead of at a second rail.
+    if (!sides[0]!.rail) sides.push(sides.shift()!); // rail, cross run
+    e0 = sides[0]!.edges;
+    const run = sides[1]!.edges;
+    const cRail = ep2[e0[0]!]![0]![C];
+    let cut = -1, far = 0;
+    for (let i = 1; i < run.length; i++) { const d = Math.abs(ep2[run[i]!]![0]![C] - cRail); if (d > far) { far = d; cut = i; } }
+    if (cut < 0) return why(`not four sides (${isRail.map((r) => (r ? "R" : "c")).join("")})`);
+    eA = run.slice(0, cut); eB = run.slice(cut); e1 = [];
+  } else return why(`not four sides (${isRail.map((r) => (r ? "R" : "c")).join("")})`);
+  const pointed = e1.length === 0;
+  const crossA = build(eA), crossB = rev(build(eB)), rail0 = rev(build(e0));
+  const rail1: MappedSide = pointed ? { p2: [crossA.p2[crossA.p2.length - 1]!], p3: [crossA.p3[crossA.p3.length - 1]!] } : build(e1);
   // A cross side runs monotonically from rail to rail in the curved parameter.
   for (const cs of [crossA, crossB]) {
     const a = cs.p2[0]![C], b = cs.p2[cs.p2.length - 1]![C];
@@ -2246,30 +2271,41 @@ function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>,
   }
   // Each rail must stay on its ruling as a whole and have real length (a rail shrunk to a point
   // makes the face three-sided).
-  for (const r of [rail0, rail1]) {
+  for (const r of pointed ? [rail0] : [rail0, rail1]) {
     let lo = Infinity, hi = -Infinity;
     for (const x of r.p2) { if (x[C] < lo) lo = x[C]; if (x[C] > hi) hi = x[C]; }
     if (hi - lo > 0.02 * span) return why("rail leaves its ruling");
     const a = r.p2[0]!, b = r.p2[r.p2.length - 1]!;
     if (Math.abs(b[1 - C] - a[1 - C]) * mF < 1e-3 * span * mC) return why("rail without length");
   }
+  // The strips keep their node-to-node pairing from one cross side to the other, so the face
+  // must be about as wide all the way along: measured across at both ends and, between two
+  // rails, at three places in between. A face that bulges or tapers to a quarter would get
+  // cells stretched by as much somewhere (a blade surface that fans out between short ends).
+  {
+    const widths = [polyLen(crossA.p3), polyLen(crossB.p3)];
+    if (!pointed) for (const f of [0.25, 0.5, 0.75]) {
+      const a = rail0.p2[Math.round(f * (rail0.p2.length - 1))]!, b = rail1.p2[Math.round(f * (rail1.p2.length - 1))]!;
+      let L = 0, prev = surface.evaluate(a[0], a[1]);
+      for (let k = 1; k <= 8; k++) { const q = surface.evaluate(a[0] + ((b[0] - a[0]) * k) / 8, a[1] + ((b[1] - a[1]) * k) / 8); L += Math.hypot(q[0] - prev[0], q[1] - prev[1], q[2] - prev[2]); prev = q; }
+      widths.push(L);
+    }
+    if (Math.max(...widths) > 4 * Math.min(...widths)) return why(`width varies along the face (${(Math.max(...widths) / Math.min(...widths)).toFixed(1)}x)`);
+  }
   {
     let len = 0;
     for (const cs of [crossA, crossB]) for (let i = 1; i < cs.p3.length; i++) len += Math.hypot(cs.p3[i]![0] - cs.p3[i - 1]![0], cs.p3[i]![1] - cs.p3[i - 1]![1], cs.p3[i]![2] - cs.p3[i - 1]![2]);
     const width = len / (crossA.p3.length - 1 + crossB.p3.length - 1);
-    // ... unless the face is a narrow band, only a few cells long along its rulings: there is
-    // no room to grade anyway, and a regular grid costs next to nothing.
-    const along = (polyLen(rail0.p3) + polyLen(rail1.p3)) / 2;
-    if (width < 0.3 * targetForRadius(1 / kC, tol.targetEdge, tol.chordTol, tol.normalDev) && along > 18 * width) return why("over-resolved");
+    if (width < 0.3 * targetForRadius(1 / kC, tol.targetEdge, tol.chordTol, tol.normalDev)) return why("over-resolved");
   }
   const railEdge = (k: number, along: boolean): RailEdge => ({ id: loop.edges[k]!.edgeId, fwd: loop.edges[k]!.orient === along, n: ep2[k]!.length - 1 });
   return {
-    crossA, crossB, rail0, rail1, mU, mV, C,
-    edgesA: sides[0]!.edges.map((k) => loop.edges[k]!.edgeId), edgesB: sides[2]!.edges.map((k) => loop.edges[k]!.edgeId),
+    crossA, crossB, rail0, rail1, mU, mV, C, pointed,
+    edgesA: eA.map((k) => loop.edges[k]!.edgeId), edgesB: eB.map((k) => loop.edges[k]!.edgeId),
     // rail1 runs with the loop, rail0 against it.
-    edges1: sides[1]!.edges.map((k) => railEdge(k, true)), edges0: sides[3]!.edges.slice().reverse().map((k) => railEdge(k, false)),
+    edges1: e1.map((k) => railEdge(k, true)), edges0: e0.slice().reverse().map((k) => railEdge(k, false)),
     // crossA runs with the loop, crossB against it.
-    crossEdgesA: sides[0]!.edges.map((k) => railEdge(k, true)), crossEdgesB: sides[2]!.edges.slice().reverse().map((k) => railEdge(k, false)),
+    crossEdgesA: eA.map((k) => railEdge(k, true)), crossEdgesB: eB.slice().reverse().map((k) => railEdge(k, false)),
   };
 }
 
@@ -2396,6 +2432,7 @@ function matchMappedRails(cand: MappedCand[], tolOf: (fid: number) => FaceTol, s
       const { face, surface } = faces[fi]!;
       const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
       if (!plan) continue;
+      if (plan.pointed) continue; // one rail only: nothing to match it with
       const F = (1 - plan.C) as 0 | 1;
       const positions = (r: MappedSide): number[] | null => sidePositions(r, F);
       const x0 = positions(plan.rail0), x1 = positions(plan.rail1);
@@ -2427,7 +2464,7 @@ function tessellateMapped(
 ): boolean {
   const plan = mappedPlan(surface, loop, sampled, tol);
   if (!plan) { if (DBG && mappedWhy) console.error(`[mapped] fid=${fid} not mappable: ${mappedWhy}`); return false; }
-  const m = mappedMesh(surface, plan.crossA, plan.crossB, plan.rail0, plan.rail1, plan.mU, plan.mV);
+  const m = mappedMesh(surface, plan.crossA, plan.crossB, plan.rail0, plan.pointed ? null : plan.rail1, plan.mU, plan.mV, plan.C);
   if (!m) {
     if (DBG) console.error(`[mapped] fid=${fid} declined (cross sides ${plan.crossA.p2.length - 1}/${plan.crossB.p2.length - 1} segments, or folded grid)`);
     return false;

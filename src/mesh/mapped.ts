@@ -24,16 +24,18 @@
 //     a diagonal. On a straight fillet the quads are plane, so the diagonal does not show at
 //     all: the fillet is a clean prism of rectangles. The caller makes this the normal case by
 //     seeding opposite rails alike (matchRailStations below).
-//   - STRIPS, when the rails could not be given equal counts (one of them is fixed by another
-//     face) or are graded toward a corner much finer than the strips are wide. The nodes along each ruling are then free: next to a rail they follow that rail's
-//     spacing, further in they settle at a spacing that suits the strip width, and every other
-//     ruling is shifted by half a step so the triangles come out near-equilateral.
+//   - RULED otherwise: when the rails could not be given equal counts (one of them is fixed
+//     by another face), are graded toward a corner much finer than the strips are wide, or
+//     the face has only one rail or none (it ends in a slant or a point). The rulings then
+//     carry common STATIONS wherever they reach, a grid trimmed by the boundary: rectangles
+//     in the interior, triangles zipped in along a slanted end and beside a rail whose own
+//     nodes do not sit at the stations.
 //   - Either way the two cross sides must agree: same node count, node i of one joined to node
 //     i of the other. The edge seeder is told to give such pairs equal counts.
 //
-// Node positions come from transfinite interpolation of the four boundary curves in the
-// parameter plane, evaluated on the surface, so interior nodes lie exactly on the surface and
-// the boundary nodes are the shared edge samples verbatim (watertight by construction).
+// Interior nodes are placed in the parameter plane (transfinite interpolation of the four sides
+// for the grid, straight rulings otherwise) and evaluated on the surface, so they lie exactly on
+// it; the boundary nodes are the shared edge samples verbatim (watertight by construction).
 //
 // The function only builds the mesh. Whether a face qualifies (four sides, single-curved) is
 // decided by the caller with the helpers below; anything that does not fit is declined and
@@ -98,157 +100,172 @@ function fractions(p3: Vec3[]): number[] {
   return t.map((x) => x / L);
 }
 
-/** Value of the piecewise-linear function through (knots[i], vals[i]) at x. */
-function interp(knots: number[], vals: P2[], x: number): P2 {
-  let lo = 0, hi = knots.length - 1;
-  if (x <= knots[0]!) return vals[0]!;
-  if (x >= knots[hi]!) return vals[hi]!;
-  while (hi - lo > 1) { const m = (lo + hi) >> 1; if (knots[m]! <= x) lo = m; else hi = m; }
-  const d = knots[hi]! - knots[lo]!;
-  const w = d > 0 ? (x - knots[lo]!) / d : 0;
-  return [vals[lo]![0] + (vals[hi]![0] - vals[lo]![0]) * w, vals[lo]![1] + (vals[hi]![1] - vals[lo]![1]) * w];
-}
-
 /** Largest side ratio a cell may have for a face to take the grid layout. */
 const GRID_ASPECT = 2.2;
 
 /**
- * Mapped mesh of the four-sided domain bounded by crossA, rail1, crossB, rail0 — given as
+ * Mapped mesh of a domain bounded by two cross sides and up to two rails — given as
  *
  *   crossA : corner P00 -> P10      (N segments, across the bend)
  *   crossB : corner P01 -> P11      (N segments, same direction as crossA)
  *   rail0  : corner P00 -> P01      (along the flat direction, at the start of the cross sides)
  *   rail1  : corner P10 -> P11      (at their end)
  *
- * Rails with equal node counts, spaced so that no cell is longer or wider than GRID_ASPECT to
- * one, give the GRID layout; others the STRIPS layout (see the top of the file). `mU`, `mV` scale the parameter plane to millimetres for the validity test. Returns
- * null when the cross sides disagree in node count or the interpolated grid is not a valid
+ * A rail may be missing (null): the two cross sides then meet in a point at that end, as on a
+ * face that ends in a slant. `C` is the index of the curved parameter (the one the cross sides
+ * advance in), `mU`, `mV` scale the parameter plane to millimetres.
+ *
+ * Two rails with equal node counts, spaced so that no cell is longer or wider than GRID_ASPECT
+ * to one, give the GRID layout; everything else the RULED layout (see the top of the file).
+ * Returns null when the cross sides disagree in node count or the result is not a valid
  * (fold-free) triangulation of the domain.
  */
 export function mappedMesh(
-  surface: Surface, crossA: MappedSide, crossB: MappedSide, rail0: MappedSide, rail1: MappedSide, mU: number, mV: number,
+  surface: Surface, crossA: MappedSide, crossB: MappedSide, rail0: MappedSide | null, rail1: MappedSide | null, mU: number, mV: number, C: 0 | 1,
 ): MappedMesh | null {
   const N = crossA.p2.length - 1;
   if (N < 1 || crossB.p2.length - 1 !== N) return null;
-  const M0 = rail0.p2.length - 1, M1 = rail1.p2.length - 1;
-  if (M0 < 1 || M1 < 1) return null;
-  const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-  const len = (p: Vec3[]): number => { let L = 0; for (let i = 1; i < p.length; i++) L += d3(p[i]!, p[i - 1]!); return L; };
-  if (M0 === M1) {
-    // The grid repeats the rails' spacing on every ruling. That is only wanted while it gives
-    // cells of a reasonable shape: a rail graded down to a fine corner would lay a row of
-    // needle-thin cells across the whole face. Such a face takes the strips layout, which
-    // lets that grading fade out within a few rulings.
-    const width = (len(crossA.p3) + len(crossB.p3)) / (2 * N);
-    let fits = true;
-    for (const r of [rail0, rail1]) for (let k = 0; k < M0 && fits; k++) {
-      const cell = d3(r.p3[k]!, r.p3[k + 1]!);
-      if (cell * GRID_ASPECT < width || cell > GRID_ASPECT * width) fits = false;
+  if ((rail0 && rail0.p2.length < 2) || (rail1 && rail1.p2.length < 2)) return null;
+  const width = (polyLength(crossA.p3) + polyLength(crossB.p3)) / (2 * N);
+  /** True when every cell of the rail is within GRID_ASPECT to one of the strip width. */
+  const fits = (r: MappedSide): boolean => {
+    for (let k = 0; k + 1 < r.p3.length; k++) {
+      const cell = dist3(r.p3[k]!, r.p3[k + 1]!);
+      if (cell * GRID_ASPECT < width || cell > GRID_ASPECT * width) return false;
     }
-    if (fits) return gridMesh(surface, crossA, crossB, rail0, rail1, mU, mV);
+    return true;
+  };
+  // The grid repeats the rails' spacing on every ruling. That is only wanted while it gives
+  // cells of a reasonable shape: a rail graded down to a fine corner would lay a row of
+  // needle-thin cells across the whole face.
+  if (rail0 && rail1 && rail0.p2.length === rail1.p2.length && fits(rail0) && fits(rail1)) {
+    return gridMesh(surface, crossA, crossB, rail0, rail1, mU, mV);
   }
-  const t0 = fractions(rail0.p3), t1 = fractions(rail1.p3);
-  const P00 = crossA.p2[0]!, P10 = crossA.p2[N]!, P01 = crossB.p2[0]!, P11 = crossB.p2[N]!;
-  // NODE SPACING ALONG THE RULINGS. Next to a rail a ruling follows that rail's spacing, so the
-  // rail's fixed (shared) nodes pair up with their first neighbours. Further in, the spacing
-  // fades GROW-fold per ruling toward what suits the strip itself: between 0.8 and ASPECT times
-  // its width. So a rail graded toward a fine corner does not stamp that grading onto every
-  // ruling, and strips much narrower than the rails' spacing are refined along instead of
-  // carrying needle-long triangles. Up to ASPECT the triangles simply stay a little long along
-  // the fillet: that costs nothing in print quality (the strip is flat that way) and saves the
-  // triangles a full refinement would add.
-  const GROW = 1.5, ASPECT = 1.6, SHORT = 0.8;
-  const L0 = len(rail0.p3), L1 = len(rail1.p3);
-  /** A rail's local node spacing at fraction x of its length (linear between segment middles). */
-  const spacing = (t: number[], L: number, x: number): number => {
-    const m = t.length - 1;
-    let lo = 0, hi = m;
-    while (hi - lo > 1) { const k = (lo + hi) >> 1; if (t[k]! <= x) lo = k; else hi = k; }
-    const seg = (k: number): number => (t[k + 1]! - t[k]!) * L, mid = (k: number): number => (t[k]! + t[k + 1]!) / 2;
-    const k2 = x < mid(lo) ? lo - 1 : lo;
-    if (k2 < 0) return seg(0);
-    if (k2 >= m - 1) return seg(m - 1);
-    const w = (x - mid(k2)) / Math.max(mid(k2 + 1) - mid(k2), 1e-300);
-    return seg(k2) + (seg(k2 + 1) - seg(k2)) * Math.min(1, Math.max(0, w));
-  };
-  const Q = Math.min(4096, 8 * Math.max(M0, M1) + 16); // integration steps along a ruling
-  /** Parameter point of ruling i (at w = i/N across) at fraction tt along it: transfinite
-   * interpolation of the four boundary curves (a Coons patch) in (u,v). */
-  const uvAt = (w: number, tt: number, i: number): P2 => {
-    const A = crossA.p2[i]!, B = crossB.p2[i]!;
-    const r0 = interp(t0, rail0.p2, tt), r1 = interp(t1, rail1.p2, tt);
-    return [
-      (1 - w) * r0[0] + w * r1[0] + (1 - tt) * A[0] + tt * B[0] - ((1 - w) * (1 - tt) * P00[0] + w * (1 - tt) * P10[0] + (1 - w) * tt * P01[0] + w * tt * P11[0]),
-      (1 - w) * r0[1] + w * r1[1] + (1 - tt) * A[1] + tt * B[1] - ((1 - w) * (1 - tt) * P00[1] + w * (1 - tt) * P10[1] + (1 - w) * tt * P01[1] + w * tt * P11[1]),
-    ];
-  };
-  const at = (w: number, tt: number, i: number): Vec3 => { const q = uvAt(w, tt, i); return surface.evaluate(q[0], q[1]); };
-  /** Fractions (0..1, ends excluded) of the nodes on ruling i; `half` shifts them by half a step. */
-  const nodesOn = (i: number, half: boolean): number[] => {
-    const w = i / N;
-    // The ruling's own 3D length, measured along it: a face whose cross sides approach each
-    // other in the middle (a pocket wall that gets shallower) has rulings far shorter than
-    // either rail there.
-    let L = 0;
-    { let prev = crossA.p3[i]!; for (let k = 1; k <= 12; k++) { const q = k === 12 ? crossB.p3[i]! : at(w, k / 12, i); L += d3(prev, q); prev = q; } }
-    const width = (d3(crossA.p3[i]!, crossA.p3[i - 1]!) + d3(crossA.p3[i + 1]!, crossA.p3[i]!) + d3(crossB.p3[i]!, crossB.p3[i - 1]!) + d3(crossB.p3[i + 1]!, crossB.p3[i]!)) / 4;
-    const fade = 1 - 1 / GROW ** Math.min(i, N - i);
-    const size = (x: number): number => {
-      const hb = (1 - w) * spacing(t0, L0, x) + w * spacing(t1, L1, x);
-      const own = Math.min(ASPECT * width, Math.max(SHORT * width, hb));
-      return Math.max(1e-12, hb * (own / hb) ** fade);
-    };
-    // Equal steps of the integral of 1/size, exactly as the edge seeder places nodes on an edge.
-    const A = new Float64Array(Q + 1);
-    let prev = 1 / size(0);
-    for (let q = 1; q <= Q; q++) { const cur = 1 / size(q / Q); A[q] = A[q - 1]! + (0.5 * (prev + cur) * L) / Q; prev = cur; }
-    const M = Math.max(1, Math.round(A[Q]!));
-    const out: number[] = [];
-    const shift = half && M >= 2;
-    let j = 1;
-    for (let k = 0; k < (shift ? M : M - 1); k++) {
-      const target = (A[Q]! * (shift ? k + 0.5 : k + 1)) / M;
-      while (j < Q && A[j]! < target) j++;
-      const da = A[j]! - A[j - 1]!;
-      out.push((j - 1 + (da > 0 ? (target - A[j - 1]!) / da : 0)) / Q);
-    }
-    return out;
-  };
-  const p2: P2[] = [], p3: Vec3[] = [];
-  const rulings: { idx: number[]; tau: number[] }[] = [];
-  const add = (q: P2, p: Vec3): number => { p2.push(q); p3.push(p); return p2.length - 1; };
-  // Rulings 0 and N are the rails themselves: the shared boundary samples, verbatim.
-  const railRuling = (r: MappedSide, t: number[]): { idx: number[]; tau: number[] } => ({ idx: r.p2.map((q, k) => add(q, r.p3[k]!)), tau: t });
-  rulings.push(railRuling(rail0, t0));
-  for (let i = 1; i < N; i++) {
-    const w = i / N;
-    const A = crossA.p2[i]!, B = crossB.p2[i]!;
-    const idx: number[] = [add(A, crossA.p3[i]!)], tau: number[] = [0];
-    // Every other ruling is shifted by half a step, which turns the quad cells into
-    // near-equilateral triangles; a ruling too short for two nodes keeps the plain layout.
-    for (const tt of nodesOn(i, i % 2 === 1)) {
-      const q = uvAt(w, tt, i);
-      idx.push(add(q, surface.evaluate(q[0], q[1]))); tau.push(tt);
-    }
-    idx.push(add(B, crossB.p3[i]!)); tau.push(1);
-    rulings.push({ idx, tau });
-  }
-  rulings.push(railRuling(rail1, t1));
+  return ruledMesh(surface, crossA, crossB, rail0, rail1, mU, mV, C, width, fits);
+}
 
-  // Zip each pair of neighbouring rulings, always taking the SHORTER of the two possible next
-  // diagonals (measured in 3D). Where the cross sides meet the rulings squarely this pairs each
-  // node with the half-step-shifted nodes opposite it; where they meet them at a slant (a wall
-  // whose top edge runs obliquely) the strip is a sheared ribbon, and following the parameter
-  // fractions instead would lean every triangle over into a sliver.
+const dist3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+function polyLength(p: Vec3[]): number {
+  let L = 0;
+  for (let i = 1; i < p.length; i++) L += dist3(p[i]!, p[i - 1]!);
+  return L;
+}
+
+/**
+ * RULED layout: a grid trimmed by its boundary.
+ *
+ * Ruling i is the straight parameter line from node i of one cross side to node i of the other.
+ * Its nodes sit at STATIONS, values of the flat parameter shared by all rulings, so that nodes
+ * of neighbouring rulings face each other and the cells between them are rectangles; a ruling
+ * simply carries the stations that fall inside it, and one too close to its end is dropped
+ * (the end node takes its place, the cell there is up to a third longer or shorter). Where
+ * two neighbouring rulings carry different stations — along a slanted end, or beside a rail
+ * whose own nodes are elsewhere — the strip between them is zipped with triangles.
+ *
+ * The stations are the nodes of the face's one rail when it has exactly one and its spacing
+ * suits the strips (the cells beside it are then rectangles too); otherwise they are evenly
+ * spaced at the strip width, i.e. square cells.
+ */
+function ruledMesh(
+  surface: Surface, crossA: MappedSide, crossB: MappedSide, rail0: MappedSide | null, rail1: MappedSide | null,
+  mU: number, mV: number, C: 0 | 1, width: number, fits: (r: MappedSide) => boolean,
+): MappedMesh | null {
+  const N = crossA.p2.length - 1, F = (1 - C) as 0 | 1, mF = F === 0 ? mU : mV;
+  let fMin = Infinity, fMax = -Infinity;
+  for (const s of [crossA, crossB]) for (const q of s.p2) { if (q[F] < fMin) fMin = q[F]; if (q[F] > fMax) fMax = q[F]; }
+  if (!(fMax > fMin) || !(width > 0)) return null;
+  // Stations, ascending in the flat parameter, covering [fMin, fMax].
+  let stations: number[];
+  const guide = rail0 && !rail1 ? rail0 : rail1 && !rail0 ? rail1 : null;
+  const gf = guide && fits(guide) ? guide.p2.map((q) => q[F]) : null;
+  if (gf && gf.length >= 2 && gf.every((x, k) => k === 0 || (x - gf[k - 1]!) * (gf[gf.length - 1]! - gf[0]!) > 0)) {
+    stations = gf[0]! < gf[gf.length - 1]! ? gf.slice() : gf.slice().reverse();
+    // Continue with the end spacing where other rulings reach beyond the rail.
+    const lo = stations[1]! - stations[0]!, hi = stations[stations.length - 1]! - stations[stations.length - 2]!;
+    for (let k = 0; k < 4096 && stations[0]! > fMin; k++) stations.unshift(stations[0]! - lo);
+    for (let k = 0; k < 4096 && stations[stations.length - 1]! < fMax; k++) stations.push(stations[stations.length - 1]! + hi);
+  } else {
+    // Even spacing in LENGTH, not in the parameter (a spline surface's parameter rarely runs
+    // at constant speed): measured along the ruling that reaches farthest, and continued at
+    // its end spacing where others reach beyond it.
+    let ref = 0, reach = -1;
+    for (let i = 0; i <= N; i++) { const d = Math.abs(crossB.p2[i]![F] - crossA.p2[i]![F]); if (d > reach) { reach = d; ref = i; } }
+    const A = crossA.p2[ref]!, B = crossB.p2[ref]!;
+    const Q = Math.min(4096, Math.max(16, Math.ceil((8 * reach * mF) / width)));
+    const cum = new Float64Array(Q + 1);
+    let prev = surface.evaluate(A[0], A[1]);
+    for (let q = 1; q <= Q; q++) {
+      const cur = surface.evaluate(A[0] + ((B[0] - A[0]) * q) / Q, A[1] + ((B[1] - A[1]) * q) / Q);
+      cum[q] = cum[q - 1]! + dist3(prev, cur); prev = cur;
+    }
+    const K = Math.min(8192, Math.max(1, Math.round(cum[Q]! / width)));
+    const fs: number[] = [A[F]];
+    let j = 1;
+    for (let k = 1; k < K; k++) {
+      const target = (cum[Q]! * k) / K;
+      while (j < Q && cum[j]! < target) j++;
+      const d = cum[j]! - cum[j - 1]!;
+      fs.push(A[F] + ((B[F] - A[F]) * (j - 1 + (d > 0 ? (target - cum[j - 1]!) / d : 0))) / Q);
+    }
+    fs.push(B[F]);
+    stations = B[F] > A[F] ? fs : fs.reverse();
+    if (stations.length >= 2 && stations[stations.length - 1]! > stations[0]!) {
+      const lo = stations[1]! - stations[0]!, hi = stations[stations.length - 1]! - stations[stations.length - 2]!;
+      for (let k = 0; k < 4096 && lo > 0 && stations[0]! > fMin; k++) stations.unshift(stations[0]! - lo);
+      for (let k = 0; k < 4096 && hi > 0 && stations[stations.length - 1]! < fMax; k++) stations.push(stations[stations.length - 1]! + hi);
+    } else {
+      const K2 = Math.min(8192, Math.max(1, Math.round(((fMax - fMin) * mF) / width)));
+      stations = Array.from({ length: K2 + 1 }, (_, k) => fMin + ((fMax - fMin) * k) / K2);
+    }
+  }
+  const p2: P2[] = [], p3: Vec3[] = [];
+  const add = (q: P2, p: Vec3): number => { p2.push(q); p3.push(p); return p2.length - 1; };
+  const DROP = 0.35;
+  const rulings: number[][] = [];
+  for (let i = 0; i <= N; i++) {
+    const rail = i === 0 ? rail0 : i === N ? rail1 : null;
+    if (rail) { rulings.push(rail.p2.map((q, k) => add(q, rail.p3[k]!))); continue; }
+    const A = crossA.p2[i]!, B = crossB.p2[i]!;
+    const idx: number[] = [add(A, crossA.p3[i]!)];
+    // A missing rail: the cross sides meet there, the ruling is that one point.
+    if ((i === 0 || i === N) && dist3(crossA.p3[i]!, crossB.p3[i]!) < 1e-9 * (1 + width)) { rulings.push(idx); continue; }
+    const fa = A[F], fb = B[F], lo = Math.min(fa, fb), hi = Math.max(fa, fb);
+    if (hi > lo) {
+      const ts: number[] = [];
+      for (let k = 0; k < stations.length; k++) {
+        const S = stations[k]!;
+        const cell = Math.min(k > 0 ? S - stations[k - 1]! : Infinity, k + 1 < stations.length ? stations[k + 1]! - S : Infinity);
+        if (S - lo > DROP * cell && hi - S > DROP * cell) ts.push((S - fa) / (fb - fa));
+      }
+      if (fb < fa) ts.reverse();
+      for (const t of ts) {
+        const q: P2 = [A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t];
+        idx.push(add(q, surface.evaluate(q[0], q[1])));
+      }
+    }
+    idx.push(add(B, crossB.p3[i]!));
+    rulings.push(idx);
+  }
+  // Zip each pair of neighbouring rulings. Where both carry the same stations the two sides
+  // advance in turn, which cuts every rectangle along the same diagonal; a side is advanced
+  // out of turn only when its next diagonal is clearly the shorter in 3D, which is how the
+  // triangles follow a slanted end or a rail with its own spacing.
   const tris: [number, number, number][] = [];
   for (let i = 0; i < N; i++) {
     const L = rulings[i]!, R = rulings[i + 1]!;
-    let l = 0, r = 0;
-    const nl = L.idx.length - 1, nr = R.idx.length - 1;
+    let l = 0, r = 0, lastL = false;
+    const nl = L.length - 1, nr = R.length - 1;
     while (l < nl || r < nr) {
-      const advL = r >= nr || (l < nl && d3(p3[L.idx[l + 1]!]!, p3[R.idx[r]!]!) <= d3(p3[L.idx[l]!]!, p3[R.idx[r + 1]!]!));
-      if (advL) { tris.push([L.idx[l]!, R.idx[r]!, L.idx[l + 1]!]); l++; }
-      else { tris.push([L.idx[l]!, R.idx[r]!, R.idx[r + 1]!]); r++; }
+      let advL: boolean;
+      if (r >= nr) advL = true;
+      else if (l >= nl) advL = false;
+      else {
+        const dL = dist3(p3[L[l + 1]!]!, p3[R[r]!]!), dR = dist3(p3[L[l]!]!, p3[R[r + 1]!]!);
+        advL = lastL ? dL < 0.85 * dR : dL <= dR / 0.85;
+      }
+      if (advL) { tris.push([L[l]!, R[r]!, L[l + 1]!]); l++; }
+      else { tris.push([L[l]!, R[r]!, R[r + 1]!]); r++; }
+      lastL = advL;
     }
   }
   return valid(p2, p3, tris, mU, mV);

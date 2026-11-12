@@ -161,7 +161,7 @@ for (const [name, p5Min] of [["cube", 40], ["cylinder", 35], ["sphere", 30], ["e
   const side = (pts: [number, number][]): { p2: [number, number][]; p3: [number, number, number][] } => ({ p2: pts, p3: pts.map(([u, v]) => surface.evaluate(u, v) as [number, number, number]) });
   const arc = (v: number): [number, number][] => Array.from({ length: 7 }, (_, i) => [(i * Math.PI) / 12, v] as [number, number]);
   const rail = (u: number, n: number, grade: number): [number, number][] => Array.from({ length: n + 1 }, (_, k) => [u, 5 * (k / n) ** grade] as [number, number]);
-  const m = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0, 12, 1)), side(rail(Math.PI / 2, 20, 1.2)), R, 1);
+  const m = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0, 12, 1)), side(rail(Math.PI / 2, 20, 1.2)), R, 1, 0);
   check(m !== null, "mapped mesher: accepts rails with 12 and 20 graded segments");
   if (m) {
     let lean = 0, area = 0;
@@ -189,7 +189,7 @@ for (const [name, p5Min] of [["cube", 40], ["cylinder", 35], ["sphere", 30], ["e
   const side = (pts: [number, number][]): { p2: [number, number][]; p3: [number, number, number][] } => ({ p2: pts, p3: pts.map(([u, v]) => surface.evaluate(u, v) as [number, number, number]) });
   const arc = (v: number): [number, number][] => Array.from({ length: N + 1 }, (_, i) => [(i * Math.PI) / 12, v] as [number, number]);
   const rail = (u: number, grade = 1.15): [number, number][] => Array.from({ length: M + 1 }, (_, k) => [u, 5 * (k / M) ** grade] as [number, number]);
-  const m = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0)), side(rail(Math.PI / 2)), R, 1);
+  const m = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0)), side(rail(Math.PI / 2)), R, 1, 0);
   check(m !== null && m.tris.length === 2 * N * M && m.p2.length === (N + 1) * (M + 1), `mapped grid: ${N} x ${M} quads, two triangles each (${m?.tris.length} triangles, ${m?.p2.length} nodes)`);
   if (m) {
     let bad = 0;
@@ -207,8 +207,44 @@ for (const [name, p5Min] of [["cube", 40], ["cylinder", 35], ["sphere", 30], ["e
   }
   // Rails graded down to cells far thinner than the strips are wide: a grid would repeat that
   // row of needles on every ruling, so the strips layout is used instead.
-  const steep = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0, 2.5)), side(rail(Math.PI / 2, 2.5)), R, 1);
+  const steep = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0, 2.5)), side(rail(Math.PI / 2, 2.5)), R, 1, 0);
   check(steep !== null && steep.p2.length !== (N + 1) * (M + 1), `mapped grid: steeply graded rails fall back to strips (${steep?.p2.length} nodes, a grid has ${(N + 1) * (M + 1)})`);
+}
+// ONE rail only: a patch that ends in a slant, its two cross sides meeting in a point. The
+// rulings carry the rail's stations as far as they reach (a grid trimmed by the slanted side).
+{
+  const R = 2, N = 8, M = 10, H = 5, W = Math.PI / 2;
+  const surface = { evaluate: (u: number, v: number): [number, number, number] => [R * Math.cos(u), R * Math.sin(u), v] } as unknown as Parameters<typeof mappedMesh>[0];
+  const side = (pts: [number, number][]): { p2: [number, number][]; p3: [number, number, number][] } => ({ p2: pts, p3: pts.map(([u, v]) => surface.evaluate(u, v) as [number, number, number]) });
+  const base = side(Array.from({ length: N + 1 }, (_, i) => [(i * W) / N, 0] as [number, number]));
+  const slant = side(Array.from({ length: N + 1 }, (_, i) => [(i * W) / N, H * (1 - i / N)] as [number, number]));
+  const rail = side(Array.from({ length: M + 1 }, (_, k) => [0, (H * k) / M] as [number, number]));
+  const m = mappedMesh(surface, base, slant, rail, null, R, 1, 0);
+  check(m !== null, "mapped, one rail: a patch ending in a slant is meshed");
+  if (m) {
+    let lean = 0, area = 0, right = 0;
+    for (const [a, b, c] of m.tris) {
+      const A = m.p3[a]!, B = m.p3[b]!, C = m.p3[c]!;
+      const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]), ny = (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]), nz = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+      const nl = Math.hypot(nx, ny, nz);
+      lean = Math.max(lean, Math.abs(nz) / nl); area += nl / 2;
+      let along = 0, across = 0;
+      for (let k = 0; k < 3; k++) {
+        const p = m.p2[[a, b, c][k]!]!, q = m.p2[[a, b, c][(k + 1) % 3]!]!;
+        if (Math.abs(p[0] - q[0]) < 1e-12) along++; else if (Math.abs(p[1] - q[1]) < 1e-9) across++;
+      }
+      if (along === 1 && across === 1) right++;
+    }
+    // Each strip is a plane trapezoid: chord x mean height of its two rulings.
+    let exact = 0;
+    for (let i = 0; i < N; i++) exact += 2 * R * Math.sin(W / N / 2) * H * (1 - (i + 0.5) / N);
+    const rulings = new Set(m.p2.map((q) => Math.round(q[0] * 1e9)));
+    check(rulings.size === N + 1 && lean < 1e-12, `mapped, one rail: nodes on the ${N + 1} rulings, every facet parallel to the axis (${rulings.size}, lean ${lean.toExponential(1)})`);
+    check(Math.abs(area - exact) < 1e-9, `mapped, one rail: covers the patch exactly (area ${area.toFixed(6)} vs ${exact.toFixed(6)})`);
+    check(right > 0.7 * m.tris.length, `mapped, one rail: ${right} of ${m.tris.length} triangles are halves of rectangles`);
+    const a = minAngles(m.p3.flat(), m.tris.flat());
+    check(a[0]! > 10, `mapped, one rail: smallest angle ${a[0]!.toFixed(1)}°`);
+  }
 }
 // Common stations for two rails (what makes the grid layout possible).
 {
