@@ -389,6 +389,52 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   check("slotted rim under a coarse circle: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
 }
 
+// ---- the same slotted rim on a TORUS band (ABC 00057602 #340: a small fillet torus, R 6.6, r 0.5).
+// Its stack (v, around the tube) is periodic, and the band mesher skipped the closing-stitch replay
+// and the decline for periodic stacks, so the stitch folded behind the slot walls (100 crossing
+// pairs here, area +2.2%). Exact area by Green's theorem on dA = r(R + r cos v) du dv.
+{
+  const R = 6.6, r = 0.5, D = Math.PI / 180, vRim = 0, vBot = -80 * D;
+  const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
+  const corners: [number, number][] = []; // (u°, v°), u decreasing: 12 slots 1° wide, 60° deep
+  for (let k = 0; k < 12; k++) { const u0 = -k * 30; corners.push([u0, vRim], [u0 - 0.5, vRim - 60], [u0 - 1, vRim]); }
+  corners.push([-360, vRim]);
+  const uv: [number, number][] = [];
+  for (let i = 0; i + 1 < corners.length; i++) {
+    const [ua, va] = corners[i]!, [ub, vb] = corners[i + 1]!;
+    const n = Math.max(2, Math.ceil(Math.hypot(ub - ua, vb - va) / 2));
+    for (let j = 0; j < n; j++) uv.push([(ua + ((ub - ua) * j) / n) * D, (va + ((vb - va) * j) / n) * D]);
+  }
+  const nC = uv.length + 1;
+  const rB = R + r * Math.cos(vBot), zB = r * Math.sin(vBot);
+  const lines = [...uv.map(([u, v], i) => pt(1000 + i, onT(u, v))),
+    `#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(${[...uv.map((_, i) => `#${1000 + i}`), "#1000"].join(",")}),.POLYLINE_FORM.,.T.,.F.,(2,${Array(nC - 2).fill(1).join(",")},2),(${Array.from({ length: nC }, (_, i) => `${i}.`).join(",")}),.UNSPECIFIED.);`,
+    `#11=VERTEX_POINT('',#1000);`, `#12=EDGE_CURVE('',#11,#11,#10,.T.);`, `#13=ORIENTED_EDGE('',*,*,#12,.T.);`, `#14=EDGE_LOOP('',(#13));`,
+    pt(20, [0, 0, zB]), `#21=DIRECTION('',(0.,0.,1.));`, `#22=DIRECTION('',(1.,0.,0.));`, `#23=AXIS2_PLACEMENT_3D('',#20,#21,#22);`,
+    `#24=CIRCLE('',#23,${rB.toFixed(9)});`, pt(25, [rB, 0, zB]), `#26=VERTEX_POINT('',#25);`,
+    `#27=EDGE_CURVE('',#26,#26,#24,.T.);`, `#28=ORIENTED_EDGE('',*,*,#27,.T.);`, `#29=EDGE_LOOP('',(#28));`,
+    pt(30, [0, 0, 0]), `#31=AXIS2_PLACEMENT_3D('',#30,#21,#22);`, `#32=TOROIDAL_SURFACE('',#31,${R},${r});`,
+    `#33=FACE_BOUND('',#14,.T.);`, `#34=FACE_BOUND('',#29,.T.);`, `#35=ADVANCED_FACE('',(#33,#34),#32,.T.);`,
+    `#36=OPEN_SHELL('',(#35));`, `#37=SHELL_BASED_SURFACE_MODEL('',(#36));`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src);
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const a = I[t * 3]! * 3, b = I[t * 3 + 1]! * 3, c = I[t * 3 + 2]! * 3;
+    const e1 = [P[b]! - P[a]!, P[b + 1]! - P[a + 1]!, P[b + 2]! - P[a + 2]!], e2 = [P[c]! - P[a]!, P[c + 1]! - P[a + 1]!, P[c + 2]! - P[a + 2]!];
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  const G = (v: number): number => r * (R * v + r * Math.sin(v));
+  const walk = [...uv, [-2 * Math.PI, uv[0]![1]] as [number, number]];
+  let zig = 0;
+  for (let i = 0; i + 1 < walk.length; i++) zig += G((walk[i]![1] + walk[i + 1]![1]) / 2) * (walk[i + 1]![0] - walk[i]![0]);
+  const exact = Math.abs(zig + G(vBot) * 2 * Math.PI);
+  const si = selfIntersections(P, I, res.faceOfTri);
+  check("slotted rim on a torus band: no fold", si.sameFace === 0, `${si.sameFace} crossing pairs`);
+  check("slotted rim on a torus band: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
+}
+
 // ---- torus patches meshed by the param grid (u around the axis, v around the tube). The grid spaces
 // its columns uniformly in u at the face's MEDIAN parallel and sized them by the tube radius alone.
 // A chord spanning du on the parallel at v leaves the surface by |(R + r cos v) cos v|·du²/8, so

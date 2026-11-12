@@ -3285,9 +3285,11 @@ function tessellateRevolutionBand(
       // near-vertical walls. The stitch fans each coarse top point to a whole wall, and one wall of
       // every slot is seen from behind: reversed triangles (152 on #259, 232 crossing pairs).
       // Replay the stitch's zipper in its own (angular fraction, height) coordinates and count
-      // triangles against the majority orientation.
+      // triangles against the majority orientation. Torus bands stacked along the periodic tube
+      // angle fold the same way (a slotted rim on a torus, ABC 00057602 #340: 237 crossing pairs),
+      // so neither this check nor the decline is skipped for periodic stacks.
       let stitchFolds = 0;
-      if (!crossesLast && !crossesBottom && !stackPeriodic) {
+      if (!crossesLast && !crossesBottom) {
         const na = bottom.length, nb = top.length;
         const ax = (i: number): number => (i >= na ? 1 : fracB[i]!), bx = (i: number): number => (i >= nb ? 1 : fracT[i]!);
         const ah = (i: number): number => hLast[i % na]!, bh = (i: number): number => hT[i % nb]!;
@@ -3303,7 +3305,7 @@ function tessellateRevolutionBand(
         for (const a of areas) if (a * Math.sign(sum) < -tol) stitchFolds++;
       }
       if (DBG && stitchFolds) console.error(`[band] fid=${fid} closing stitch folds ${stitchFolds} triangles -> unroll`);
-      if ((crossesLast || stitchFolds > 0) && !crossesBottom && !stackPeriodic) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
+      if ((crossesLast || stitchFolds > 0) && !crossesBottom) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
         ti = 0;
