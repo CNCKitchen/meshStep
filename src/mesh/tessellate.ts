@@ -20,6 +20,7 @@ import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from ".
 import { sampleEdgePolyline } from "../geom/curves.ts";
 import { EdgeSeeder } from "./edge-seed.ts";
 import { optimizeFace } from "./optimize.ts";
+import { isoCurvature, mappedMesh, type MappedSide } from "./mapped.ts";
 import { constrainedTriangulate, type CdtOut } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
@@ -39,7 +40,7 @@ const overlapFaces = new Set<number>();
  * like the two sinks above: the meshers are synchronous and many signatures deep.
  * `g` is the size growth per unit distance, growthRate − 1; `hMin` the smallest edge length the
  * size field asks for. */
-let ISO: { g: number; hMin: number } | null = null;
+let ISO: { g: number; hMin: number; mapped: boolean } | null = null;
 type P2 = [number, number];
 
 export interface TessOptions {
@@ -80,6 +81,12 @@ export interface TessOptions {
    * this are meshed with stretched triangles instead of ever finer ones. Default: the same floor
    * the default mode uses, min(targetEdge/40, 30·chordTol). */
   minEdge?: number;
+  /** Isotropic mode: mesh single-curved four-sided faces (fillets, cylinder and cone patches) as
+   * a MAPPED mesh — structured strips along the face's flat direction — instead of free
+   * triangles. Free triangles on a fillet tilt irregularly against its straight direction, which
+   * a slicer turns into wobbling layer contours that show on prints; mapped strips are flat
+   * along the fillet. Their triangles are isosceles rather than equilateral. Default true. */
+  mappedFillets?: boolean;
 }
 
 /** One face's tessellation tolerances (internal units: mm, mm, radians). */
@@ -1452,14 +1459,36 @@ function gridCDT(
     if (dist < 0.3 * sz) return; // hugs a boundary edge -> would make it un-enforceable
     interiorIdx.push(allP2.length); allP2.push([u, v]); allP3.push(surface.evaluate(u, v));
   };
+  // RULED faces (isotropic mode with mapped fillets): a single-curved face that the mapped mesher
+  // could not take (a cylinder with a cross hole, a cone cut by pockets) still gets the next best
+  // thing. Its lattice rows are laid along the FLAT parameter, so interior triangles span two
+  // neighbouring rulings exactly as in a mapped mesh, and the optimiser may slide vertices only
+  // along their ruling. Same 4:1 curvature test as the mapped mesher. -1 = not ruled.
+  // Not where the rulings CONVERGE (a cone patch reaching toward its apex): evenly spaced
+  // parameter lines crowd together there, the crowd has to be thinned by collapses, and vertices
+  // that may only slide along their ruling cannot make room for that.
+  const ruledC: -1 | 0 | 1 = (() => {
+    if (!ISO?.mapped || !(Math.max(kU, kV) > 1e-9) || Math.max(kU, kV) < 4 * Math.min(kU, kV)) return -1;
+    const C = kU >= kV ? 0 : 1;
+    const mags = C === 0 ? uMags : vMags;
+    return Math.max(...mags) <= 1.25 * Math.min(...mags) ? C : -1;
+  })();
   if (ISO) {
     // ISOTROPIC mode: an equilateral (hexagonal) lattice — rows 0.866 of the spacing apart, every
     // other row shifted by half a step. A square lattice is a trap for the optimiser: its right
     // triangles have no edge long enough to split, no diagonal Delaunay would flip and, by
     // symmetry, no vertex relaxation would move, so they would simply stay.
-    const nR = Math.min(GRID_N, Math.max(1, Math.round(((vmax - vmin) * vSc) / (0.866 * target))));
-    for (let j = 1; j < nR; j++) for (let i = j & 1 ? 0 : 1; i < nU; i++) {
-      tryAdd(umin + ((umax - umin) * (i + (j & 1 ? 0.5 : 0))) / nU, vmin + ((vmax - vmin) * j) / nR);
+    if (ruledC === 0) {
+      // u is the curved parameter: rows are lines of constant u, running along v.
+      const nC = Math.min(GRID_N, Math.max(1, Math.round(((umax - umin) * uSc) / (0.866 * target))));
+      for (let i = 1; i < nC; i++) for (let j = i & 1 ? 0 : 1; j < nV; j++) {
+        tryAdd(umin + ((umax - umin) * i) / nC, vmin + ((vmax - vmin) * (j + (i & 1 ? 0.5 : 0))) / nV);
+      }
+    } else {
+      const nR = Math.min(GRID_N, Math.max(1, Math.round(((vmax - vmin) * vSc) / (0.866 * target))));
+      for (let j = 1; j < nR; j++) for (let i = j & 1 ? 0 : 1; i < nU; i++) {
+        tryAdd(umin + ((umax - umin) * (i + (j & 1 ? 0.5 : 0))) / nU, vmin + ((vmax - vmin) * j) / nR);
+      }
     }
   } else
   for (let i = 1; i < nU; i++) for (let j = 1; j < nV; j++) tryAdd(umin + ((umax - umin) * i) / nU, vmin + ((vmax - vmin) * j) / nV);
@@ -1909,6 +1938,8 @@ function gridCDT(
       isConstrained: (a, b) => con.has(a < b ? a * K + b : b * K + a),
       evalAt: (x, y) => surface.evaluate(x / uSc, y / vSc),
       sizeAt: (x, y) => sizeDist(x, y)[0],
+      // The plane's x is u and y is v: a ruled face slides along its flat parameter.
+      ...(ruledC === 0 ? { slideAxis: 1 as const } : ruledC === 1 ? { slideAxis: 0 as const } : {}),
     });
     if (res) {
       // Boundary samples stay the shared 3D points verbatim; only interior points are rewritten.
@@ -2055,6 +2086,151 @@ function gridCDT(
     emitTri(verts, faceIds, allP3[a]!, allP3[b]!, allP3[c]!, fid, surface, sign, nrm);
   }
   return tris.length > 0;
+}
+
+/** A face recognised as MAPPABLE (isotropic mode, see mapped.ts): single-curved and four-sided,
+ * with its boundary split into the two cross sides (across the bend) and the two rails. */
+interface MappedPlan {
+  crossA: MappedSide; crossB: MappedSide; rail0: MappedSide; rail1: MappedSide;
+  /** Edge ids making up each cross side (the seeder equalises the node counts of single-edge sides). */
+  edgesA: number[]; edgesB: number[];
+  mU: number; mV: number;
+  /** Index of the curved parameter (0 = u, 1 = v). */
+  C: 0 | 1;
+}
+
+/**
+ * Recognise a mappable face from its single boundary loop. The surface must bend along one
+ * parameter and be (nearly) flat along the other everywhere on the face — at least 4:1 in normal
+ * curvature over a 3x3 probe, the same test the default mode's fillet stretch uses — and the loop
+ * must read, in the parameter plane, as cross side / rail / cross side / rail:
+ *   - a RAIL is a run of edges at a constant value of the curved parameter (within 2% of the
+ *     face's span in it) that run along the flat one: a ruling-direction boundary, such as a
+ *     fillet's two tangent edges;
+ *   - a CROSS side is a run of edges going monotonically from one rail to the other.
+ * Anything else (three-sided blends, faces cut by oblique or helical trims, windows, loops that
+ * wind a periodic direction) is not mappable and returns null.
+ *
+ * It must also MAKE SENSE: the strips are as wide as the cross sides are seeded, and a mapped
+ * mesh is for faces where that width is about the face's own curvature step. A gently curved
+ * face whose cross sides are seeded more than three times finer than its curvature asks (a
+ * tight neighbour runs along them) would get dozens of thin strips between coarse rails; its
+ * facets turn so little across that free triangles do no harm there, and they grade far better.
+ */
+function mappedPlan(surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, tol: FaceTol): MappedPlan | null {
+  const nE = loop.edges.length;
+  if (nE < 4 || surface.kind === "PLANE" || isSphere(surface)) return null;
+  const uP = surface.periodicU ? surface.uPeriod || TWO_PI : 0;
+  const vP = surface.periodicV ? surface.vPeriod || TWO_PI : 0;
+  // Per-edge parameter curves, each shifted by whole periods to continue the previous one.
+  const ep2: P2[][] = [], ep3: Vec3[][] = [];
+  let eu = 0, ev = 0;
+  for (let k = 0; k < nE; k++) {
+    const oe = loop.edges[k]!;
+    const base = sampled.get(oe.edgeId);
+    if (!base || base.length < 2) return null;
+    const poly = oe.orient ? base : base.slice().reverse();
+    const pc = edgePcurve(surface, poly);
+    let du = 0, dv = 0;
+    if (k > 0) {
+      if (uP) du = Math.round((eu - pc.p2[0]![0]) / uP) * uP;
+      if (vP) dv = Math.round((ev - pc.p2[0]![1]) / vP) * vP;
+    }
+    const q = pc.p2.map((x): P2 => [x[0] + du, x[1] + dv]);
+    ep2.push(q); ep3.push(poly);
+    eu = q[q.length - 1]![0]; ev = q[q.length - 1]![1];
+  }
+  let umin = Infinity, umax = -Infinity, vmin = Infinity, vmax = -Infinity;
+  for (const e of ep2) for (const q of e) {
+    if (q[0] < umin) umin = q[0]; if (q[0] > umax) umax = q[0];
+    if (q[1] < vmin) vmin = q[1]; if (q[1] > vmax) vmax = q[1];
+  }
+  if (!(umax > umin) || !(vmax > vmin)) return null;
+  const { kU, kV, mU, mV } = isoCurvature(surface, umin, umax, vmin, vmax);
+  const C: 0 | 1 = kU >= kV ? 0 : 1;
+  const kC = Math.max(kU, kV), kF = Math.min(kU, kV);
+  if (!(kC > 1e-9) || kC < 4 * kF) return null;
+  const span = C === 0 ? umax - umin : vmax - vmin;
+  const mC = C === 0 ? mU : mV, mF = C === 0 ? mV : mU;
+  // The loop must close in the parameter plane (a loop winding a periodic direction does not).
+  const first = ep2[0]![0]!, last = ep2[nE - 1]![ep2[nE - 1]!.length - 1]!;
+  if (Math.hypot((last[0] - first[0]) * mU, (last[1] - first[1]) * mV) > 1e-6 * Math.hypot((umax - umin) * mU, (vmax - vmin) * mV)) return null;
+  // An edge is rail-like when it stays at one value of the curved parameter AND actually runs
+  // along the flat one. The second half matters for short edges: a sliver edge that continues a
+  // cross side for a hundredth of a millimetre also covers under 2% of the span, but it belongs
+  // to that cross side, not to the rail it touches.
+  const isRail = ep2.map((q) => {
+    let lo = Infinity, hi = -Infinity, flo = Infinity, fhi = -Infinity;
+    for (const x of q) { if (x[C] < lo) lo = x[C]; if (x[C] > hi) hi = x[C]; if (x[1 - C] < flo) flo = x[1 - C]; if (x[1 - C] > fhi) fhi = x[1 - C]; }
+    return hi - lo <= 0.02 * span && (hi - lo) * mC <= 0.25 * (fhi - flo) * mF;
+  });
+  // Sides = maximal runs of one class around the loop; start the walk at a class change.
+  let start = -1;
+  for (let k = 0; k < nE; k++) if (isRail[k] !== isRail[(k + nE - 1) % nE]) { start = k; break; }
+  if (start < 0) return null;
+  const sides: { rail: boolean; edges: number[] }[] = [];
+  for (let i = 0; i < nE; i++) {
+    const k = (start + i) % nE;
+    const cur = sides[sides.length - 1];
+    if (cur && cur.rail === isRail[k]) cur.edges.push(k); else sides.push({ rail: isRail[k]!, edges: [k] });
+  }
+  if (sides.length !== 4) return null;
+  if (sides[0]!.rail) sides.push(sides.shift()!); // cross, rail, cross, rail
+  const build = (edges: number[]): MappedSide => {
+    const p2: P2[] = [], p3: Vec3[] = [];
+    for (const k of edges) for (let i = p2.length === 0 ? 0 : 1; i < ep2[k]!.length; i++) { p2.push(ep2[k]![i]!); p3.push(ep3[k]![i]!); }
+    return { p2, p3 };
+  };
+  const rev = (s: MappedSide): MappedSide => ({ p2: s.p2.slice().reverse(), p3: s.p3.slice().reverse() });
+  const crossA = build(sides[0]!.edges), rail1 = build(sides[1]!.edges), crossB = rev(build(sides[2]!.edges)), rail0 = rev(build(sides[3]!.edges));
+  // A cross side runs monotonically from rail to rail in the curved parameter.
+  for (const cs of [crossA, crossB]) {
+    const a = cs.p2[0]![C], b = cs.p2[cs.p2.length - 1]![C];
+    if (Math.abs(b - a) < 0.96 * span) return null;
+    const dir = Math.sign(b - a);
+    for (let i = 1; i < cs.p2.length; i++) if ((cs.p2[i]![C] - cs.p2[i - 1]![C]) * dir < -0.01 * span) return null;
+  }
+  // Each rail must stay on its ruling as a whole and have real length (a rail shrunk to a point
+  // makes the face three-sided).
+  for (const r of [rail0, rail1]) {
+    let lo = Infinity, hi = -Infinity;
+    for (const x of r.p2) { if (x[C] < lo) lo = x[C]; if (x[C] > hi) hi = x[C]; }
+    if (hi - lo > 0.02 * span) return null;
+    const a = r.p2[0]!, b = r.p2[r.p2.length - 1]!;
+    if (Math.abs(b[1 - C] - a[1 - C]) * mF < 1e-3 * span * mC) return null;
+  }
+  {
+    let len = 0;
+    for (const cs of [crossA, crossB]) for (let i = 1; i < cs.p3.length; i++) len += Math.hypot(cs.p3[i]![0] - cs.p3[i - 1]![0], cs.p3[i]![1] - cs.p3[i - 1]![1], cs.p3[i]![2] - cs.p3[i - 1]![2]);
+    const width = len / (crossA.p3.length - 1 + crossB.p3.length - 1);
+    if (width < 0.3 * targetForRadius(1 / kC, tol.targetEdge, tol.chordTol, tol.normalDev)) return null;
+  }
+  return {
+    crossA, crossB, rail0, rail1, mU, mV, C,
+    edgesA: sides[0]!.edges.map((k) => loop.edges[k]!.edgeId), edgesB: sides[2]!.edges.map((k) => loop.edges[k]!.edgeId),
+  };
+}
+
+/** Isotropic mode: mesh a mappable face (see mappedPlan) as ruled strips. Returns false, emitting
+ * nothing, for any face that is not mappable or whose cross sides carry different node counts. */
+function tessellateMapped(
+  surface: Surface, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number, verts: number[], faceIds: number[], sign: number, tol: FaceTol,
+): boolean {
+  const plan = mappedPlan(surface, loop, sampled, tol);
+  if (!plan) return false;
+  const m = mappedMesh(surface, plan.crossA, plan.crossB, plan.rail0, plan.rail1, plan.mU, plan.mV);
+  if (!m) {
+    if (DBG) console.error(`[mapped] fid=${fid} declined (cross sides ${plan.crossA.p2.length - 1}/${plan.crossB.p2.length - 1} segments, or folded grid)`);
+    return false;
+  }
+  const v0 = verts.length, f0 = faceIds.length;
+  for (const [a, b, c] of m.tris) {
+    const A = m.p2[a]!, B = m.p2[b]!, Cc = m.p2[c]!;
+    emitTri(verts, faceIds, m.p3[a]!, m.p3[b]!, m.p3[c]!, fid, surface, sign, surface.normal((A[0] + B[0] + Cc[0]) / 3, (A[1] + B[1] + Cc[1]) / 3));
+  }
+  if (verts.length === v0) { faceIds.length = f0; return false; }
+  if (DBG) console.error(`[mapped] fid=${fid} ${plan.crossA.p2.length - 1} strips, rails ${plan.rail0.p2.length - 1}/${plan.rail1.p2.length - 1} -> ${m.tris.length} tris`);
+  return true;
 }
 
 /** Length of segment i of a polyline (Infinity when it has no such segment). */
@@ -5462,6 +5638,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   ISO = opts.isotropic ? {
     g: Math.max(0.01, (opts.growthRate ?? 1.3) - 1),
     hMin: opts.minEdge !== undefined && opts.minEdge > 0 ? Math.min(opts.minEdge, targetEdge) : Math.min(targetEdge / 40, 30 * chordTol),
+    mapped: opts.mappedFillets !== false,
   } : null;
   // Collect diagnostics warnings for this run (module-level sink: tessellation is synchronous,
   // and the deep meshing code reports without threading a sink through every signature).
@@ -5535,6 +5712,85 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       ? seeder.seed(id)
       : sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
     tick(1);
+  }
+  // MAPPED faces (mapped.ts) need their two cross sides seeded alike: the same node count, and
+  // uniformly, so that node i of one side faces node i of the other and the rulings between
+  // them run straight along the fillet. The field would seed each on its own (graded toward
+  // whatever is fine near either end). Take the larger of the two counts for both, re-seed, and
+  // repeat: an arc is shared by the next fillet along a chain, so a raise can propagate.
+  if (seeder && ISO?.mapped) {
+    for (let round = 0; round < 6; round++) {
+      let changed = false;
+      for (const solid of brep.solids) for (const face of solid.faces) {
+        const surface = faceSurf.get(face.faceId);
+        if (!surface || face.loops.length !== 1) continue;
+        const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
+        if (!plan) continue;
+        const n = Math.max(plan.crossA.p2.length - 1, plan.crossB.p2.length - 1);
+        for (const ids of [plan.edgesA, plan.edgesB]) {
+          if (ids.length === 1) { if (seeder.requireUniform(ids[0]!, n)) changed = true; continue; }
+          // A cross side made of several edges keeps their seeding; if it is short of nodes, its
+          // longest edge takes the difference.
+          const counts = ids.map((id) => (sampled.get(id)?.length ?? 2) - 1);
+          const sum = counts.reduce((x, y) => x + y, 0);
+          if (sum >= n) continue;
+          let big = 0;
+          for (let k = 1; k < ids.length; k++) if (counts[k]! > counts[big]!) big = k;
+          if (seeder.requireUniform(ids[big]!, counts[big]! + n - sum)) changed = true;
+        }
+      }
+      if (!changed) break;
+      for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+    }
+    // Same COUNT is not yet same POSITIONS: node i of the two cross sides must sit at the same
+    // value of the curved parameter, or the "rulings" between them run askew and the strips
+    // twist. Even spacing in arc length only guarantees that when both sides have the same
+    // shape (two circular arcs); a fillet that runs into a slanted face ends in an ellipse arc.
+    // So one side keeps its uniform nodes and the other is pinned to the same parameter values,
+    // read off a dense trace of its curve. A side already fixed by the neighbouring fillet is
+    // the reference; if both are, the face keeps what it has.
+    let anyPin = false;
+    for (const solid of brep.solids) for (const face of solid.faces) {
+      const surface = faceSurf.get(face.faceId);
+      if (!surface || face.loops.length !== 1) continue;
+      const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
+      if (!plan || plan.edgesA.length !== 1 || plan.edgesB.length !== 1) continue;
+      const N = plan.crossA.p2.length - 1;
+      if (N < 2 || plan.crossB.p2.length - 1 !== N) continue;
+      const aFixed = seeder.isPinned(plan.edgesA[0]!), bFixed = seeder.isPinned(plan.edgesB[0]!);
+      if (aFixed && bFixed) continue;
+      const [ref, dep, depId] = bFixed ? [plan.crossB, plan.crossA, plan.edgesA[0]!] : [plan.crossA, plan.crossB, plan.edgesB[0]!];
+      seeder.lock(bFixed ? plan.edgesB[0]! : plan.edgesA[0]!);
+      const C = plan.C;
+      const tr = seeder.trace(depId);
+      if (!tr || tr.G.length < 2) continue;
+      // Trace of the dependent side in the side's own direction, projected to the face.
+      const along = Math.hypot(tr.G[0]![0] - dep.p3[0]![0], tr.G[0]![1] - dep.p3[0]![1], tr.G[0]![2] - dep.p3[0]![2])
+        <= Math.hypot(tr.G[tr.G.length - 1]![0] - dep.p3[0]![0], tr.G[tr.G.length - 1]![1] - dep.p3[0]![1], tr.G[tr.G.length - 1]![2] - dep.p3[0]![2]);
+      const G = along ? tr.G : tr.G.slice().reverse();
+      const L = tr.S[tr.S.length - 1]!;
+      const sOf = (j: number): number => (along ? tr.S[j]! : L - tr.S[tr.S.length - 1 - j]!);
+      const cs = edgePcurve(surface, G).p2.map((q) => q[C]);
+      const c0 = cs[0]!, c1 = cs[cs.length - 1]!, r0 = ref.p2[0]![C], r1 = ref.p2[N]![C];
+      if (!(Math.abs(c1 - c0) > 0) || !(Math.abs(r1 - r0) > 0)) continue;
+      const fr: number[] = [];
+      let j = 1, ok = true;
+      for (let i = 1; i < N && ok; i++) {
+        const target = c0 + ((ref.p2[i]![C] - r0) / (r1 - r0)) * (c1 - c0);
+        while (j < cs.length - 1 && (cs[j]! - target) * (c1 - c0) < 0) j++;
+        const d = cs[j]! - cs[j - 1]!;
+        const w = Math.abs(d) > 0 ? (target - cs[j - 1]!) / d : 0;
+        if (!(w >= -1e-6 && w <= 1 + 1e-6)) { ok = false; break; } // the trace is not monotone here
+        const f = (sOf(j - 1) + (sOf(j) - sOf(j - 1)) * Math.min(1, Math.max(0, w))) / L;
+        if (fr.length && f <= fr[fr.length - 1]!) { ok = false; break; }
+        fr.push(f);
+      }
+      if (!ok || fr.length !== N - 1 || fr[0]! <= 0 || fr[fr.length - 1]! >= 1) continue;
+      // Fractions are in the side's direction; the seeder wants them v0 -> v1.
+      seeder.pin(depId, along ? fr : fr.map((x) => 1 - x).reverse());
+      anyPin = true;
+    }
+    if (anyPin) for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
   }
   // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
   // run-out at 0.7mm chord tolerance) samples its edges with so few points that the boundary
@@ -5704,6 +5960,9 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         && (mark(face.faceId, "thinFace", tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005))
           || mark(face.faceId, "thinStrip", tessellateThinStrip(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.03)))) {
         ok = true; // degenerate sub-resolution sliver/crack ribbon-stitched (returns false if not thin)
+      } else if (ISO?.mapped && outer && face.loops.length === 1
+        && mark(face.faceId, "mapped", tessellateMapped(surface, outer, sampled, face.faceId, verts, faceIds, sign, { chordTol, targetEdge, normalDev }))) {
+        ok = true; // isotropic mode: single-curved four-sided face (a fillet) meshed as ruled strips
       } else if (face.loops.length === 2 && solid.faces.length > 1
         // 0.015mm absolute floor; on large parts the knife-edge class scales with the part (a 53µm
         // digon annulus on a 15m assembly), so admit up to half a chord tolerance — a ribbon across
@@ -5830,12 +6089,14 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         //     domain and CDT with the windows as holes. Bails unless there are exactly two rims.
         //  3. param grid: everything with a proper seam-bounded outer loop (the common case).
         const periodic = surface.periodicU || surface.periodicV;
-        // ISOTROPIC mode prefers the unroll for a plain band too: it meshes the band through the
-        // CDT + optimiser (equilateral triangles) where the band mesher lays structured rings of
-        // right triangles. The band mesher stays as the fallback right behind it.
-        ok = (periodic && !!ISO && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+        // ISOTROPIC mode without mapped fillets prefers the unroll for a plain band too: it meshes
+        // the band through the CDT + optimiser (equilateral triangles) where the band mesher lays
+        // structured rings of right triangles. With mapped fillets on, those structured rings are
+        // exactly what a plain cylinder, cone or torus band should get (they are its mapped
+        // mesh), so the band mesher keeps its place in front.
+        ok = (periodic && !!ISO && !ISO.mapped && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || (periodic && !ISO && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (periodic && (!ISO || ISO.mapped) && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
           || (periodic && face.loops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
           || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign))

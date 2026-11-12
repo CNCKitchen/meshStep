@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import { importStep } from "../src/index.ts";
 import { optimizeFace } from "../src/mesh/optimize.ts";
 import { constrainedTriangulate } from "../src/mesh/cdt2d.ts";
+import { mappedMesh } from "../src/mesh/mapped.ts";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 let failed = 0;
@@ -100,6 +101,63 @@ for (const [name, p5Min] of [["cube", 40], ["cylinder", 35], ["sphere", 30], ["e
       if (ym < 0.5) { fine += L; nf++; } else if (ym > 4) { coarse += L; nc++; }
     }
     check(fine / nf < 0.45 && coarse / nc > 0.75, `optimiser: graded sizes (mean edge ${(fine / nf).toFixed(2)} at the fine side, ${(coarse / nc).toFixed(2)} far from it)`);
+  }
+}
+
+// ---- mapped (ruled-strip) meshing of single-curved faces -----------------------------------------
+// The property that matters for printing: on a cylinder every facet must be parallel to the axis
+// (it spans two neighbouring rulings), so the faceted wall is a clean prism.
+{
+  const src = readFileSync(join(root, "cylinder.step"), "utf8");
+  const used: Record<string, number> = {};
+  const iso = importStep(src, { isotropic: true, trace: (_f, m) => { used[m] = (used[m] ?? 0) + 1; } });
+  check((used.mapped ?? 0) === 1, `cylinder: its wall is meshed by the mapped mesher (${JSON.stringify(used)})`);
+  const P = iso.mesh.positions, I = iso.mesh.indices;
+  let worst = 0, n = 0;
+  for (const [fid, info] of iso.faces) {
+    const axis = info.surface.kind === "CYLINDRICAL_SURFACE" ? info.surface.axis : undefined;
+    if (!axis) continue;
+    for (let t = 0; t < I.length / 3; t++) {
+      if (iso.faceOfTri[t] !== fid) continue;
+      const a = I[t * 3]! * 3, b = I[t * 3 + 1]! * 3, c = I[t * 3 + 2]! * 3;
+      const ux = P[b]! - P[a]!, uy = P[b + 1]! - P[a + 1]!, uz = P[b + 2]! - P[a + 2]!;
+      const vx = P[c]! - P[a]!, vy = P[c + 1]! - P[a + 1]!, vz = P[c + 2]! - P[a + 2]!;
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      worst = Math.max(worst, Math.abs(nx * axis[0] + ny * axis[1] + nz * axis[2]) / Math.hypot(nx, ny, nz));
+      n++;
+    }
+  }
+  check(n > 0 && worst < 1e-6, `cylinder: all ${n} wall facets are parallel to the axis (worst lean ${worst.toExponential(1)})`);
+  const free: Record<string, number> = {};
+  const off = importStep(src, { isotropic: true, mappedFillets: false, trace: (_f, m) => { free[m] = (free[m] ?? 0) + 1; } });
+  check(!free.mapped && off.diagnostics.ok, `cylinder: mappedFillets: false meshes it freely and cleanly (${JSON.stringify(free)})`);
+}
+// The mesher alone, on a quarter cylinder (radius 2, height 5) whose rails carry different,
+// graded node counts and whose cross arcs have 6 segments.
+{
+  const R = 2;
+  const surface = { evaluate: (u: number, v: number): [number, number, number] => [R * Math.cos(u), R * Math.sin(u), v] } as unknown as Parameters<typeof mappedMesh>[0];
+  const side = (pts: [number, number][]): { p2: [number, number][]; p3: [number, number, number][] } => ({ p2: pts, p3: pts.map(([u, v]) => surface.evaluate(u, v) as [number, number, number]) });
+  const arc = (v: number): [number, number][] => Array.from({ length: 7 }, (_, i) => [(i * Math.PI) / 12, v] as [number, number]);
+  const rail = (u: number, n: number, grade: number): [number, number][] => Array.from({ length: n + 1 }, (_, k) => [u, 5 * (k / n) ** grade] as [number, number]);
+  const m = mappedMesh(surface, side(arc(0)), side(arc(5)), side(rail(0, 12, 1)), side(rail(Math.PI / 2, 20, 1.2)), R, 1);
+  check(m !== null, "mapped mesher: accepts rails with 12 and 20 graded segments");
+  if (m) {
+    let lean = 0, area = 0;
+    const rulings = new Set(m.p2.map((q) => Math.round(q[0] * 1e9)));
+    for (const [a, b, c] of m.tris) {
+      const A = m.p3[a]!, B = m.p3[b]!, C = m.p3[c]!;
+      const nx = (B[1] - A[1]) * (C[2] - A[2]) - (B[2] - A[2]) * (C[1] - A[1]), ny = (B[2] - A[2]) * (C[0] - A[0]) - (B[0] - A[0]) * (C[2] - A[2]), nz = (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
+      const nl = Math.hypot(nx, ny, nz);
+      lean = Math.max(lean, Math.abs(nz) / nl); area += nl / 2;
+    }
+    // Facets are chords of the 15-degree arcs: total area = 6 strips x chord x height.
+    const exact = 6 * 2 * R * Math.sin(Math.PI / 24) * 5;
+    check(rulings.size === 7, `mapped mesher: every node lies on one of the 7 rulings (${rulings.size})`);
+    check(lean < 1e-12, `mapped mesher: every facet is parallel to the axis (worst lean ${lean.toExponential(1)})`);
+    check(Math.abs(area - exact) < 1e-9, `mapped mesher: covers the patch exactly (area ${area.toFixed(6)} vs ${exact.toFixed(6)})`);
+    const a = minAngles(m.p3.flat(), m.tris.flat());
+    check(a[0]! > 10 && a[Math.floor(a.length / 2)]! > 35, `mapped mesher: smallest angle ${a[0]!.toFixed(1)}°, median ${a[Math.floor(a.length / 2)]!.toFixed(1)}° (${m.tris.length} triangles)`);
   }
 }
 

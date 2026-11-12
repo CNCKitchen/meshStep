@@ -313,6 +313,7 @@ function startConvert(): void {
     remesh: false,
     isotropic: isotropicEl.checked,
     growthRate: num("growthRate", 1.3),
+    mappedFillets: $<HTMLInputElement>("mappedFillets").checked,
   };
   showOverlay("Starting…");
   maybeShowSponsor();

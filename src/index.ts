@@ -208,6 +208,10 @@ export interface ImportOptions {
   /** Isotropic mode: smallest edge length the mesher may ask for, mm. Default
    * min(maxEdge / 40, 30 · surfaceDeviation). */
   minEdge?: number;
+  /** Isotropic mode: mesh fillets and other single-curved four-sided faces as a mapped mesh
+   * (structured strips along the fillet) so they print without the small contour wobbles free
+   * triangles cause there; their triangles are isosceles instead of equilateral. Default true. */
+  mappedFillets?: boolean;
 }
 
 /** One face's tessellation override (`ImportOptions.faceOverrides`); same units as the globals. */
@@ -308,7 +312,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
     }),
     collectEdgePolylines: opts.measureGeometry,
     faceTol: resolveFaceOverrides(opts.faceOverrides, surfaceDev, maxEdge, normalDevRad),
-    isotropic: opts.isotropic, growthRate: opts.growthRate, minEdge: opts.minEdge,
+    isotropic: opts.isotropic, growthRate: opts.growthRate, minEdge: opts.minEdge, mappedFillets: opts.mappedFillets,
   };
   const result = tessellate(brep, tess);
   signal?.throwIfAborted();

@@ -95,6 +95,14 @@ export class EdgeSeeder {
    * features of every one of them, so its seeding reads all those fields. */
   private twinSolids = new Map<number, number[]>();
   private seeded = new Map<number, Vec3[]>();
+  /** Edges that must be seeded UNIFORMLY with (at least) this many segments: the cross sides of
+   * mapped faces. Their node count is fixed by the opposite side and their nodes must sit at the
+   * same relative positions as its nodes, so the rulings between them stay straight. */
+  private uniform = new Map<number, number>();
+  /** Edges whose nodes are PINNED at given fractions of their arc length (v0 -> v1, strictly
+   * between 0 and 1): the second cross side of a mapped face, whose nodes must sit at the same
+   * values of the face's curved parameter as the first side's. */
+  private pinned = new Map<number, number[]>();
   /** One field per body: bodies are meshed and welded independently. */
   readonly fields = new Map<number, SizeField>();
 
@@ -411,6 +419,42 @@ export class EdgeSeeder {
     }
   }
 
+  /** Seed edge `id` uniformly with at least `n` segments (a cross side of a mapped face).
+   * Returns true if that changes the edge's seeding; the caller then re-reads every edge, since
+   * twins copy the edge that changed. */
+  requireUniform(id: number, n: number): boolean {
+    const canon = this.twin.get(id)?.of ?? id;
+    if ((this.uniform.get(canon) ?? 0) >= n) return false;
+    this.uniform.set(canon, n);
+    this.seeded.delete(canon);
+    return true;
+  }
+
+  /** True once the edge's node positions are fixed by a mapped face (as its first cross side,
+   * whose uniform nodes the second side copied, or as that second side). */
+  isPinned(id: number): boolean { const c = this.twin.get(id)?.of ?? id; return this.pinned.has(c) || this.locked.has(c); }
+  /** Mark an edge as the reference side of a mapped face: its current nodes may not move. */
+  lock(id: number): void { this.locked.add(this.twin.get(id)?.of ?? id); }
+  private locked = new Set<number>();
+  /** The dense trace of the edge, v0 -> v1, with cumulative arc length (null: degenerate edge). */
+  trace(id: number): { G: Vec3[]; S: Float64Array } | null {
+    const tw = this.twin.get(id);
+    const g = this.geom.get(tw?.of ?? id);
+    if (!g) return null;
+    if (!tw?.reversed) return { G: g.G, S: g.S };
+    const n = g.G.length, L = g.S[n - 1]!;
+    const S = new Float64Array(n);
+    for (let i = 0; i < n; i++) S[i] = L - g.S[n - 1 - i]!;
+    return { G: g.G.slice().reverse(), S };
+  }
+  /** Fix the interior nodes of edge `id` at the given arc-length fractions (ascending, v0 -> v1). */
+  pin(id: number, fractions: number[]): void {
+    const tw = this.twin.get(id);
+    const canon = tw?.of ?? id;
+    this.pinned.set(canon, tw?.reversed ? fractions.map((x) => 1 - x).reverse() : fractions.slice());
+    this.seeded.delete(canon);
+  }
+
   /** The nodes of edge `id`, v0 to v1 inclusive. `f` > 1 asks for f times the density. */
   seed(id: number, f = 1): Vec3[] {
     const tw = this.twin.get(id);
@@ -451,7 +495,17 @@ export class EdgeSeeder {
       : (x: number, y: number, z: number): number => { let h = field.at(x, y, z); for (const o of others) h = Math.min(h, o.at(x, y, z)); return h; };
     const out: Vec3[] = [g.G[0]!];
     const single = g.breaks.length === 2;
-    for (let b = 0; b + 1 < g.breaks.length; b++) {
+    const uni = f === 1 ? this.uniform.get(id) : undefined;
+    const pins = f === 1 ? this.pinned.get(id) : undefined;
+    if (pins) {
+      const L = g.S[g.G.length - 1]!;
+      for (const x of pins) out.push(EdgeSeeder.pointAt(g, x * L));
+      out.push(g.G[g.G.length - 1]!);
+    } else if (uni !== undefined) {
+      // Uniform: one constant size over the whole edge (corners included, a cross side has
+      // none worth a node of its own), so equal steps of the integral are equal steps of length.
+      seedSpan(g, () => Infinity, 1, 0, g.G.length - 1, uni, 0, out, g.S[g.G.length - 1]! / uni);
+    } else for (let b = 0; b + 1 < g.breaks.length; b++) {
       seedSpan(g, sizeAt, f, g.breaks[b]!, g.breaks[b + 1]!, single ? (this.nMin.get(id) ?? 1) : 1, 0, out);
     }
     if (g.circle) {
@@ -496,14 +550,20 @@ function segDist(p: Vec3, a: Vec3, b: Vec3): number {
  * is re-seeded with more segments, and if that does not converge it is cut at the worst point
  * (a corner the kink test missed) and both halves are seeded on their own.
  */
-function seedSpan(g: EdgeGeom, field: (x: number, y: number, z: number) => number, f: number, i0: number, i1: number, nMin: number, depth: number, out: Vec3[]): void {
+function seedSpan(
+  g: EdgeGeom, field: (x: number, y: number, z: number) => number, f: number, i0: number, i1: number, nMin: number, depth: number, out: Vec3[],
+  uniformSize?: number,
+): void {
   const { G, S, h0, invTol } = g;
+  const uniform = uniformSize !== undefined;
   // Stations: the points of G, bisected until no step is longer than half the size at either of
   // its ends. A straight edge has few points of G, yet the field can fall to a fraction of the
   // edge's own size within one of them (a fine neighbour passing close by). The field grows at
   // most g per unit length, so once a step is that short the size cannot dip unseen inside it.
   const ss: number[] = [], ps: Vec3[] = [], A: number[] = [], AT: number[] = [];
-  const sizeAt = (p: Vec3, hIntr: number): number => Math.max(g.hMin, Math.min(hIntr, field(p[0], p[1], p[2]) / f));
+  const sizeAt = uniform
+    ? (): number => uniformSize!
+    : (p: Vec3, hIntr: number): number => Math.max(g.hMin, Math.min(hIntr, field(p[0], p[1], p[2]) / f));
   let prevInv = 0, prevInvT = 0;
   const push = (s: number, p: Vec3, h: number, invT: number): void => {
     const inv = 1 / h;
@@ -536,7 +596,9 @@ function seedSpan(g: EdgeGeom, field: (x: number, y: number, z: number) => numbe
     hPrev = hNext;
   }
   const total = A[A.length - 1]!;
-  let N = Math.max(nMin, Math.ceil(AT[AT.length - 1]! - 1e-6), Math.ceil(total - 0.3), 1);
+  // A uniform edge takes exactly the count it was given (the opposite side has the same); only
+  // the deviation check below may still raise it.
+  let N = uniform ? Math.max(nMin, 1) : Math.max(nMin, Math.ceil(AT[AT.length - 1]! - 1e-6), Math.ceil(total - 0.3), 1);
 
   const place = (n: number): Vec3[] => {
     const nodes: Vec3[] = [];
@@ -572,7 +634,7 @@ function seedSpan(g: EdgeGeom, field: (x: number, y: number, z: number) => numbe
       nodes = place(N);
       w = worst(nodes);
     }
-    if (w.dev > g.chordTol && w.at > i0 && w.at < i1 && depth < 8) {
+    if (!uniform && w.dev > g.chordTol && w.at > i0 && w.at < i1 && depth < 8) {
       seedSpan(g, field, f, i0, w.at, 1, depth + 1, out);
       seedSpan(g, field, f, w.at, i1, 1, depth + 1, out);
       return;

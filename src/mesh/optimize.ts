@@ -53,6 +53,12 @@ export interface OptimizeInput {
   sizeAt: (x: number, y: number) => number;
   /** Rounds of split / collapse / flip / relax (default 5). */
   iterations?: number;
+  /** RULED faces: relaxation may move a vertex only along this plane axis (0 = x, 1 = y), the
+   * surface's flat direction. The caller starts such a face from points placed on rulings
+   * (lines of constant curved parameter); sliding along them keeps every vertex on its ruling,
+   * so triangles keep spanning two neighbouring rulings and the facets stay flat along the
+   * surface's straight direction — see mapped.ts for why that matters. */
+  slideAxis?: 0 | 1;
 }
 
 export interface OptimizeResult {
@@ -406,7 +412,8 @@ export function optimizeFace(inp: OptimizeInput): OptimizeResult | null {
       // evaluation. The vertex wakes up again when something around it moves.
       if (tx * tx + ty * ty + tz * tz < (0.03 * hv[v]!) ** 2) continue;
       const r0 = j00 * tx + j10 * ty + j20 * tz, r1 = j01 * tx + j11 * ty + j21 * tz;
-      const nx = X[v]! + (g11 * r0 - g01 * r1) / gd, ny = Y[v]! + (g00 * r1 - g01 * r0) / gd;
+      let nx = X[v]! + (g11 * r0 - g01 * r1) / gd, ny = Y[v]! + (g00 * r1 - g01 * r0) / gd;
+      if (inp.slideAxis === 0) ny = Y[v]!; else if (inp.slideAxis === 1) nx = X[v]!;
       if (!Number.isFinite(nx + ny)) continue;
       // Accept only if the ring stays a valid fan in the parameter plane and its worst 3D
       // triangle does not get worse (unless it stays comfortably good).
