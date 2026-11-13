@@ -140,7 +140,7 @@ export function collectMeasureGeometry(
       const e = brep.edges.get(edgeId);
       const polyline = edgePolylines.get(edgeId);
       if (!e || !polyline || polyline.length < 2) continue; // healed-away micro-edge
-      const info = analyzeEdgeCurve(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? scale);
+      const info = analyzeEdgeCurve(brep.table, e.curveId, e.curveEnds?.[0] ?? e.v0, e.curveEnds?.[1] ?? e.v1, e.sameSense, e.scale ?? scale);
       raw.push({
         edgeId, solidId: solid.id, frames, info, faceIds, polyline,
         length: info.length ?? polylineLength(polyline),

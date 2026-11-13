@@ -55,7 +55,7 @@ function polyhedronStep(pts: P3[], faces: number[][]): string {
   return `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${out.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
 }
 
-interface Stats { tris: number; minEdge: number; open: number; volume: number; faces: number }
+interface Stats { tris: number; minEdge: number; open: number; volume: number; faces: number; merged?: { edges: number; faces: number; maxMove: number; reverted: boolean } }
 function stats(src: string, mergeTolerance?: number, isotropic = false): Stats {
   const r = importStep(src, { surfaceDeviation: 0.01, maxEdge: 2, isotropic, ...(mergeTolerance !== undefined ? { mergeTolerance } : {}) });
   const P = r.mesh.positions, I = r.mesh.indices;
@@ -75,7 +75,7 @@ function stats(src: string, mergeTolerance?: number, isotropic = false): Stats {
   }
   let open = 0;
   for (const n of count.values()) if (n !== 2) open++;
-  return { tris: I.length / 3, minEdge, open, volume: Math.abs(volume), faces: new Set(r.faceOfTri).size };
+  return { tris: I.length / 3, minEdge, open, volume: Math.abs(volume), faces: new Set(r.faceOfTri).size, merged: r.merged };
 }
 
 // ---- a short edge: a box with one top corner cut off by 0.03 mm ---------------------------------
@@ -141,6 +141,32 @@ function stats(src: string, mergeTolerance?: number, isotropic = false): Stats {
     const mode = iso ? "isotropic" : "default";
     const plain = stats(src, undefined, iso), merged = stats(src, 0.1, iso);
     check(merged.tris === plain.tris && merged.open === 0 && Math.abs(merged.volume - 100 * t) < 1e-9, `${mode}: a plate thinner than the tolerance is left alone (volume ${merged.volume.toFixed(3)} mm3)`);
+  }
+}
+
+// ---- a groove that must not be pinched shut -------------------------------------------------------
+// A V-groove 0.04 mm wide runs from one side of the box to its middle. Its inner end may taper
+// to a point (three short edges merge). Its mouth may not: the two rims of the groove are parts
+// of the top face's boundary, and merging the mouth would make that boundary touch itself.
+{
+  const w = 0.04, d = 0.02;
+  const pts: P3[] = [
+    [0, 0, 0], [10, 0, 0], [10, 10, 0], [0, 10, 0], [0, 0, 10], [10, 0, 10], [10, 10, 10], [0, 10, 10],
+    [0, 5 - w / 2, 10], [0, 5 + w / 2, 10], [0, 5, 10 - d],
+    [5, 5 - w / 2, 10], [5, 5 + w / 2, 10], [5, 5, 10 - d],
+  ];
+  const src = polyhedronStep(pts, [
+    [0, 3, 2, 1], [4, 5, 6, 7, 9, 12, 11, 8], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6],
+    [3, 0, 4, 8, 10, 9, 7], [8, 11, 13, 10], [9, 10, 13, 12], [11, 12, 13],
+  ]);
+  for (const iso of [false, true]) {
+    const mode = iso ? "isotropic" : "default";
+    const plain = stats(src, undefined, iso), merged = stats(src, 0.05, iso);
+    check(plain.open === 0 && plain.faces === 9, `${mode}: the grooved box meshes closed without merging (${plain.tris} triangles)`);
+    check(merged.open === 0 && merged.merged?.reverted === false, `${mode}: merged mesh is closed and was not reverted`);
+    check(merged.merged?.edges === 3 && merged.faces === 8, `${mode}: the groove's inner end merges (${merged.merged?.edges} edges, ${merged.faces} faces left)`);
+    check(merged.minEdge < 0.03, `${mode}: the groove's mouth keeps its ${merged.minEdge.toFixed(3)} mm edges`);
+    check(Math.abs(merged.volume - plain.volume) < 0.01, `${mode}: volume moves by ${Math.abs(merged.volume - plain.volume).toExponential(1)} mm3`);
   }
 }
 

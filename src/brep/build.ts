@@ -18,6 +18,11 @@ export interface BEdge {
   /** mm per unit for this edge's curve geometry, when its solid's representation context differs
    * from the file-global unit. Samplers must use this over the global scale. */
   scale?: number;
+  /** Set when a geometry clean-up moved an end vertex (defeature.ts): the curve's OWN end points.
+   * v0 / v1 are then the merged vertices, and the edge's geometry is the curve between
+   * `curveEnds` shifted linearly along its length so that it ends in v0 / v1 (`sampleEdge`).
+   * Absent on every edge of an untouched model. */
+  curveEnds?: [Vec3, Vec3];
 }
 
 export interface OrientedEdge {

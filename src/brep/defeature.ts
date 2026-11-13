@@ -11,7 +11,7 @@
 // part of the surface deviation.
 import type { Vec3 } from "../geom/vec.ts";
 import { ref } from "../step/entities.ts";
-import { sampleEdgePolyline } from "../geom/curves.ts";
+import { sampleEdgePolyline, sampleEdge } from "../geom/curves.ts";
 import { makeSurface, type Surface } from "../geom/surfaces.ts";
 import type { BrepModel, BFace, BSolid } from "./build.ts";
 
@@ -26,6 +26,9 @@ export interface MergeReport {
   maxMove: number;
 }
 
+/** The tessellation tolerances the model is going to be meshed with (mm, mm, radians). */
+export interface MergeMeshSize { chordTol: number; targetEdge: number; normalDev: number }
+
 const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 
 /**
@@ -37,9 +40,11 @@ const d3 = (a: Vec3, b: Vec3): number => Math.hypot(a[0] - b[0], a[1] - b[1], a[
  *
  * What is NOT merged: a short edge that is the whole thickness of a wall or the whole width of
  * a gap (the faces at its two ends look away from or at each other), and an edge whose merge
- * would pull a face beyond the end of its surface. Closed edges (a tiny hole) are left alone.
+ * would pull a face beyond the end of its surface, an edge whose merge would make a face
+ * boundary touch itself, and (with `mesh`) an edge whose merge would move a face boundary by
+ * more than half the size of the triangles there. Closed edges (a tiny hole) are left alone.
  */
-export function mergeShortEdges(brep: BrepModel, tol: number): MergeReport {
+export function mergeShortEdges(brep: BrepModel, tol: number, mesh?: MergeMeshSize): MergeReport {
   const report: MergeReport = { edges: 0, vertices: 0, faces: 0, maxMove: 0 };
   if (!(tol > 0)) return report;
   const { table, edges } = brep;
@@ -138,6 +143,36 @@ export function mergeShortEdges(brep: BrepModel, tol: number): MergeReport {
   }
   for (const id of [...gone]) if (blocked.has(gfind(corner.get(vids.get(id)![0])!))) gone.delete(id);
 
+  // A face boundary must not come to TOUCH ITSELF. A group merges along the edges that collapse;
+  // every other place where one loop (or two loops of one face) meets the group becomes a second
+  // visit to the same point: the boundary pinches to zero width there and no mesher can read
+  // it. (GoProHandlePod: a tube-like face is closed by a seam sliver 0.012 mm wide; collapsing
+  // the sliver's short end joined the two seam sides of the tube in one point, and the face
+  // came out as open garbage.) Count, per loop, the separate stretches of boundary that end up
+  // in a group: more than one, or one in each of two loops, blocks the group. A loop that
+  // already passes twice through a corner (a seam) counts as two and is left alone as well.
+  for (const solid of brep.solids) for (const face of solid.faces) {
+    const loopOf = new Map<number, number>();          // group -> the loop of this face it lies on
+    face.loops.forEach((lp, li) => {
+      const n = lp.edges.length;
+      const runs = new Map<number, number>();
+      for (let i = 0; i < n; i++) {
+        const oe = lp.edges[i]!, vv = vids.get(oe.edgeId);
+        if (!vv) continue;
+        const g = gfind(corner.get(oe.orient ? vv[0] : vv[1])!);
+        if (!members.has(g)) continue;
+        // The vertex continues the previous stretch when the edge leading to it collapses.
+        if (gone.has(lp.edges[(i - 1 + n) % n]!.edgeId)) continue;
+        runs.set(g, (runs.get(g) ?? 0) + 1);
+      }
+      for (const [g, k] of runs) {
+        if (k > 1 || (loopOf.has(g) && loopOf.get(g) !== li)) blocked.add(g);
+        else loopOf.set(g, li);
+      }
+    });
+  }
+  for (const id of [...gone]) if (blocked.has(gfind(corner.get(vids.get(id)![0])!))) gone.delete(id);
+
   // The point each group collapses to. A corner can only take the group over if every face that
   // has to follow can reach it: the faces around the OTHER corners get a boundary point up to
   // tol away from where their own corner was. That is harmless when the point still lies over
@@ -177,10 +212,65 @@ export function mergeShortEdges(brep: BrepModel, tol: number): MergeReport {
     }
     return surfaces.get(fid)!;
   };
+  /** A merge may move the boundary of a face by at most half the size of the triangles the face
+   * gets there (the tessellation's own size rule for the surface's curvature at the point):
+   * a tooth fillet of radius 0.2 mm is meshed at 0.05 mm, and moving its corner by 0.09 mm
+   * leaves the mesher a boundary that no longer fits the face. Without `mesh` nothing is known
+   * about the triangles and only the tolerance limits the move. */
+  const fits = (fid: number, at: Vec3, d: number): boolean => {
+    if (!mesh) return true;
+    const sf = surfaceOf(fid);
+    if (!sf) return false;
+    let h = mesh.targetEdge;
+    if (sf.kind !== "PLANE") {
+      try {
+        const [u, v] = sf.project(at);
+        const rc = sf.curvatureRadius(u, v);
+        if (Number.isFinite(rc)) {
+          const floor = Math.min(mesh.targetEdge / 40, 30 * mesh.chordTol);
+          h = Math.min(mesh.targetEdge, Math.max(floor, Math.sqrt(8 * rc * mesh.chordTol)), rc * mesh.normalDev);
+        }
+      } catch { return false; }
+    }
+    return d <= 0.5 * h;
+  };
+  /** Segment lengths the tessellation's own sampling rule gives edge `id`: [first, last, shortest]
+   * (v0 -> v1). They are the size of the triangles along the edge, whichever of its curvature,
+   * the tolerances or its own length sets it. */
+  const segCache = new Map<number, [number, number, number]>();
+  const segs = (id: number): [number, number, number] => {
+    let r = segCache.get(id);
+    if (r) return r;
+    r = [Infinity, Infinity, Infinity];
+    const e = edges.get(id);
+    if (mesh && e) {
+      try {
+        const pl = sampleEdge(table, e, e.scale ?? brep.scale, mesh.chordTol, mesh.targetEdge, brep.units.radPerAngle, mesh.normalDev);
+        let lo = Infinity;
+        for (let i = 1; i < pl.length; i++) lo = Math.min(lo, d3(pl[i - 1]!, pl[i]!));
+        r = [d3(pl[0]!, pl[1]!), d3(pl[pl.length - 2]!, pl[pl.length - 1]!), lo];
+      } catch { r = [0, 0, 0]; }
+    }
+    segCache.set(id, r);
+    return r;
+  };
+  /** Size of the triangles around corner `c`: the finest end segment of the surviving edges
+   * that meet there (Infinity without `mesh`). A flat face next to a small fillet is meshed as
+   * finely as the fillet's arc where they meet, so the faces alone do not tell. */
+  const cornerSize = (c: number): number => {
+    let h = Infinity;
+    for (const id of edgesAt.get(c) ?? []) {
+      const [va] = vids.get(id)!;
+      const sg = segs(id);
+      h = Math.min(h, corner.get(va)! === c ? sg[0] : sg[1]);
+    }
+    return h;
+  };
   /** True when face `fid`, which has a corner at `from`, can take a boundary point at `p`. */
   const reaches = (fid: number, from: Vec3, p: Vec3): boolean => {
     const sf = surfaceOf(fid);
     if (!sf) return false;
+    if (!fits(fid, from, d3(from, p))) return false;
     if (sf.kind === "PLANE") return true;
     try {
       const h = sf.project(from);
@@ -237,7 +327,13 @@ export function mergeShortEdges(brep: BrepModel, tol: number): MergeReport {
       let ok = true;
       for (const m of ms) {
         if (m === c || !ok) continue;
-        for (const fid of facesAt.get(m) ?? []) if (!facesAt.get(c)?.has(fid) && !reaches(fid, cpos(m), p)) { ok = false; break; }
+        // The move must stay within half a triangle of the mesh around either corner.
+        if (d3(cpos(m), p) > 0.5 * Math.min(cornerSize(m), cornerSize(c))) { ok = false; break; }
+        // Faces at the moving corner only must reach the new point; faces that hold both corners
+        // lose the edge between them and need the move to fit their triangles.
+        for (const fid of facesAt.get(m) ?? []) {
+          if (facesAt.get(c)?.has(fid) ? !fits(fid, cpos(m), d3(cpos(m), p)) : !reaches(fid, cpos(m), p)) { ok = false; break; }
+        }
         for (const id of edgesAt.get(m) ?? []) {
           if (!ok) break;
           const [va, vb] = vids.get(id)!;
@@ -266,6 +362,9 @@ export function mergeShortEdges(brep: BrepModel, tol: number): MergeReport {
     if (gone.has(id)) continue;
     const e = edges.get(id)!;
     const pa = target.get(corner.get(va)!), pb = target.get(corner.get(vb)!);
+    if (!pa && !pb) continue;
+    // The curve keeps its own ends; the samplers shift it into the new ones (sampleEdge).
+    e.curveEnds ??= [e.v0, e.v1];
     if (pa) e.v0 = [pa[0], pa[1], pa[2]];
     if (pb) e.v1 = [pb[0], pb[1], pb[2]];
   }
@@ -300,7 +399,7 @@ export function mergeShortEdges(brep: BrepModel, tol: number): MergeReport {
     const e = edges.get(id)!;
     try {
       const chord = d3(e.v0, e.v1);
-      return sampleEdgePolyline(table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, tol / 20, Math.max(tol / 2, chord / 128), brep.units.radPerAngle);
+      return sampleEdge(table, e, e.scale ?? brep.scale, tol / 20, Math.max(tol / 2, chord / 128), brep.units.radPerAngle);
     } catch { return null; }
   };
   /** Nearest point to `p` on polyline `pl`, and its distance. */
@@ -329,7 +428,7 @@ export function mergeShortEdges(brep: BrepModel, tol: number): MergeReport {
     let far = 0;
     for (const p of p1) far = Math.max(far, nearest(p, p2)[1]);
     for (const p of p2) far = Math.max(far, nearest(p, p1)[1]);
-    if (far >= tol) continue;
+    if (far >= tol || far > 0.5 * Math.min(segs(o1.edgeId)[2], segs(o2.edgeId)[2])) continue;
     // Faces (other than the sliver) on each edge.
     const users = (id: number): BFace[] => solid.faces.filter((f) => f !== face && f.loops.some((lp) => lp.edges.some((oe) => oe.edgeId === id)));
     const u1 = users(o1.edgeId), u2 = users(o2.edgeId);

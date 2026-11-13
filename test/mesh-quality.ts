@@ -8,7 +8,7 @@
 //   node test/mesh-quality.ts <file.step> [--dev mm] [--edge mm] [--normal deg]
 //        [--iso] [--growth r] [--min-edge mm]   mesh in the isotropic mode (see TessOptions)
 //        [--no-mapped]                          isotropic mode without mapped fillets
-//        [--merge mm|auto]                      merge edges shorter than this first (auto = 5x deviation)
+//        [--merge mm|auto|autoN]                merge edges shorter than this first (auto = 5x deviation, autoN = Nx)
 //        [--compare]                            default and isotropic side by side
 //        [--runs n]                             time = median of n tessellations (default 3)
 //        [--detail]                             per-mesher and per-surface-kind rows
@@ -54,14 +54,19 @@ const file = argv.find((a, i) => !a.startsWith("--") && !(i > 0 && valued.has(ar
 if (!file) { console.error("usage: node test/mesh-quality.ts <file.step> [--compare] [--iso] ... (see file header)"); process.exit(2); }
 
 const src = readFileSync(file, "utf8");
-// --merge <mm | auto>: collapse edges shorter than this before meshing, in both modes ("auto" =
-// five times the surface deviation in use).
+// --merge <mm | auto | autoN>: collapse edges shorter than this before meshing, in both modes
+// ("auto" = five times the surface deviation in use, "auto10" = ten times, ...).
 const mergeArg = opt("merge");
 const buildBrep = (text: string): ReturnType<typeof buildBrep0> => {
   const b = buildBrep0(text);
   if (!mergeArg) return b;
-  const tol = mergeArg === "auto" ? 5 * Number(opt("dev") ?? autoTessellation(estimateBrepSize(b)?.diag ?? 100).surfaceDeviation) : Number(mergeArg);
-  if (tol > 0) mergeShortEdges(b, tol);
+  const auto = /^auto(\d*)$/.exec(mergeArg);
+  const tol = auto ? Number(auto[1] || 5) * Number(opt("dev") ?? autoTessellation(estimateBrepSize(b)?.diag ?? 100).surfaceDeviation) : Number(mergeArg);
+  // Same call as importStep makes: the merge knows the tolerances the model is meshed with.
+  if (tol > 0) {
+    const d = autoTessellation(estimateBrepSize(b)?.diag ?? 100);
+    mergeShortEdges(b, tol, { chordTol: Number(opt("dev") ?? d.surfaceDeviation), targetEdge: Number(opt("edge") ?? d.maxEdge), normalDev: Number(opt("normal") ?? 15) * Math.PI / 180 });
+  }
   return b;
 };
 const pct = (a: number[], p: number): number => (a.length ? a[Math.min(a.length - 1, Math.floor(a.length * p))]! : NaN);

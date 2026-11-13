@@ -628,6 +628,39 @@ function cutOpenPolyline(pts: Vec3[], v0: Vec3, v1: Vec3): Vec3[] | null {
   return out.length >= 2 ? out : null;
 }
 
+/** The fields of a B-rep edge a sampler reads. */
+export interface EdgeGeometry { curveId: number; v0: Vec3; v1: Vec3; sameSense: boolean; curveEnds?: [Vec3, Vec3] }
+
+/**
+ * Sample a B-rep edge from v0 to v1: `sampleEdgePolyline` for an edge as the file gives it. An
+ * edge whose end vertices were moved by a geometry clean-up carries its curve's own end points
+ * in `curveEnds`; it is sampled between those, exactly as before the clean-up, and the points
+ * are then shifted by a displacement that runs linearly (by arc length) from the one end's move
+ * to the other's. The whole edge leans over a little instead of breaking off into its new end
+ * point: snapping only the end leaves a kink of the size of the move there, which a
+ * curvature-driven seeding reads as a tight bend and meshes finely.
+ */
+export function sampleEdge(
+  t: Table, e: EdgeGeometry, s: number, chordTol: number, maxSegLen: number, aRad = 1, normalDev = Math.PI,
+): Vec3[] {
+  if (!e.curveEnds) return sampleEdgePolyline(t, e.curveId, e.v0, e.v1, e.sameSense, s, chordTol, maxSegLen, aRad, normalDev);
+  const pts = sampleEdgePolyline(t, e.curveId, e.curveEnds[0], e.curveEnds[1], e.sameSense, s, chordTol, maxSegLen, aRad, normalDev);
+  const n = pts.length;
+  const S = new Float64Array(n);
+  for (let i = 1; i < n; i++) S[i] = S[i - 1]! + dist(pts[i - 1]!, pts[i]!);
+  const L = S[n - 1]!;
+  const a = pts[0]!, b = pts[n - 1]!;
+  const d0: Vec3 = [e.v0[0] - a[0], e.v0[1] - a[1], e.v0[2] - a[2]], d1: Vec3 = [e.v1[0] - b[0], e.v1[1] - b[1], e.v1[2] - b[2]];
+  const out: Vec3[] = new Array(n);
+  for (let i = 1; i < n - 1; i++) {
+    const w = L > 0 ? S[i]! / L : 0, p = pts[i]!;
+    out[i] = [p[0] + d0[0] + (d1[0] - d0[0]) * w, p[1] + d0[1] + (d1[1] - d0[1]) * w, p[2] + d0[2] + (d1[2] - d0[2]) * w];
+  }
+  // The ends are the shared vertices themselves, bit for bit.
+  out[0] = e.v0; out[n - 1] = e.v1;
+  return out;
+}
+
 /**
  * Sample the curve of an EDGE_CURVE from vertex v0 to v1.
  * `sameSense` is the EDGE_CURVE flag (edge direction agrees with the curve's parametrisation).

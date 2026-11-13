@@ -218,9 +218,25 @@ export interface ImportOptions {
    * two end vertices merge), so a small step or offset between faces no longer forces a tiny
    * triangle and, in the isotropic mode, a patch of fine mesh around it. The surface moves by
    * up to this distance at such a spot, independently of `surfaceDeviation`. An edge stays when
-   * merging it would pull a face beyond the end of its surface. Works in both mesh modes.
+   * merging it would pull a face beyond the end of its surface, press a wall or gap flat, or
+   * make a face boundary touch itself; and if the merged model still meshes less soundly than
+   * the untouched one, the untouched one is returned (see `ImportResult.merged`). Works in both
+   * mesh modes.
    * Default 0 (off; output bit-identical to an import without the option). */
   mergeTolerance?: number;
+}
+
+/** Outcome of the geometry clean-up (`ImportOptions.mergeTolerance`). */
+export interface MergeSummary {
+  /** Edges removed (collapsed to a point, or replaced by the edge across a sliver). */
+  edges: number;
+  /** Faces removed (specks and step risers). */
+  faces: number;
+  /** Largest distance a face boundary moved, mm. */
+  maxMove: number;
+  /** True when the merged model meshed less soundly than the untouched one (open or
+   * non-manifold edges, mesher warnings) and the result is therefore the UNMERGED model. */
+  reverted: boolean;
 }
 
 /** One face's tessellation override (`ImportOptions.faceOverrides`); same units as the globals. */
@@ -231,6 +247,8 @@ export interface FaceOverride {
 }
 
 export interface ImportResult extends MeshResult {
+  /** Present when `mergeTolerance` was set: what the geometry clean-up did. */
+  merged?: MergeSummary;
   /** Conversion verdict: check `diagnostics.ok` before trusting the mesh; when false, the
    * warnings/counters say whether geometry is missing or leaking (advise the user to export a
    * mesh directly from CAD) or merely heuristically repaired (advise checking the preview). */
@@ -303,11 +321,16 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
 
   signal?.throwIfAborted();
   onProgress?.({ phase: "parse", done: 0, total: 0 });
-  const brep = buildBrep(src);
-  if (opts.mergeTolerance !== undefined && opts.mergeTolerance > 0) mergeShortEdges(brep, opts.mergeTolerance);
+  let brep = buildBrep(src);
+  const mergeTol = opts.mergeTolerance !== undefined && opts.mergeTolerance > 0 ? opts.mergeTolerance : 0;
+  let merged: MergeSummary | undefined;
+  if (mergeTol > 0) {
+    const m = mergeShortEdges(brep, mergeTol, { chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad });
+    merged = { edges: m.edges, faces: m.faces, maxMove: m.maxMove, reverted: false };
+  }
   signal?.throwIfAborted();
-  const colors = extractColors(brep.table, brep.solids);
-  const structure = extractStructure(brep.table, brep.solids);
+  let colors = extractColors(brep.table, brep.solids);
+  let structure = extractStructure(brep.table, brep.solids);
   // Sample boundaries to the surface-deviation tolerance so feature edges (rims, holes) are fine
   // even without remeshing. The robust CDT handles the resulting dense/collinear boundaries.
   // maxEdge is a pure upper CAP on segment length — it must never loosen the chord tolerance
@@ -324,8 +347,29 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
     faceTol: resolveFaceOverrides(opts.faceOverrides, surfaceDev, maxEdge, normalDevRad),
     isotropic: opts.isotropic, growthRate: opts.growthRate, minEdge: opts.minEdge, mappedFillets: opts.mappedFillets,
   };
-  const result = tessellate(brep, tess);
+  let result = tessellate(brep, tess);
   signal?.throwIfAborted();
+  // SAFETY NET for the merge: a merged model may never come out less sound than the model as
+  // it is. If the merged mesh has an open or non-manifold edge or any mesher warning, mesh the
+  // untouched model as well and keep that one unless it is no better. Costs a second
+  // tessellation only when something is wrong.
+  if (merged && merged.edges > 0) {
+    const trouble = (r: MeshResult): number => {
+      const d = meshDefects(r.mesh, r.solidOfTri, r.openSolids);
+      return d.openEdges + d.nonManifoldEdges + r.warnings.length;
+    };
+    const tm = trouble(result);
+    if (tm > 0) {
+      const plainBrep = buildBrep(src);
+      const plain = tessellate(plainBrep, tess);
+      signal?.throwIfAborted();
+      if (trouble(plain) < tm) {
+        brep = plainBrep; result = plain; merged.reverted = true;
+        colors = extractColors(brep.table, brep.solids);
+        structure = extractStructure(brep.table, brep.solids);
+      }
+    }
+  }
   onProgress?.({ phase: "finalize", done: 0, total: 0 });
   // Assembly placements per solid (empty for a single part); applied to the final mesh below.
   // A part with N occurrences carries N frames and is replicated after meshing.
@@ -347,7 +391,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
         { normals: opts.vertexNormals, uvs: opts.parameterUVs }, Math.max(1e-6, 4 * surfaceDev))
       : {};
     const placed = applyAssemblyPlacement(result.mesh, result.faceOfTri, result.solidOfTri, solidXf, attrs);
-    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure, measure, faces, faceUV: attrs.faceUV };
+    return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure, measure, faces, faceUV: attrs.faceUV, merged };
   }
 
   const surf = new Map<number, Surface | null>();
@@ -370,5 +414,5 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
       { normals: opts.vertexNormals, uvs: opts.parameterUVs }, Math.max(1e-6, 4 * surfaceDev))
     : {};
   const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf, attrs);
-  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure, measure, faces, faceUV: attrs.faceUV };
+  return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure, measure, faces, faceUV: attrs.faceUV, merged };
 }

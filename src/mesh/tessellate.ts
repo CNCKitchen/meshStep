@@ -17,7 +17,7 @@ import type { BrepModel, BFace, BLoop } from "../brep/build.ts";
 import type { IndexedMesh } from "../io/stl.ts";
 import type { Surface } from "../geom/surfaces.ts";
 import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
-import { sampleEdgePolyline } from "../geom/curves.ts";
+import { sampleEdge } from "../geom/curves.ts";
 import { EdgeSeeder } from "./edge-seed.ts";
 import { optimizeFace } from "./optimize.ts";
 import { isoCurvature, mappedMesh, matchRailStations, type MappedSide } from "./mapped.ts";
@@ -6035,7 +6035,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     const te = edgeMaxLen.get(id) ?? targetEdge;
     sampled.set(id, seeder
       ? seeder.seed(id)
-      : sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
+      : sampleEdge(brep.table, e, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
     tick(1);
   }
   // MAPPED faces (mapped.ts) need their two cross sides seeded alike: the same node count, and
@@ -6208,7 +6208,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
       if (seeder) return seeder.seed(id, f); // isotropic mode: the same seeding at f times the density
       const e = brep.edges.get(id)!;
       const te = Math.max((edgeMaxLen.get(id) ?? targetEdge) / f, edgeChord(id));
-      return sampleEdgePolyline(brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? brep.scale, edgeChord(id) / f, te, brep.units.radPerAngle, edgeNdev(id));
+      return sampleEdge(brep.table, e, e.scale ?? brep.scale, edgeChord(id) / f, te, brep.units.radPerAngle, edgeNdev(id));
     };
     for (const solid of brep.solids) for (const face of solid.faces) {
       const surface = faceSurf.get(face.faceId);

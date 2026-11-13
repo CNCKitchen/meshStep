@@ -31,7 +31,7 @@
 import type { Vec3 } from "../geom/vec.ts";
 import type { BrepModel, BEdge } from "../brep/build.ts";
 import type { Surface } from "../geom/surfaces.ts";
-import { sampleEdgePolyline, analyzeEdgeCurve } from "../geom/curves.ts";
+import { sampleEdge, analyzeEdgeCurve } from "../geom/curves.ts";
 import { SizeField } from "./size-field.ts";
 
 /** One face's tolerances (mm, mm, radians) — FaceTol in tessellate.ts. */
@@ -147,7 +147,7 @@ export class EdgeSeeder {
     const tol: SeedTol = { chordTol: base.chordTol / f, targetEdge: base.targetEdge / f, normalDev: base.normalDev };
     const hMin = this.hMinFor(base) / f, hMax = tol.targetEdge;
     const sc = e.scale ?? this.brep.scale;
-    const raw = sampleEdgePolyline(this.brep.table, e.curveId, e.v0, e.v1, e.sameSense, sc,
+    const raw = sampleEdge(this.brep.table, e, sc,
       tol.chordTol / DENSE, hMax / 2, this.brep.units.radPerAngle, tol.normalDev / 4);
     // Drop repeated points (a zero-length step has no direction); the ends always stay.
     const G: Vec3[] = [raw[0]!];
@@ -162,8 +162,9 @@ export class EdgeSeeder {
     if (!(S[n - 1]! > 1e-12)) return null;
 
     // A circle keeps its exact radius and has no corners; everything else is measured from G.
+    // (An edge shifted by a geometry clean-up is no longer the circle its record describes.)
     let circle: EdgeGeom["circle"] = null;
-    try {
+    if (!e.curveEnds) try {
       const info = analyzeEdgeCurve(this.brep.table, e.curveId, e.v0, e.v1, e.sameSense, sc);
       if (info.kind === "circle" && info.center && info.axis && info.radius! > 0) circle = { c: info.center, n: info.axis, r: info.radius! };
     } catch { /* unreadable curve record: G is still valid, treat as a general curve */ }
@@ -595,7 +596,7 @@ export class EdgeSeeder {
     if (!field) {
       // An edge no face uses: nothing meshes against it, keep the plain sampling.
       const t = this.global;
-      return sampleEdgePolyline(this.brep.table, e.curveId, e.v0, e.v1, e.sameSense, e.scale ?? this.brep.scale, t.chordTol / f, t.targetEdge / f, this.brep.units.radPerAngle, t.normalDev);
+      return sampleEdge(this.brep.table, e, e.scale ?? this.brep.scale, t.chordTol / f, t.targetEdge / f, this.brep.units.radPerAngle, t.normalDev);
     }
     const g = f === 1 ? this.geom.get(id) : this.measure(id, f);
     if (!g) return [e.v0, e.v1];
