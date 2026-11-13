@@ -11,8 +11,8 @@ displace, voxelize, offset, slice, or simulate, not just look at.
 **Try it live: [cnckitchen.github.io/meshStep](https://cnckitchen.github.io/meshStep/)** — the
 web viewer runs the importer entirely in your browser (files never leave your machine).
 
-Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~11,000
-lines of TypeScript (~182 KB minified, ~68 KB gzipped) that run as-is in the browser, in a Web
+Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~18,000
+lines of TypeScript (~300 KB minified, ~115 KB gzipped) that run as-is in the browser, in a Web
 Worker, and in Node ≥ 22.18. Built to feed
 [bumpmesh](https://github.com/CNCKitchen/stlTexturizer) (displacement texturing) and
 [infeall](https://github.com/CNCKitchen/smartInfillGenerator) (smart infill), where mesh defects
@@ -78,19 +78,33 @@ meshStep starts from the opposite end: **the mesh is the product.**
   normals — no faceting bands), and `parameterUVs: true` exports each face's own parameter-space
   (u,v) per triangle corner, so textures can wrap a periodic surface seamlessly in its native
   parameterization.
+- **FE-style isotropic mode.** `isotropic: true` meshes the way an FE pre-processor does:
+  edges are seeded evenly from one growth-limited size field (default growth 1.5× per row),
+  faces get near-equilateral triangles from a per-face optimiser, and fillets and other
+  single-curved four-sided faces become a mapped grid of near-square cells (two triangles each),
+  so they print without contour wobble. Across the 65-model test corpus it is never less correct
+  than the default mode and costs ~1.3× the triangles.
+- **Small-feature clean-up.** `mergeTolerance` collapses edges shorter than a given length, and
+  the riser faces of tiny steps, on the B-rep *before* meshing, so a 0.02 mm offset between two
+  faces no longer forces microscopic triangles. Guarded: a merge that would squash a wall, pull a
+  face past the end of its surface or make a boundary touch itself is refused, and if the merged
+  model meshes less soundly than the original, the original is returned.
 - **The true surface stays available.** The optional isotropic remesh (`remesh: true`)
   splits/collapses/flips/smooths toward uniform, near-equilateral triangles and reprojects every
   vertex onto the exact analytic/NURBS surface (feature edges frozen) — quality passes converge
   to the CAD geometry, not to a frozen first tessellation.
-- **Cross-validated against OpenCASCADE, not just eyeballed.** The `gapcheck` harness converts
-  every corpus model with both meshStep and OCCT and compares global + per-face deviation:
-  NIST test models, real-world Printables downloads, and a ~1,800-part Voron-assembly sweep.
+- **Cross-validated against OpenCASCADE and audited against the exact B-rep.** The `gapcheck`
+  harness converts every corpus model with both meshStep and OCCT and compares global + per-face
+  deviation: NIST test models, real-world Printables downloads, and a ~1,800-part Voron-assembly
+  sweep. A second audit checks every triangle against the exact CAD surface: folded or flipped
+  triangles (watertight and on-surface, so invisible to other checks) are a hard gate in the
+  characterization suite, together with surface deviation, normal tilt and slivers.
 
 ## How it compares
 
 | Route | In browser | Footprint | Mesh output | Watertight welded | Face→tri topology | License |
 |---|---|---|---|---|---|---|
-| **meshStep** | ✅ pure TS | ~68 KB gzip | uniform, low-sliver, seam-safe | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
+| **meshStep** | ✅ pure TS | ~115 KB gzip | uniform, low-sliver, seam-safe; optional FE-style isotropic | ✅ per welded body | ✅ | AGPL-3.0 ([commercial](COMMERCIAL.md)) |
 | [occt-import-js](https://github.com/kovacsv/occt-import-js) | ✅ WASM | ~8 MB WASM | curvature-adaptive, per face | ❌ | ✅ face ranges | LGPL-2.1 (OCCT) |
 | [opencascade.js](https://github.com/donalffons/opencascade.js) | ✅ WASM | larger (custom builds) | same OCCT mesher | ❌ | manual | LGPL-2.1 (OCCT) |
 | [cascadio](https://github.com/trimesh/cascadio) / pythonOCC / FreeCAD | ❌ Python/desktop | native wheels/app | same OCCT mesher | ❌ | varies | LGPL (bundles OCCT) |
@@ -152,15 +166,16 @@ Coverage:
   transforms, per-triangle colors, object types).
 
 Robustness is tracked over four corpora of increasing wildness, cross-validated against
-OpenCASCADE output with the `gapcheck` harness (per-face deviation + watertightness). Where it
-stands (July 2026):
+OpenCASCADE output with the `gapcheck` harness (per-face deviation + watertightness) and
+audited triangle by triangle against the exact B-rep (folds, flips, deviation, tilt, slivers).
+Where it stands (November 2026):
 
 | Corpus | Result |
 |---|---|
-| 13 curated repo models (analytic + NURBS + assemblies) | all watertight (0 open, 0 non-manifold), <2% slivers, within ~0.5% of reference |
-| 81-model characterization corpus (real Printables downloads + NIST AP242 test cases) | 70 fully clean · 9 with localized open-edge leaks (mostly NIST models) · 2 import errors |
-| Voron-family assemblies, 1,820 parts | 1,793 OK · 26 WARN · 1 FAIL vs OCC cross-check at tight tolerance (the FAIL is an artifact of the OCC reference, not the mesh) |
-| [ABC dataset](https://deep-geometry.github.io/abc-dataset/) chunk 0000, 10,000 wild CAD files | **9,719 watertight (97.2%)** — closed, manifold, every face meshed. Remainder: 146 seam leaks · 68 timeouts · 41 untriangulated faces · 26 other |
+| 13 curated repo models (analytic + NURBS + assemblies) | all watertight (0 open, 0 non-manifold), 0 folded or flipped triangles |
+| 64-model characterization corpus (repo models, real Printables downloads, NIST AP242 test cases), frozen bit-for-bit at the default 0.01 mm / 1 mm | 51 closed and manifold · 2 surface models (open sheets by design) · 8 with localized open-edge leaks (6 NIST models) · 3 rejected up front as far too fine for the absolute default tolerances (they mesh at size-scaled settings). 58 have 0 folded or flipped triangles; the other 6 are tracked with exact counts |
+| Voron-family assemblies, 1,820 parts (July 2026) | 1,793 OK · 26 WARN · 1 FAIL vs OCC cross-check at tight tolerance (the FAIL is an artifact of the OCC reference, not the mesh) |
+| [ABC dataset](https://deep-geometry.github.io/abc-dataset/) chunks 0002–0005, 40,000 wild CAD files | **39,780 watertight (99.45%)** — closed, manifold, every face meshed. **37,871 (94.7%) also pass the strict B-rep audit** (no folded or flipped triangle anywhere). Remainder: mostly flipped triangles on B-spline grids and thin strips · 63 untriangulated faces · 49 timeouts (90 s) · 20 crashes / unreadable files |
 
 ### Current limitations
 
@@ -168,14 +183,18 @@ meshStep is not (yet) an industrial-strength importer — it's tuned for the kin
 actually 3D-print, and the numbers above are deliberately honest about the rest:
 
 - **Wild CAD still has a tail.** On the ABC research corpus (uncurated files from many CAD
-  systems, full of degenerate, microscopic, and exotic geometry) ~3% of models come out with
-  defects: multi-turn thread/spiral faces the seam machinery can't yet cut, residual CDT
-  failures on degenerate trims, or non-manifold spots. The tail shrinks with every release,
-  but OpenCASCADE-based tools will still *read* more of the truly pathological files — they
-  just hand back per-face triangle soup, not a watertight mesh.
+  systems, full of degenerate, microscopic, and exotic geometry) ~0.5% of models come out with
+  open or non-manifold edges or an unmeshed face, and ~5% more carry a few folded or flipped
+  triangles, mostly on B-spline faces whose parametrisation speed varies several-fold and on
+  hairline strips. The tail shrinks with every release, but OpenCASCADE-based tools will still
+  *read* more of the truly pathological files — they just hand back per-face triangle soup, not
+  a watertight mesh.
 - **Pathological models can be slow.** Pure TypeScript is fast enough for interactive use on
-  print-scale parts, but 0.7% of ABC models (68 of 10,000) blew a 120 s budget at tight
-  tolerances — native OCCT is faster on huge or degenerate inputs.
+  print-scale parts, but 49 of 40,000 ABC models blew a 90 s budget — native OCCT is faster on
+  huge or degenerate inputs.
+- **Isotropic mode is new.** Narrow faces still get no proximity sizing (cusp slivers where a
+  face pinches), and the optimiser does not yet run on the cone, sphere-cap and thin-strip
+  meshers.
 - **No geometry healing.** meshStep trusts the STEP file: gaps, self-intersections, or broken
   topology in the source B-rep are not repaired, only reported.
 - Remaining features: 3MF export (a 3MF *reader* is in), the Low/Med/High refinement-preset UI,
@@ -231,8 +250,8 @@ r.faceUV;  // Map<faceId, { uRange, vRange, uPeriod?, vPeriod? }> for normalizin
 ```
 
 Options mirror Fusion's mesh-export dialog: `surfaceDeviation` (mm), `normalDeviation` (deg),
-`maxEdge` (mm), plus `remesh: true` for uniform-isotropic output (default off — the raw
-tessellation is watertight and shades cleaner). `onProgress` reports parse / tessellate /
+`maxEdge` (mm). For near-equilateral FE-style output use `isotropic: true` (see below); the older
+`remesh: true` post-pass also exists but degrades the default tessellation's aligned diagonals. `onProgress` reports parse / tessellate /
 finalize progress for long imports; `signal` (an `AbortSignal`) cancels a running import at the
 next work-unit boundary — in a worker UI, abort first and keep `terminate()` as the hard stop.
 `measureGeometry: true` additionally collects exact per-edge curve identity (circle
@@ -251,6 +270,27 @@ An empty map is the same as no option (bit-identical output). Not applied by `re
 ```ts
 const fine = importStep(stepText, { ...opts, faceOverrides: { 55: { normalDeviation: 3, maxEdge: 1.2 } } });
 ```
+
+**Isotropic ("pretty") mesh mode:** `isotropic: true` swaps the default ruling-aligned triangles
+for near-equilateral ones, graded smoothly away from small features like an FE pre-processor
+mesh. `growthRate` (default 1.5) is the size ratio allowed between neighbouring rows, `minEdge`
+(mm) floors the smallest edge the mesher may ask for, and `mappedFillets` (default true) meshes
+fillets as a grid of near-square cells. Small fillets cost more triangles than in the default
+mode (~1.3× over the test corpus). Off by default, and without it the output is bit-identical.
+
+**Merge tolerance:** `mergeTolerance` (mm) cleans the B-rep before meshing in either mode. An
+edge shorter than it collapses to a point and the riser face of a small step is removed, so
+offsets far below the mesh size stop forcing tiny triangles (and, in isotropic mode, a patch of
+fine mesh around them). The surface may move by up to the tolerance at such a spot.
+`result.merged` reports what changed (`edges`, `faces`, `maxMove`) and `reverted: true` when the
+merged model meshed less soundly and the untouched one was returned instead.
+
+```ts
+const pretty = importStep(stepText, { ...opts, isotropic: true, mergeTolerance: 0.05 });
+console.log(pretty.merged); // { edges, faces, maxMove, reverted }
+```
+
+Both options are on `main` and come to npm with the next release (0.1.2 does not have them).
 
 **Units:** `mesh.positions` — and every derived length (areas, radii, measure geometry) — are
 **always millimetres**, whatever length unit the STEP file declares (inch, metre, mixed-unit
@@ -333,9 +373,10 @@ downstream processing.
 A browser UI for visually checking output lives in [web/](web/README.md) — hosted at
 [cnckitchen.github.io/meshStep](https://cnckitchen.github.io/meshStep/): upload a STEP (or an
 existing STL/3MF — same toolset, no conversion), tune the settings (auto-scaled to the model's
-size), and inspect the result: the model's STEP/3MF colors (on by default, toggleable), a parts
-tree with per-part show/hide, shaded / transparent / wireframe / edges render styles, a section
-view with a draggable clipping plane, CAD-style measuring (exact circle centers/radii from the
+size, with toggles for the isotropic mode, its growth rate and the merge tolerance), and inspect
+the result: the model's STEP/3MF colors (on by default, toggleable), a parts tree with per-part
+show/hide, an exploded view for assemblies, shaded / transparent / wireframe / edges render
+styles, a section view with a draggable clipping plane, CAD-style measuring (exact circle centers/radii from the
 B-rep), deviation coloring against a reference STL (3D-scan style), and open-edge highlighting.
 `cd web && npm install && npm run dev`.
 
