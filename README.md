@@ -11,6 +11,8 @@ displace, voxelize, offset, slice, or simulate, not just look at.
 **Try it live: [cnckitchen.github.io/meshStep](https://cnckitchen.github.io/meshStep/)** — the
 web viewer runs the importer entirely in your browser (files never leave your machine).
 
+![The meshStep web viewer showing a converted part with its CAD face boundaries and a "Watertight · print-ready" verdict](docs/images/viewer.png)
+
 Zero runtime dependencies: no WASM, no native code, no build step. The whole library is ~18,000
 lines of TypeScript (~300 KB minified, ~115 KB gzipped) that run as-is in the browser, in a Web
 Worker, and in Node ≥ 22.18. Built to feed
@@ -52,6 +54,13 @@ that *consume* the mesh — displacement mapping, winding-number voxelization, B
 operations, slicing, FEM — choke on exactly those defects.
 
 meshStep starts from the opposite end: **the mesh is the product.**
+
+![The same slot and hole meshed by OpenCASCADE (left: long needle fans across flat faces, slivers down the walls) and by meshStep (right: even triangles everywhere)](docs/images/occt-vs-meshstep.png)
+
+*The same part, both at 0.005 mm surface deviation and 15°. Left: OpenCASCADE via occt-import-js
+(4,724 triangles for the whole part), ideal for rendering, but every flat face is a fan of
+needles and the walls are slivers. Right: meshStep (68,632 triangles), even triangles up to the
+0.5 mm max edge, welded across every face boundary.*
 
 - **Watertight per body, by construction.** Shared B-rep edges are sampled once and welded, so
   every body imports as a closed, consistently outward-oriented 2-manifold — verified as 0 open
@@ -278,12 +287,25 @@ mesh. `growthRate` (default 1.5) is the size ratio allowed between neighbouring 
 fillets as a grid of near-square cells. Small fillets cost more triangles than in the default
 mode (~1.3× over the test corpus). Off by default, and without it the output is bit-identical.
 
+![The same slot meshed in the default mode (left) and the isotropic mode (right)](docs/images/default-vs-isotropic.png)
+
+*Both at 0.005 mm surface deviation and a 3 mm max edge. Left: default mode, triangles aligned
+with the rulings of each face (16,142 triangles for the whole part). Right: `isotropic: true`,
+near-equilateral triangles that start small at the fillets and holes and grow by up to 1.5× per
+row toward the 3 mm cap, with mapped grids on the hole and slot walls (37,734 triangles).*
+
 **Merge tolerance:** `mergeTolerance` (mm) cleans the B-rep before meshing in either mode. An
 edge shorter than it collapses to a point and the riser face of a small step is removed, so
 offsets far below the mesh size stop forcing tiny triangles (and, in isotropic mode, a patch of
 fine mesh around them). The surface may move by up to the tolerance at such a spot.
 `result.merged` reports what changed (`edges`, `faces`, `maxMove`) and `reverted: true` when the
 merged model meshed less soundly and the untouched one was returned instead.
+
+![A box top with a 0.04 mm step meshed without merging (left: dense patches of tiny triangles at both ends of the step) and with mergeTolerance 0.1 (right: the patches are gone)](docs/images/merge-tolerance.png)
+
+*A box whose top is split by a 0.04 mm step, isotropic mode. Left: the step's ends force patches
+of tiny triangles (2,614 triangles). Right: `mergeTolerance: 0.1` removes the riser face before
+meshing (1,932 triangles; the surface moved by 0.04 mm).*
 
 ```ts
 const pretty = importStep(stepText, { ...opts, isotropic: true, mergeTolerance: 0.05 });
