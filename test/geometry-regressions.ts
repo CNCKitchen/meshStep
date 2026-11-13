@@ -389,5 +389,126 @@ const pt = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.
   check("slotted rim under a coarse circle: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
 }
 
+// ---- the same slotted rim on a TORUS band (ABC 00057602 #340: a small fillet torus, R 6.6, r 0.5).
+// Its stack (v, around the tube) is periodic, and the band mesher skipped the closing-stitch replay
+// and the decline for periodic stacks, so the stitch folded behind the slot walls (100 crossing
+// pairs here, area +2.2%). Exact area by Green's theorem on dA = r(R + r cos v) du dv.
+{
+  const R = 6.6, r = 0.5, D = Math.PI / 180, vRim = 0, vBot = -80 * D;
+  const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
+  const corners: [number, number][] = []; // (u°, v°), u decreasing: 12 slots 1° wide, 60° deep
+  for (let k = 0; k < 12; k++) { const u0 = -k * 30; corners.push([u0, vRim], [u0 - 0.5, vRim - 60], [u0 - 1, vRim]); }
+  corners.push([-360, vRim]);
+  const uv: [number, number][] = [];
+  for (let i = 0; i + 1 < corners.length; i++) {
+    const [ua, va] = corners[i]!, [ub, vb] = corners[i + 1]!;
+    const n = Math.max(2, Math.ceil(Math.hypot(ub - ua, vb - va) / 2));
+    for (let j = 0; j < n; j++) uv.push([(ua + ((ub - ua) * j) / n) * D, (va + ((vb - va) * j) / n) * D]);
+  }
+  const nC = uv.length + 1;
+  const rB = R + r * Math.cos(vBot), zB = r * Math.sin(vBot);
+  const lines = [...uv.map(([u, v], i) => pt(1000 + i, onT(u, v))),
+    `#10=B_SPLINE_CURVE_WITH_KNOTS('',1,(${[...uv.map((_, i) => `#${1000 + i}`), "#1000"].join(",")}),.POLYLINE_FORM.,.T.,.F.,(2,${Array(nC - 2).fill(1).join(",")},2),(${Array.from({ length: nC }, (_, i) => `${i}.`).join(",")}),.UNSPECIFIED.);`,
+    `#11=VERTEX_POINT('',#1000);`, `#12=EDGE_CURVE('',#11,#11,#10,.T.);`, `#13=ORIENTED_EDGE('',*,*,#12,.T.);`, `#14=EDGE_LOOP('',(#13));`,
+    pt(20, [0, 0, zB]), `#21=DIRECTION('',(0.,0.,1.));`, `#22=DIRECTION('',(1.,0.,0.));`, `#23=AXIS2_PLACEMENT_3D('',#20,#21,#22);`,
+    `#24=CIRCLE('',#23,${rB.toFixed(9)});`, pt(25, [rB, 0, zB]), `#26=VERTEX_POINT('',#25);`,
+    `#27=EDGE_CURVE('',#26,#26,#24,.T.);`, `#28=ORIENTED_EDGE('',*,*,#27,.T.);`, `#29=EDGE_LOOP('',(#28));`,
+    pt(30, [0, 0, 0]), `#31=AXIS2_PLACEMENT_3D('',#30,#21,#22);`, `#32=TOROIDAL_SURFACE('',#31,${R},${r});`,
+    `#33=FACE_BOUND('',#14,.T.);`, `#34=FACE_BOUND('',#29,.T.);`, `#35=ADVANCED_FACE('',(#33,#34),#32,.T.);`,
+    `#36=OPEN_SHELL('',(#35));`, `#37=SHELL_BASED_SURFACE_MODEL('',(#36));`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src);
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const a = I[t * 3]! * 3, b = I[t * 3 + 1]! * 3, c = I[t * 3 + 2]! * 3;
+    const e1 = [P[b]! - P[a]!, P[b + 1]! - P[a + 1]!, P[b + 2]! - P[a + 2]!], e2 = [P[c]! - P[a]!, P[c + 1]! - P[a + 1]!, P[c + 2]! - P[a + 2]!];
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  const G = (v: number): number => r * (R * v + r * Math.sin(v));
+  const walk = [...uv, [-2 * Math.PI, uv[0]![1]] as [number, number]];
+  let zig = 0;
+  for (let i = 0; i + 1 < walk.length; i++) zig += G((walk[i]![1] + walk[i + 1]![1]) / 2) * (walk[i + 1]![0] - walk[i]![0]);
+  const exact = Math.abs(zig + G(vBot) * 2 * Math.PI);
+  const si = selfIntersections(P, I, res.faceOfTri);
+  check("slotted rim on a torus band: no fold", si.sameFace === 0, `${si.sameFace} crossing pairs`);
+  check("slotted rim on a torus band: area matches", Math.abs(area - exact) < 0.005 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
+}
+
+// ---- torus patches meshed by the param grid (u around the axis, v around the tube). The grid spaces
+// its columns uniformly in u at the face's MEDIAN parallel and sized them by the tube radius alone.
+// A chord spanning du on the parallel at v leaves the surface by |(R + r cos v) cos v|·du²/8, so
+// the face's most bent parallel must set the column angle, both for the isotropic target and for
+// the stretch along the parallels (whose step is a length at the median parallel).
+const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: number, tol: number, maxEdge: number, normalDeviation = 60) => {
+  const D = Math.PI / 180, u0 = 0, u1 = uDeg * D, v0 = v0Deg * D, v1 = v1Deg * D;
+  const onT = (u: number, v: number): number[] => [(R + r * Math.cos(v)) * Math.cos(u), (R + r * Math.cos(v)) * Math.sin(u), r * Math.sin(v)];
+  const dir = (id: number, d: number[]): string => `#${id}=DIRECTION('',(${d.map((x) => x.toFixed(12)).join(",")}));`;
+  const pt9 = (id: number, p: number[]): string => `#${id}=CARTESIAN_POINT('',(${p.map((x) => x.toFixed(9)).join(",")}));`;
+  const lines = [pt9(1, [0, 0, 0]), dir(2, [0, 0, 1]), dir(3, [1, 0, 0]), `#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);`, `#5=TOROIDAL_SURFACE('',#4,${R},${r});`,
+    pt9(20, onT(u0, v0)), pt9(21, onT(u1, v0)), pt9(22, onT(u1, v1)), pt9(23, onT(u0, v1)),
+    ...[10, 11, 12, 13].map((id) => `#${id}=VERTEX_POINT('',#${id + 10});`)];
+  // parallels at v0 (#30) and v1 (#31); tube circles at u0 (#32) and u1 (#33)
+  for (const [id, v] of [[30, v0], [31, v1]] as const) lines.push(pt9(id + 100, [0, 0, r * Math.sin(v)]), `#${id + 200}=AXIS2_PLACEMENT_3D('',#${id + 100},#2,#3);`, `#${id}=CIRCLE('',#${id + 200},${(R + r * Math.cos(v)).toFixed(9)});`);
+  for (const [id, u] of [[32, u0], [33, u1]] as const) lines.push(pt9(id + 100, [R * Math.cos(u), R * Math.sin(u), 0]), dir(id + 300, [-Math.sin(u), Math.cos(u), 0]), dir(id + 400, [Math.cos(u), Math.sin(u), 0]), `#${id + 200}=AXIS2_PLACEMENT_3D('',#${id + 100},#${id + 300},#${id + 400});`, `#${id}=CIRCLE('',#${id + 200},${r});`);
+  lines.push(`#40=EDGE_CURVE('',#10,#11,#30,.T.);`, `#41=EDGE_CURVE('',#12,#11,#33,.T.);`, `#42=EDGE_CURVE('',#13,#12,#31,.T.);`, `#43=EDGE_CURVE('',#13,#10,#32,.T.);`,
+    `#50=ORIENTED_EDGE('',*,*,#40,.T.);`, `#51=ORIENTED_EDGE('',*,*,#41,.F.);`, `#52=ORIENTED_EDGE('',*,*,#42,.F.);`, `#53=ORIENTED_EDGE('',*,*,#43,.T.);`,
+    `#60=EDGE_LOOP('',(#50,#51,#52,#53));`, `#61=FACE_OUTER_BOUND('',#60,.T.);`, `#62=ADVANCED_FACE('',(#61),#5,.T.);`, `#63=OPEN_SHELL('',(#62));`, `#64=SHELL_BASED_SURFACE_MODEL('',(#63));`);
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src, { surfaceDeviation: tol, maxEdge, normalDeviation });
+  const P = res.mesh.positions, I = res.mesh.indices;
+  const offT = (p: number[]): number => Math.abs(Math.hypot(Math.hypot(p[0]!, p[1]!) - R, p[2]!) - r);
+  let area = 0, devEdge = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const V = [0, 1, 2].map((k) => [P[I[t * 3 + k]! * 3]!, P[I[t * 3 + k]! * 3 + 1]!, P[I[t * 3 + k]! * 3 + 2]!]);
+    for (let e = 0; e < 3; e++) devEdge = Math.max(devEdge, offT([0, 1, 2].map((k) => (V[e]![k]! + V[(e + 1) % 3]![k]!) / 2)));
+    const e1 = [0, 1, 2].map((k) => V[1]![k]! - V[0]![k]!), e2 = [0, 1, 2].map((k) => V[2]![k]! - V[0]![k]!);
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  const exact = r * (u1 - u0) * (R * (v1 - v0) + r * (Math.sin(v1) - Math.sin(v0)));
+  return { surface: makeSurface(table(lines.slice(0, 5).join("\n")), 5, 1)!, devEdge: devEdge / tol, area, exact, folds: selfIntersections(P, I, res.faceOfTri).sameFace };
+};
+// Fat torus (R < 2r), inner side (ABC 00036882 #255: R 240, r 239): around the axis is the tighter
+// bend. The patch got 23° columns and edge midpoints 4.8x the chord tolerance off the surface.
+{
+  const R = 240, r = 239, D = Math.PI / 180, tol = 0.2;
+  const t = torusPatch(R, r, 90, 127, 170, tol, 200);
+  const near = (a: number, b: number): boolean => Math.abs(a - b) < 1e-9 * Math.max(1, Math.abs(b));
+  // floor 0: the step is exact - the chord term at the most bent parallel, or the normal term
+  const col = (a: number, b: number, tolC: number, nd: number, fl = 0): number => t.surface.parallelColumnAngle!(a * D, b * D, tolC, nd, fl);
+  const K = (v: number): number => Math.abs((R + r * Math.cos(v)) * Math.cos(v));
+  const chordDu = (k: number, tolC: number): number => Math.sqrt((8 * tolC) / k);
+  check("fat torus: widest parallel of the patch sets the column angle", near(col(127, 170, tol, 1), chordDu(K(127 * D), tol)), `${col(127, 170, tol, 1)} vs ${chordDu(K(127 * D), tol)}`);
+  check("fat torus: column angle peaks inside the range where cos v = -R/2r", near(col(100, 140, tol, 1), chordDu((R * R) / (4 * r), tol)), `${col(100, 140, tol, 1)} vs ${chordDu((R * R) / (4 * r), tol)}`);
+  check("fat torus: a whole turn sees the outer equator", near(col(-180, 180, tol, 1), chordDu(R + r, tol)) && near(col(300, 400, tol, 1), chordDu(R + r, tol)), `${col(-180, 180, tol, 1)}, ${col(300, 400, tol, 1)}`);
+  check("fat torus: the normal term binds at the innermost parallel", near(col(127, 180, 1e3, 0.2), 0.2), `${col(127, 180, 1e3, 0.2)} vs 0.2`);
+  // the innermost parallel has radius 1 mm: a 6 mm floor exempts it; the 15 mm one at 160° binds
+  const rho160 = R + r * Math.cos(160 * D);
+  check("fat torus: parallels shorter than the floor ask for nothing finer", Math.abs(col(160, 180, 1e3, 0.2, 6) - 6 / rho160) < 0.05 * (6 / rho160), `${col(160, 180, 1e3, 0.2, 6)} vs ~${6 / rho160}`);
+  check("fat torus inner patch: edge chords within 1.5x the chord tolerance", t.devEdge < 1.5, `${t.devEdge.toFixed(2)}x`);
+  check("fat torus inner patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("fat torus inner patch: area matches", Math.abs(t.area - t.exact) < 0.005 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+}
+// Ordinary torus (R 40, r 20), u 0-30°, v ±150°: the tube radius was the tighter bend, so the target
+// was right, but the grid stretched its columns to the u curvature step, a length it measured at
+// the outer equator and laid out at the median parallel (ρ ≈ 43 vs 60): 2.8x the chord tolerance
+// on the equator. The same stretch left 3.9x on unrolled elbow sections (ABC 00032129).
+{
+  const t = torusPatch(40, 20, 30, -150, 150, 0.05, 40);
+  check("wide torus patch: equator chords within 1.6x the chord tolerance", t.devEdge < 1.6, `${t.devEdge.toFixed(2)}x`);
+  check("wide torus patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("wide torus patch: area matches", Math.abs(t.area - t.exact) < 0.005 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+}
+// Horn torus (R = r = 4), outer half, u 0-90° (ABC 00026167 #52): columns and rows both sit at the
+// chord limit with no stretch. The refinement centres next to a column-aligned boundary land exactly
+// half a size from it and lost the boundary-clearance check on a float tie, so the boundary cells
+// kept their (full column, full row) diagonal, which adds both sagittas: 1.27x the chord tolerance.
+{
+  const t = torusPatch(4, 4, 90, -90, 90, 0.0748, 7.484, 15);
+  check("horn torus outer half: edge chords within the chord tolerance", t.devEdge < 1, `${t.devEdge.toFixed(2)}x`);
+  check("horn torus outer half: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("horn torus outer half: area matches", Math.abs(t.area - t.exact) < 0.01 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+}
+
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
 console.log("geometry-regressions: all passed");

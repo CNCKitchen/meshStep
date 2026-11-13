@@ -846,6 +846,26 @@ function targetForRadius(Rc: number, targetEdge: number, chordTol: number, norma
   const ang = floorAngular ? Math.max(floor, Rc * normalDev) : Rc * normalDev;
   return Math.min(targetEdge, Math.max(floor, Math.sqrt(8 * Rc * chordTol)), ang);
 }
+/** TORUS columns. faceTarget knows a torus by its tube radius, but on the inner side of a fat torus
+ * (R < 2r) the bend AROUND the axis is the tighter one, and it is the angle between two columns
+ * that it limits, not their distance: R 240, r 239 over v 127-170° (ABC 00036882) got 30° columns
+ * from the grid, edge chords 7.5x the chord tolerance off the surface; the rings next to a
+ * near-horn torus's centre (R 22, r 20: ABC 00041377 #142) got 4 points, 7.9x. This is the column
+ * step that honours chordTol and normalDev on every parallel in [v0, v1], as a length on a parallel
+ * of `speed` mm per radian; Infinity for other surfaces. Parallels whose columns would be shorter
+ * than faceTarget's floor ask for nothing finer, as everywhere else: towards a horn torus's pinch
+ * (R ≈ r) the normal keeps turning with u while the parallel shrinks to a point, and the normal
+ * term alone would ask for the full column count exactly where all the columns meet.
+ * Known limit: the grid's columns are uniform in u, so a face that reaches both the outer equator
+ * and a horn torus's pinch gets the equator's count at the pinch too, with slivers where they
+ * converge (ABC 00045363 #40: 107). Arc-length reparametrisation of the grid is the fix.
+ * It is NOT folded into Torus.curvatureRadius(): the true radius around the axis falls to zero
+ * towards a horn torus's centre, and as an isotropic target it refined the grid's size field into
+ * slivers there and added rings the tube direction does not need. */
+function parallelStep(surface: Surface, v0: number, v1: number, speed: number, targetEdge: number, chordTol: number, normalDev: number): number {
+  if (!surface.parallelColumnAngle) return Infinity;
+  return speed * surface.parallelColumnAngle(v0, v1, chordTol, normalDev, Math.min(targetEdge / 40, 30 * chordTol));
+}
 
 /**
  * Plane / cylinder / trimmed patch: outer + hole boundary samples plus an interior (u,v) grid,
@@ -1250,7 +1270,8 @@ function gridCDT(
     const R = surface.spanRadius(umin, umax, vmin, vmax);
     if (Number.isFinite(R) && R > 0) { if (surface.profileAxis === 1) kV = Math.max(kV, 1 / R); else kU = Math.max(kU, 1 / R); }
   }
-  const stepU = stepOf(kU), stepV = stepOf(kV);
+  let stepU = stepOf(kU);
+  const stepV = stepOf(kV);
 
   // Sanitize each boundary ring: collapse zero-width "out-and-back" spikes. A pinched strip face
   // (Shapr3D counterbore rims) traverses the same 3D curve twice through two edges whose (u,v)
@@ -1348,6 +1369,25 @@ function gridCDT(
     const span = targetForRadius(surface.spanRadius(umin, umax, vmin, vmax), targetEdge, chordTol, normalDev);
     target = Math.max(Math.min(target, span), ts[12]! / 8);
   }
+  // TORUS: the columns are uniform in u, laid out at the face's MEDIAN parallel (uScale), so the
+  // most demanding parallel in the face's v range sets their step (parallelStep). That step becomes
+  // the face target, and the tube direction stretches to its own step against it like a fillet's
+  // ruling. The local size field must then be capped by it too: it works in the stretched plane,
+  // and the tube radius it reports there would let refinement grow triangles to (stretch x tube
+  // step) along the tube (ABC 00052860: deviation 0.99 -> 1.76x the chord tolerance).
+  // The u STRETCH is capped by the column step on every torus face, not only where it becomes the
+  // target: stepOf(kU) is a 3D length at the sampled point, but the grid lays it out at the median
+  // parallel, so a tube spanning the outer equator stretched its columns past the angle that
+  // parallel allows (ABC 00032129's unrolled elbows: 3.9x; a ±150° patch: 2.8x). Allowing two
+  // column steps, relying on the refinement centres to halve each column, is not enough: full
+  // columns survive along the boundaries. Known limit: where both directions sit at their limit,
+  // a boundary cell's diagonal adds both sagittas (up to ~2x, ABC 00054705 #43).
+  let sizeCap = Infinity;
+  {
+    const colStep = parallelStep(surface, vmin, vmax, uScale, targetEdge, chordTol, normalDev);
+    stepU = Math.min(stepU, colStep);
+    if (colStep < target) { target = colStep; sizeCap = colStep; }
+  }
   // Anisotropy-adjusted axis scales for the CDT plane (capped so triangles never exceed ~6:1 —
   // beyond that slivers start to cost more numerically than the shading gains). uScale/vScale stay
   // the TRUE metric for anything with a physical tolerance (the sanitiser's snap key above).
@@ -1432,7 +1472,7 @@ function gridCDT(
     // Size field = min of (a) the LOCAL curvature target — so a face whose curvature varies is
     // refined where it actually bends, not just at the patch midpoint — and (b) the boundary-graded
     // size, growing from each edge's own length outward. Capped at the face target, floored to bound.
-    let size = faceTarget(surface, targetEdge, chordTol, normalDev, sx / uSc, sy / vSc);
+    let size = Math.min(faceTarget(surface, targetEdge, chordTol, normalDev, sx / uSc, sy / vSc), sizeCap);
     let d2min = Infinity, dxMin = 0, dyMin = 0;
     const cx = Math.floor(sx / csz), cy = Math.floor(sy / csz);
     for (let gx = cx - 2; gx <= cx + 2; gx++) for (let gy = cy - 2; gy <= cy + 2; gy++) {
@@ -1785,7 +1825,12 @@ function gridCDT(
         if (!inRegion([u, v])) { if (memo) skipTri.add(key); continue; }
         [sz, dist] = sizeDist(px, py); // moved to the centroid — re-query there
       }
-      if (dist < 0.5 * sz) { if (memo) skipTri.add(key); continue; }
+      // A centre exactly half a size from the boundary is kept: with no stretch, the centres next to a
+      // column-aligned boundary land there, and losing them on a float tie left the boundary cells'
+      // (full column, full row) diagonal, which adds both sagittas where both directions curve (ABC
+      // 00026167 #52: 1.36x the chord tolerance). It also stops identical faces meshing differently
+      // (roundedCube's 12 fillets: 478-490 triangles, now 496 each).
+      if (dist < 0.5 * sz * (1 - 1e-9)) { if (memo) skipTri.add(key); continue; }
       fresh.push([px, py, sz, key]);
     }
     if (!fresh.length) break;
@@ -3645,7 +3690,12 @@ function tessellateRevolutionBand(
           for (let j = 0; j < 32; j++) {
             circ += d3(evalAt(c, angs[0]! + (j / 32) * period, vMid), evalAt(c, angs[0]! + ((j + 1) / 32) * period, vMid));
           }
-          const nP = Math.max(8, Math.min(bottom.length, Math.ceil(circ / target)));
+          // The interior rings share one column count, sized on the mid ring: on a torus band
+          // around the axis the widest parallel of the band sets the column angle (parallelStep;
+          // ABC 00050351 #42 had 8 columns, 45° each, 5x the chord tolerance). Then the finer rim
+          // bounds the count instead of the bottom one.
+          const colT = c === 0 ? Math.min(target, parallelStep(surface, Math.min(h0, h1), Math.max(h0, h1), circ / period, targetEdge, chordTol, normalDev)) : target;
+          const nP = Math.max(8, Math.min(colT < target ? Math.max(bottom.length, top.length) : bottom.length, Math.ceil(circ / colT)));
           const fracB = fracOf(progB, bottom), fracT = fracOf(progT, top);
           const dir = band.bWind !== 0 ? Math.sign(band.bWind) : wrap(angleOf(bottom[1]!) - angleOf(bottom[0]!)) >= 0 ? 1 : -1;
           const totAng = progB[progB.length - 1]! + Math.abs(wrap(angleOf(bottom[0]!) - angleOf(bottom[bottom.length - 1]!)));
@@ -3781,9 +3831,11 @@ function tessellateRevolutionBand(
       // near-vertical walls. The stitch fans each coarse top point to a whole wall, and one wall of
       // every slot is seen from behind: reversed triangles (152 on #259, 232 crossing pairs).
       // Replay the stitch's zipper in its own (angular fraction, height) coordinates and count
-      // triangles against the majority orientation.
+      // triangles against the majority orientation. Torus bands stacked along the periodic tube
+      // angle fold the same way (a slotted rim on a torus, ABC 00057602 #340: 237 crossing pairs),
+      // so neither this check nor the decline is skipped for periodic stacks.
       let stitchFolds = 0;
-      if (!crossesLast && !crossesBottom && !stackPeriodic) {
+      if (!crossesLast && !crossesBottom) {
         const na = bottom.length, nb = top.length;
         const ax = (i: number): number => (i >= na ? 1 : fracB[i]!), bx = (i: number): number => (i >= nb ? 1 : fracT[i]!);
         const ah = (i: number): number => hLast[i % na]!, bh = (i: number): number => hT[i % nb]!;
@@ -3799,7 +3851,7 @@ function tessellateRevolutionBand(
         for (const a of areas) if (a * Math.sign(sum) < -tol) stitchFolds++;
       }
       if (DBG && stitchFolds) console.error(`[band] fid=${fid} closing stitch folds ${stitchFolds} triangles -> unroll`);
-      if ((crossesLast || stitchFolds > 0) && !crossesBottom && !stackPeriodic) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
+      if ((crossesLast || stitchFolds > 0) && !crossesBottom) { verts.length = vStart; faceIds.length = fStart; return false; } // the CDT unroll meshes the true boundary
       let prev = bottom;
       for (let k = 1; k < nRings; k++) {
         ti = 0;
@@ -4780,7 +4832,8 @@ function tessellateFullPeriodic(
   const ringAt = (v: number): Vec3[] => {
     let circ = 0, prev = surface.evaluate(u0, v);
     for (let i = 1; i <= K; i++) { const q = surface.evaluate(u0 + (uP * i) / K, v); circ += dd(prev, q); prev = q; }
-    const t = faceTarget(surface, targetEdge, chordTol, normalDev, u0 + uP / 2, v);
+    // each ring has its own column count, so a torus ring answers for its own parallel only
+    const t = Math.min(faceTarget(surface, targetEdge, chordTol, normalDev, u0 + uP / 2, v), parallelStep(surface, v, v, circ / Math.abs(uP), targetEdge, chordTol, normalDev));
     const nu = Math.max(4, Math.min(4000, Math.round(circ / (coarsen * Math.max(t, 1e-9)))));
     const r: Vec3[] = [];
     for (let i = 0; i < nu; i++) r.push(surface.evaluate(u0 + (uP * i) / nu, v));
