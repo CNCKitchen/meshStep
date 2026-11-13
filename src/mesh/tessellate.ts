@@ -1441,11 +1441,32 @@ function gridCDT(
   // segment's TRUE metric length: a ruling-aligned boundary edge measures short in compressed
   // space, and grading from that phantom "fine feature" would crowd micro-triangles along every
   // fillet rail.
+  // ISOTROPIC mode: the edges were seeded no finer than hMin, so a boundary segment far shorter
+  // than that AND than its neighbours is a micro edge of the model itself (two vertices a
+  // micron apart), which had to get a segment of its own. The interior must not grade toward
+  // it: the size field does not either, and a patch of micron-sized triangles around it sits
+  // below the stitch passes' weld floor (SMILEY #103173: edges of 0.6 and 4.9 µm on a face
+  // seeded at 0.3 mm drew 110 triangles down to 6 µm, which the zip then tangled into two open
+  // edges). Such a segment grades from the longer of its two neighbours instead, at most from
+  // hMin. A boundary that is fine as a whole (a micro face sampled at a multiple of the normal
+  // density) keeps its own lengths: its neighbours are as short as it is.
+  const lnFloor = ISO ? Math.min(ISO.hMin, railStep) : 0;
   const sseg: [number, number, number, number, number][] = [];
-  for (const idx of [outerIdx, ...holeIdx]) for (let i = 0; i < idx.length; i++) {
-    const a = allP2[idx[i]!]!, b = allP2[idx[(i + 1) % idx.length]!]!;
-    const ax = SX(a[0]), ay = SY(a[1]), bx = SX(b[0]), by = SY(b[1]);
-    sseg.push([ax, ay, bx, by, Math.hypot((b[0] - a[0]) * uScale, (b[1] - a[1]) * vScale)]);
+  for (const idx of [outerIdx, ...holeIdx]) {
+    const n = idx.length, first = sseg.length;
+    for (let i = 0; i < n; i++) {
+      const a = allP2[idx[i]!]!, b = allP2[idx[(i + 1) % n]!]!;
+      const ax = SX(a[0]), ay = SY(a[1]), bx = SX(b[0]), by = SY(b[1]);
+      sseg.push([ax, ay, bx, by, Math.hypot((b[0] - a[0]) * uScale, (b[1] - a[1]) * vScale)]);
+    }
+    if (lnFloor > 0 && n >= 3) {
+      const ln = sseg.slice(first).map((q) => q[4]);
+      for (let i = 0; i < n; i++) {
+        if (ln[i]! >= lnFloor) continue;
+        const lift = Math.min(lnFloor, Math.max(ln[(i + n - 1) % n]!, ln[(i + 1) % n]!));
+        if (lift > ln[i]!) sseg[first + i]![4] = lift;
+      }
+    }
   }
   // Size growth away from a boundary segment: 0.45 per unit distance by default, the requested
   // growth rate in isotropic mode. The segment hash is scanned two cells around a query, which
