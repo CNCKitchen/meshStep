@@ -4,23 +4,14 @@
 // fill). Unlike a batch hull triangulation this is robust on collinear boundaries (e.g. a
 // cylinder rim, which projects to a straight line of points) and on dense inputs.
 
+import { buildEdgeTopo } from "./edge-topo.ts";
+
 type P2 = [number, number];
 
 /** Diagnostics for the gapcheck harness (MESHSTEP_DEBUG=1); no-op in production/browser. */
 const DBG = typeof process !== "undefined" && !!process.env?.MESHSTEP_DEBUG;
 
 const orient = (a: P2, b: P2, c: P2): number => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-
-/** True if d is strictly inside the circumcircle of CCW triangle a,b,c. */
-function inCircle(a: P2, b: P2, c: P2, d: P2): boolean {
-  const ax = a[0] - d[0], ay = a[1] - d[1];
-  const bx = b[0] - d[0], by = b[1] - d[1];
-  const cx = c[0] - d[0], cy = c[1] - d[1];
-  const det = (ax * ax + ay * ay) * (bx * cy - cx * by)
-    - (bx * bx + by * by) * (ax * cy - cx * ay)
-    + (cx * cx + cy * cy) * (ax * by - bx * ay);
-  return det > 1e-12;
-}
 
 function segCross(p: P2, q: P2, r: P2, s: P2): boolean {
   const d1 = orient(r, s, p), d2 = orient(r, s, q), d3 = orient(p, q, r), d4 = orient(p, q, s);
@@ -45,17 +36,23 @@ class Cdt {
     this.tv = new Int32Array(cap * 3); this.tn = new Int32Array(cap * 3);
     this.dead = new Uint8Array(cap); this.seenEpoch = new Uint32Array(cap);
   }
-  /** New triangle in a recycled slot if available, else appended (arrays grow by doubling). */
+  /** Make room for `extra` appended slots (arrays grow by doubling). After this call the typed
+   * arrays stay put for that many alloc() calls, so a caller may hold them in locals. */
+  reserve(extra: number): void {
+    let cap = this.dead.length;
+    if (this.nt + extra <= cap) return;
+    while (cap < this.nt + extra) cap *= 2;
+    const tv = new Int32Array(cap * 3); tv.set(this.tv); this.tv = tv;
+    const tn = new Int32Array(cap * 3); tn.set(this.tn); this.tn = tn;
+    const dd = new Uint8Array(cap); dd.set(this.dead); this.dead = dd;
+    const se = new Uint32Array(cap); se.set(this.seenEpoch); this.seenEpoch = se;
+  }
+  /** New triangle in a recycled slot if available, else appended. */
   alloc(a: number, b: number, c: number, n0: number, n1: number, n2: number): number {
     let idx: number;
     if (this.free.length) idx = this.free.pop()!;
     else {
-      if (this.nt === this.dead.length) {
-        const tv = new Int32Array(this.tv.length * 2); tv.set(this.tv); this.tv = tv;
-        const tn = new Int32Array(this.tn.length * 2); tn.set(this.tn); this.tn = tn;
-        const dd = new Uint8Array(this.dead.length * 2); dd.set(this.dead); this.dead = dd;
-        const se = new Uint32Array(this.seenEpoch.length * 2); se.set(this.seenEpoch); this.seenEpoch = se;
-      }
+      if (this.nt === this.dead.length) this.reserve(1);
       idx = this.nt++;
     }
     const o = idx * 3;
@@ -66,6 +63,15 @@ class Cdt {
   }
   kill(t: number): void { this.dead[t] = 1; this.free.push(t); }
   firstLive(): number { for (let i = 0; i < this.nt; i++) if (!this.dead[i]) return i; return -1; }
+  /** Independent copy of the triangulation (the cavity stamps are insertion-only state and are
+   * not carried over). */
+  clone(): Cdt {
+    const c = new Cdt(this.nt);
+    c.tv.set(this.tv.subarray(0, this.nt * 3)); c.tn.set(this.tn.subarray(0, this.nt * 3));
+    c.dead.set(this.dead.subarray(0, this.nt));
+    c.nt = this.nt; c.free = this.free.slice();
+    return c;
+  }
 }
 
 const ckey = (a: number, b: number): number => (a < b ? a * 0x8000000 + b : b * 0x8000000 + a);
@@ -73,11 +79,11 @@ const ckey = (a: number, b: number): number => (a < b ? a * 0x8000000 + b : b * 
 /** In triangle ti, set the neighbour across edge (x,y) to value. */
 function setNeighbor(m: Cdt, ti: number, x: number, y: number, value: number): void {
   if (ti < 0) return;
-  const o = ti * 3;
-  for (let e = 0; e < 3; e++) {
-    const a = m.tv[o + e]!, b = m.tv[o + ((e + 1) % 3)]!;
-    if ((a === x && b === y) || (a === y && b === x)) { m.tn[o + e] = value; return; }
-  }
+  const o = ti * 3, tv = m.tv;
+  const v0 = tv[o]!, v1 = tv[o + 1]!, v2 = tv[o + 2]!;
+  if ((v0 === x && v1 === y) || (v0 === y && v1 === x)) m.tn[o] = value;
+  else if ((v1 === x && v2 === y) || (v1 === y && v2 === x)) m.tn[o + 1] = value;
+  else if ((v2 === x && v0 === y) || (v2 === y && v0 === x)) m.tn[o + 2] = value;
 }
 
 /** Even-odd point-in-polygon test (ray casting) on a vertex ring. */
@@ -98,24 +104,41 @@ function pointInTri(p: P2, a: P2, b: P2, c: P2): boolean {
   return !((d1 < -1e-9 || d2 < -1e-9 || d3 < -1e-9) && (d1 > 1e-9 || d2 > 1e-9 || d3 > 1e-9));
 }
 
-function locate(m: Cdt, pts: P2[], pi: number, hint: number): number {
-  const p = pts[pi]!;
-  let t = hint >= m.nt || m.dead[hint] ? m.firstLive() : hint;
+// The insertion and flip passes read point coordinates from two flat arrays (X, Y) instead of an
+// array of [x, y] pairs: every predicate below is the same arithmetic on the same doubles, minus
+// one pointer dereference per coordinate.
+
+/** orient() on flat coordinates: > 0 when (a, b, c) turns counter-clockwise. */
+function orientF(X: Float64Array, Y: Float64Array, a: number, b: number, c: number): number {
+  return (X[b]! - X[a]!) * (Y[c]! - Y[a]!) - (Y[b]! - Y[a]!) * (X[c]! - X[a]!);
+}
+
+/** segCross() on flat coordinates: do the open segments p-q and r-s properly cross? */
+function segCrossF(X: Float64Array, Y: Float64Array, p: number, q: number, r: number, s: number): boolean {
+  const d1 = orientF(X, Y, r, s, p), d2 = orientF(X, Y, r, s, q), d3 = orientF(X, Y, p, q, r), d4 = orientF(X, Y, p, q, s);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+function locate(m: Cdt, X: Float64Array, Y: Float64Array, pi: number, hint: number): number {
+  const px = X[pi]!, py = Y[pi]!;
+  const tv = m.tv, tn = m.tn, dead = m.dead;
+  let t = hint >= m.nt || dead[hint] ? m.firstLive() : hint;
   for (let steps = 0; steps < m.nt * 3 + 8; steps++) {
     const o = t * 3;
-    let moved = false;
-    for (let e = 0; e < 3; e++) {
-      if (orient(pts[m.tv[o + e]!]!, pts[m.tv[o + ((e + 1) % 3)]!]!, p) < -1e-12) {
-        const nb = m.tn[o + e]!;
-        if (nb >= 0 && !m.dead[nb]) { t = nb; moved = true; break; }
-      }
-    }
-    if (!moved) return t;
+    const a = tv[o]!, b = tv[o + 1]!, c = tv[o + 2]!;
+    const ax = X[a]!, ay = Y[a]!, bx = X[b]!, by = Y[b]!, cx = X[c]!, cy = Y[c]!;
+    let nb: number;
+    if ((bx - ax) * (py - ay) - (by - ay) * (px - ax) < -1e-12 && (nb = tn[o]!) >= 0 && !dead[nb]) { t = nb; continue; }
+    if ((cx - bx) * (py - by) - (cy - by) * (px - bx) < -1e-12 && (nb = tn[o + 1]!) >= 0 && !dead[nb]) { t = nb; continue; }
+    if ((ax - cx) * (py - cy) - (ay - cy) * (px - cx) < -1e-12 && (nb = tn[o + 2]!) >= 0 && !dead[nb]) { t = nb; continue; }
+    return t;
   }
+  const p: P2 = [px, py];
   for (let i = 0; i < m.nt; i++) {
-    if (m.dead[i]) continue;
+    if (dead[i]) continue;
     const o = i * 3;
-    if (pointInTri(p, pts[m.tv[o]!]!, pts[m.tv[o + 1]!]!, pts[m.tv[o + 2]!]!)) return i;
+    const a = tv[o]!, b = tv[o + 1]!, c = tv[o + 2]!;
+    if (pointInTri(p, [X[a]!, Y[a]!], [X[b]!, Y[b]!], [X[c]!, Y[c]!])) return i;
   }
   return m.firstLive();
 }
@@ -131,60 +154,140 @@ interface Scratch {
   epoch: number;
 }
 
-function insertPoint(m: Cdt, pts: P2[], pi: number, hint: number, s: Scratch): number {
-  const start = locate(m, pts, pi, hint);
+function insertPoint(m: Cdt, X: Float64Array, Y: Float64Array, pi: number, hint: number, s: Scratch): number {
+  const start = locate(m, X, Y, pi, hint);
   // Collect the cavity: triangles whose circumcircle contains p, grown across shared edges.
   const epoch = ++m.epoch;
   const { bad, stack, made, ea, eb, eext } = s;
   bad.length = 0; stack.length = 0; made.length = 0; ea.length = 0; eb.length = 0; eext.length = 0;
-  const P = pts[pi]!;
-  m.seenEpoch[start] = epoch;
+  const px = X[pi]!, py = Y[pi]!;
+  let tv = m.tv, tn = m.tn;
+  const seen = m.seenEpoch;
+  seen[start] = epoch;
   stack.push(start);
   while (stack.length) {
     const t = stack.pop()!;
     bad.push(t);
     const o = t * 3;
     for (let e = 0; e < 3; e++) {
-      const nb = m.tn[o + e]!;
-      if (nb < 0 || m.seenEpoch[nb] === epoch) continue;
+      const nb = tn[o + e]!;
+      if (nb < 0 || seen[nb] === epoch) continue;
       const no = nb * 3;
-      if (inCircle(pts[m.tv[no]!]!, pts[m.tv[no + 1]!]!, pts[m.tv[no + 2]!]!, P)) { m.seenEpoch[nb] = epoch; stack.push(nb); }
+      // inCircle(a, b, c, p): p strictly inside the circumcircle of the CCW triangle
+      const a = tv[no]!, b = tv[no + 1]!, c = tv[no + 2]!;
+      const ax = X[a]! - px, ay = Y[a]! - py;
+      const bx = X[b]! - px, by = Y[b]! - py;
+      const cx = X[c]! - px, cy = Y[c]! - py;
+      const det = (ax * ax + ay * ay) * (bx * cy - cx * by)
+        - (bx * bx + by * by) * (ax * cy - cx * ay)
+        + (cx * cx + cy * cy) * (ax * by - bx * ay);
+      if (det > 1e-12) { seen[nb] = epoch; stack.push(nb); }
     }
   }
   // Cavity boundary edges (oriented so the cavity is to the left). The epoch stamp holds exactly
   // the cavity set (start + every triangle whose circumcircle contained p) = the membership test.
-  for (const t of bad) {
-    const o = t * 3;
-    for (let e = 0; e < 3; e++) {
-      const nb = m.tn[o + e]!;
-      if (nb >= 0 && m.seenEpoch[nb] === epoch) continue;
-      ea.push(m.tv[o + e]!); eb.push(m.tv[o + ((e + 1) % 3)]!); eext.push(nb);
-    }
+  for (let i = 0; i < bad.length; i++) {
+    const o = bad[i]! * 3;
+    let nb = tn[o]!;
+    if (!(nb >= 0 && seen[nb] === epoch)) { ea.push(tv[o]!); eb.push(tv[o + 1]!); eext.push(nb); }
+    nb = tn[o + 1]!;
+    if (!(nb >= 0 && seen[nb] === epoch)) { ea.push(tv[o + 1]!); eb.push(tv[o + 2]!); eext.push(nb); }
+    nb = tn[o + 2]!;
+    if (!(nb >= 0 && seen[nb] === epoch)) { ea.push(tv[o + 2]!); eb.push(tv[o]!); eext.push(nb); }
   }
   // Recycle cavity slots; build a fan of new triangles (pi,a,b).
-  for (const t of bad) m.kill(t);
+  for (let i = 0; i < bad.length; i++) m.kill(bad[i]!);
+  m.reserve(ea.length); // the arrays may move here, not inside the loop below
+  tv = m.tv; tn = m.tn;
   const pe = ++s.epoch;
+  const { startTri, startStamp, endTri, endStamp } = s;
   for (let i = 0; i < ea.length; i++) {
     const a = ea[i]!, b = eb[i]!, ext = eext[i]!;
     const idx = m.alloc(pi, a, b, -1, ext, -1);
     setNeighbor(m, ext, a, b, idx);
-    s.startTri[a] = idx; s.startStamp[a] = pe;
-    s.endTri[b] = idx; s.endStamp[b] = pe;
+    startTri[a] = idx; startStamp[a] = pe;
+    endTri[b] = idx; endStamp[b] = pe;
     made.push(idx);
   }
-  for (const idx of made) {
-    const o = idx * 3;
-    const va = m.tv[o + 1]!, vb = m.tv[o + 2]!; // v = [pi, a, b]
-    m.tn[o] = s.endStamp[va] === pe ? s.endTri[va]! : -1;       // edge (pi,a) shared with the tri ending at a
-    m.tn[o + 2] = s.startStamp[vb] === pe ? s.startTri[vb]! : -1; // edge (b,pi) shared with the tri starting at b
+  for (let i = 0; i < made.length; i++) {
+    const o = made[i]! * 3;
+    const va = tv[o + 1]!, vb = tv[o + 2]!; // v = [pi, a, b]
+    tn[o] = endStamp[va] === pe ? endTri[va]! : -1;       // edge (pi,a) shared with the tri ending at a
+    tn[o + 2] = startStamp[vb] === pe ? startTri[vb]! : -1; // edge (b,pi) shared with the tri starting at b
   }
   return made[0] ?? start;
 }
 
-const edgeExists = (m: Cdt, v2t: number[][], a: number, b: number): boolean =>
-  (v2t[a] ?? []).some((ti) => { if (m.dead[ti]) return false; const o = ti * 3; return m.tv[o] === b || m.tv[o + 1] === b || m.tv[o + 2] === b; });
+/** Triangles ever recorded as incident to each vertex: the live triangles at the moment the
+ * constraint pass starts (ascending slot order, a counting-sorted flat list) plus, per vertex,
+ * the slots a flip rewrote since (`extra`, in append order). Entries can be stale — a slot may
+ * since have died or been rewritten without the vertex — exactly like the per-vertex arrays this
+ * replaces (one heap array per point, the single largest allocation of a triangulation). */
+interface V2T { start: Int32Array; list: Int32Array; extra: Map<number, number[]> }
 
-function flipEdge(m: Cdt, pts: P2[], ti: number, e: number): boolean {
+function buildV2T(m: Cdt, nP: number): V2T {
+  const start = new Int32Array(nP + 1);
+  const tv = m.tv, dead = m.dead;
+  for (let i = 0; i < m.nt; i++) {
+    if (dead[i]) continue;
+    const o = i * 3;
+    start[tv[o]! + 1]!++; start[tv[o + 1]! + 1]!++; start[tv[o + 2]! + 1]!++;
+  }
+  for (let v = 0; v < nP; v++) start[v + 1]! += start[v]!;
+  const fill = start.slice(1);
+  const list = new Int32Array(start[nP]!);
+  for (let i = m.nt - 1; i >= 0; i--) {
+    if (dead[i]) continue;
+    const o = i * 3;
+    list[--fill[tv[o + 2]!]!] = i; list[--fill[tv[o + 1]!]!] = i; list[--fill[tv[o]!]!] = i;
+  }
+  return { start, list, extra: new Map() };
+}
+
+const v2tPush = (v2t: V2T, v: number, ti: number): void => {
+  const x = v2t.extra.get(v);
+  if (x) x.push(ti); else v2t.extra.set(v, [ti]);
+};
+
+/** Is some recorded live triangle of `a` one that has `b` as a vertex? (The historical test: a
+ * stale entry that lost `a` in a flip but still has `b` counts — callers rely on exactly that.) */
+function edgeExists(m: Cdt, v2t: V2T, a: number, b: number): boolean {
+  const tv = m.tv, dead = m.dead;
+  for (let i = v2t.start[a]!, e = v2t.start[a + 1]!; i < e; i++) {
+    const ti = v2t.list[i]!;
+    if (dead[ti]) continue;
+    const o = ti * 3;
+    if (tv[o] === b || tv[o + 1] === b || tv[o + 2] === b) return true;
+  }
+  const x = v2t.extra.get(a);
+  if (x) for (let i = 0; i < x.length; i++) {
+    const ti = x[i]!;
+    if (dead[ti]) continue;
+    const o = ti * 3;
+    if (tv[o] === b || tv[o + 1] === b || tv[o + 2] === b) return true;
+  }
+  return false;
+}
+
+/** Does the live triangulation have the edge (a,b)? Exact: every live triangle with vertex `a`
+ * is recorded under `a` (the initial lists are complete and every flip records both rewritten
+ * slots), and stale entries are filtered by testing the edge itself. */
+function liveEdge(m: Cdt, v2t: V2T, a: number, b: number): boolean {
+  const tv = m.tv, dead = m.dead;
+  const has = (ti: number): boolean => {
+    if (dead[ti]) return false;
+    const o = ti * 3;
+    const v0 = tv[o]!, v1 = tv[o + 1]!, v2 = tv[o + 2]!;
+    return (v0 === a && v1 === b) || (v0 === b && v1 === a) || (v1 === a && v2 === b) || (v1 === b && v2 === a)
+      || (v2 === a && v0 === b) || (v2 === b && v0 === a);
+  };
+  for (let i = v2t.start[a]!, e = v2t.start[a + 1]!; i < e; i++) if (has(v2t.list[i]!)) return true;
+  const x = v2t.extra.get(a);
+  if (x) for (let i = 0; i < x.length; i++) if (has(x[i]!)) return true;
+  return false;
+}
+
+function flipEdge(m: Cdt, X: Float64Array, Y: Float64Array, ti: number, e: number): boolean {
   const oi = ti * 3;
   const tj = m.tn[oi + e]!;
   if (tj < 0) return false;
@@ -194,7 +297,7 @@ function flipEdge(m: Cdt, pts: P2[], ti: number, e: number): boolean {
   for (let k = 0; k < 3; k++) if (m.tv[oj + k] === b && m.tv[oj + ((k + 1) % 3)] === a) { j = k; break; }
   if (j < 0) return false;
   const d = m.tv[oj + ((j + 2) % 3)]!;
-  if (orient(pts[c]!, pts[a]!, pts[d]!) <= 0 || orient(pts[c]!, pts[d]!, pts[b]!) <= 0) return false; // not convex
+  if (orientF(X, Y, c, a, d) <= 0 || orientF(X, Y, c, d, b) <= 0) return false; // not convex
   // Everything read above; the two slots are now rewritten IN PLACE (the old object store swapped
   // in fresh objects — callers must not read a slot's pre-flip fields after a successful flip).
   const nbc = m.tn[oi + ((e + 1) % 3)]!, nca = m.tn[oi + ((e + 2) % 3)]!, nad = m.tn[oj + ((j + 1) % 3)]!, ndb = m.tn[oj + ((j + 2) % 3)]!;
@@ -205,53 +308,65 @@ function flipEdge(m: Cdt, pts: P2[], ti: number, e: number): boolean {
   return true;
 }
 
-function forceEdge(m: Cdt, pts: P2[], v2t: number[][], a: number, b: number): void {
+function forceEdge(m: Cdt, X: Float64Array, Y: Float64Array, v2t: V2T, a: number, b: number): void {
   const tryFlip = (ti: number, e: number): boolean => {
     // Capture the mate BEFORE flipping: flipEdge rewrites both slots in place. (The old object
     // store replaced tris[ti], so the captured object's pre-flip n[e] was still readable — same
     // value, now read explicitly.)
     const tj = m.tn[ti * 3 + e]!;
-    if (!flipEdge(m, pts, ti, e)) return false;
+    if (!flipEdge(m, X, Y, ti, e)) return false;
     // refresh incidence for the two changed triangles
-    if (ti >= 0) { const o = ti * 3; (v2t[m.tv[o]!] ??= []).push(ti); (v2t[m.tv[o + 1]!] ??= []).push(ti); (v2t[m.tv[o + 2]!] ??= []).push(ti); }
-    if (tj >= 0) { const o = tj * 3; (v2t[m.tv[o]!] ??= []).push(tj); (v2t[m.tv[o + 1]!] ??= []).push(tj); (v2t[m.tv[o + 2]!] ??= []).push(tj); }
+    if (ti >= 0) { const o = ti * 3; v2tPush(v2t, m.tv[o]!, ti); v2tPush(v2t, m.tv[o + 1]!, ti); v2tPush(v2t, m.tv[o + 2]!, ti); }
+    if (tj >= 0) { const o = tj * 3; v2tPush(v2t, m.tv[o]!, tj); v2tPush(v2t, m.tv[o + 1]!, tj); v2tPush(v2t, m.tv[o + 2]!, tj); }
     return true;
+  };
+  /** Try to enter the corridor through recorded triangle `ti` of `a`. undefined = `ti` is not the
+   * entrance (keep looking); otherwise the corridor walk's verdict. */
+  const walkFrom = (ti: number): boolean | null | undefined => {
+    if (m.dead[ti]) return undefined;
+    const oi = ti * 3;
+    const k = m.tv[oi] === a ? 0 : m.tv[oi + 1] === a ? 1 : m.tv[oi + 2] === a ? 2 : -1;
+    if (k < 0) return undefined;
+    const e = (k + 1) % 3; // edge opposite a
+    const u = m.tv[oi + e]!, w = m.tv[oi + ((e + 1) % 3)]!;
+    if (u === b || w === b) return undefined;
+    if (!segCrossF(X, Y, a, b, u, w)) return undefined;
+    // found the corridor entrance; walk it, trying to flip each crossing edge
+    let cur = ti, edge = e;
+    for (let step = 0; step < 2000; step++) {
+      if (tryFlip(cur, edge)) return true;
+      const oc = cur * 3;
+      const nx = m.tn[oc + edge]!;
+      if (nx < 0) return null;
+      if (m.dead[nx]) return null;
+      const on = nx * 3;
+      // entry edge in nx is (w2,u2) reversed; segment exits through one of the other two edges
+      let advanced = false;
+      for (let e2 = 0; e2 < 3; e2++) {
+        const u2 = m.tv[on + e2]!, w2 = m.tv[on + ((e2 + 1) % 3)]!;
+        if (u2 === a || u2 === b || w2 === a || w2 === b) continue;
+        const pk = ckey(u2, w2);
+        if (pk === ckey(m.tv[oc + edge]!, m.tv[oc + ((edge + 1) % 3)]!)) continue; // entry edge
+        if (segCrossF(X, Y, a, b, u2, w2)) { cur = nx; edge = e2; advanced = true; break; }
+      }
+      if (!advanced) return false; // corridor ends (reached b's fan) with nothing flippable
+    }
+    return null;
   };
   /** Walk the corridor of triangles the segment a-b crosses (via neighbour links, valid during the
    * flip pass) and flip the first flippable crossing edge. O(corridor) instead of O(all triangles).
    * Returns false when the walk can't proceed (segment through a vertex, broken link) — caller
    * falls back to the exhaustive scan for that iteration. */
   const corridorFlip = (): boolean | null => {
-    for (const ti of v2t[a] ?? []) {
-      if (m.dead[ti]) continue;
-      const oi = ti * 3;
-      const k = m.tv[oi] === a ? 0 : m.tv[oi + 1] === a ? 1 : m.tv[oi + 2] === a ? 2 : -1;
-      if (k < 0) continue;
-      const e = (k + 1) % 3; // edge opposite a
-      const u = m.tv[oi + e]!, w = m.tv[oi + ((e + 1) % 3)]!;
-      if (u === b || w === b) continue;
-      if (!segCross(pts[a]!, pts[b]!, pts[u]!, pts[w]!)) continue;
-      // found the corridor entrance; walk it, trying to flip each crossing edge
-      let cur = ti, edge = e;
-      for (let step = 0; step < 2000; step++) {
-        if (tryFlip(cur, edge)) return true;
-        const oc = cur * 3;
-        const nx = m.tn[oc + edge]!;
-        if (nx < 0) return null;
-        if (m.dead[nx]) return null;
-        const on = nx * 3;
-        // entry edge in nx is (w2,u2) reversed; segment exits through one of the other two edges
-        let advanced = false;
-        for (let e2 = 0; e2 < 3; e2++) {
-          const u2 = m.tv[on + e2]!, w2 = m.tv[on + ((e2 + 1) % 3)]!;
-          if (u2 === a || u2 === b || w2 === a || w2 === b) continue;
-          const pk = ckey(u2, w2);
-          if (pk === ckey(m.tv[oc + edge]!, m.tv[oc + ((edge + 1) % 3)]!)) continue; // entry edge
-          if (segCross(pts[a]!, pts[b]!, pts[u2]!, pts[w2]!)) { cur = nx; edge = e2; advanced = true; break; }
-        }
-        if (!advanced) return false; // corridor ends (reached b's fan) with nothing flippable
-      }
-      return null;
+    // Every verdict ends the search, so the lists are never read after a flip appended to them.
+    for (let i = v2t.start[a]!, e = v2t.start[a + 1]!; i < e; i++) {
+      const r = walkFrom(v2t.list[i]!);
+      if (r !== undefined) return r;
+    }
+    const x = v2t.extra.get(a);
+    if (x) for (let i = 0; i < x.length; i++) {
+      const r = walkFrom(x[i]!);
+      if (r !== undefined) return r;
     }
     return null; // no crossing edge incident to a (collinear pass-through) — needs the full scan
   };
@@ -269,7 +384,7 @@ function forceEdge(m: Cdt, pts: P2[], v2t: number[][], a: number, b: number): vo
       for (let e = 0; e < 3; e++) {
         const u = m.tv[o + e]!, w = m.tv[o + ((e + 1) % 3)]!;
         if (u === a || u === b || w === a || w === b) continue;
-        if (segCross(pts[a]!, pts[b]!, pts[u]!, pts[w]!) && tryFlip(ti, e)) { flipped = true; break; }
+        if (segCrossF(X, Y, a, b, u, w) && tryFlip(ti, e)) { flipped = true; break; }
       }
     }
     if (!flipped) break;
@@ -664,37 +779,60 @@ function enforceByRetriangulation(m: Cdt, pts: P2[], a: number, b: number, const
 export interface CdtOut { missing: number; rescue?: string; equiv?: number }
 
 /**
+ * State kept between calls of constrainedTriangulate on a growing point set (a face's Delaunay
+ * refinement re-triangulates after every round of inserts). The Bowyer–Watson insertion of a
+ * point sequence depends only on the points inserted so far, so when a call's insertion sequence
+ * EXTENDS the previous call's (same loops, same interior prefix, same coordinates, same bounding
+ * box and hence the same super-triangle), the stored triangulation is continued with the new
+ * points instead of re-inserting every old one. The result is the same triangulation, slot for
+ * slot, as a run from scratch. Anything else (a moved point, other loops) silently starts over.
+ */
+export class CdtSession {
+  /** @internal */ m: Cdt | null = null;
+  /** @internal */ n = 0;
+  /** @internal */ X: Float64Array | null = null;
+  /** @internal */ Y: Float64Array | null = null;
+  /** @internal */ seq: Int32Array | null = null;
+  /** @internal */ hint = 0;
+  /** @internal */ box: [number, number, number, number] = [0, 0, 0, 0];
+}
+
+/**
  * Triangulate the region bounded by loops[0] (outer) minus loops[1..] (holes), using all listed
  * points (loop vertices + interior). Returns triangle index triples into `points`.
+ * `session` (optional) lets consecutive calls on a growing point set share the insertion work.
  */
-export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: CdtOut): [number, number, number][] {
+export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: CdtOut, session?: CdtSession): [number, number, number][] {
   const n = points.length;
   // Reset ALL out fields: callers reuse one out object across refinement re-runs, and a stale
   // rescue label from a previous run would mis-flag a clean triangulation.
   if (out) { out.missing = 0; out.rescue = undefined; out.equiv = undefined; }
   if (n < 3) return [];
   let minx = Infinity, miny = Infinity, maxx = -Infinity, maxy = -Infinity;
-  for (const p of points) {
-    if (p[0] < minx) minx = p[0]; if (p[1] < miny) miny = p[1];
-    if (p[0] > maxx) maxx = p[0]; if (p[1] > maxy) maxy = p[1];
+  const X = new Float64Array(n + 3), Y = new Float64Array(n + 3);
+  for (let i = 0; i < n; i++) {
+    const p = points[i]!;
+    const x = p[0], y = p[1];
+    X[i] = x; Y[i] = y;
+    if (x < minx) minx = x; if (y < miny) miny = y;
+    if (x > maxx) maxx = x; if (y > maxy) maxy = y;
   }
   const dmax = Math.max(maxx - minx, maxy - miny) || 1;
   const cx = (minx + maxx) / 2, cy = (miny + maxy) / 2;
-  const pts = points.slice();
   // Super-triangle in CCW order (all predicates assume CCW).
-  const s0 = pts.length; pts.push([cx - 3 * dmax, cy - dmax]); // bottom-left
-  const s1 = pts.length; pts.push([cx + 3 * dmax, cy - dmax]); // bottom-right
-  const s2 = pts.length; pts.push([cx, cy + 3 * dmax]);        // top
-
-  // ~2n+ triangles for n points; sized up front so growth is rare.
-  const m = new Cdt(2 * n + 64);
-  m.alloc(s0, s1, s2, -1, -1, -1);
-  const scratch: Scratch = {
-    bad: [], stack: [], made: [], ea: [], eb: [], eext: [],
-    startTri: new Int32Array(pts.length), startStamp: new Uint32Array(pts.length),
-    endTri: new Int32Array(pts.length), endStamp: new Uint32Array(pts.length), epoch: 0,
+  const s0 = n, s1 = n + 1, s2 = n + 2;
+  X[s0] = cx - 3 * dmax; Y[s0] = cy - dmax; // bottom-left
+  X[s1] = cx + 3 * dmax; Y[s1] = cy - dmax; // bottom-right
+  X[s2] = cx; Y[s2] = cy + 3 * dmax;        // top
+  const nP = n + 3;
+  // The rescue paths below still work on [x, y] pairs (with the super-triangle appended); they
+  // run on a fraction of a percent of the faces, so the pair array is only built on demand.
+  let ptsLazy: P2[] | null = null;
+  const getPts = (): P2[] => {
+    if (!ptsLazy) { ptsLazy = points.slice(); ptsLazy.push([X[s0]!, Y[s0]!], [X[s1]!, Y[s1]!], [X[s2]!, Y[s2]!]); }
+    return ptsLazy;
   };
-  let hint = 0;
+
   const dbgT0 = DBG ? Date.now() : 0;
   // Insert boundary loop points first, then interior points. Each point index at most ONCE: a
   // tangent-pinch loop legitimately lists the same index twice (weldPinches aliases the second
@@ -702,37 +840,83 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // ITSELF — a degenerate (v,x,v) triangle that surfaces as a non-manifold edge plus a ring of
   // open edges at the pinch (ABC 00013472 family: notched cylinder flaps meeting the rim row at
   // a point).
-  const insertedPt = new Uint8Array(pts.length);
-  for (const loop of loops) for (const pi of loop) {
+  const insertedPt = new Uint8Array(nP);
+  let seqLen = 0;
+  for (const loop of loops) seqLen += loop.length;
+  const seq = new Int32Array(seqLen + interior.length);
+  seqLen = 0;
+  for (const loop of loops) for (let i = 0; i < loop.length; i++) {
+    const pi = loop[i]!;
     if (insertedPt[pi]) continue;
-    insertedPt[pi] = 1;
-    hint = insertPoint(m, pts, pi, hint, scratch);
+    insertedPt[pi] = 1; seq[seqLen++] = pi;
   }
-  for (const pi of interior) {
+  for (let i = 0; i < interior.length; i++) {
+    const pi = interior[i]!;
     if (insertedPt[pi]) continue;
-    insertedPt[pi] = 1;
-    hint = insertPoint(m, pts, pi, hint, scratch);
+    insertedPt[pi] = 1; seq[seqLen++] = pi;
+  }
+  // Continue the session's triangulation when this call's insertion sequence extends it.
+  let base: Cdt | null = null;
+  let from = 0, hint = 0;
+  if (session && session.m && session.n <= n && session.seq!.length <= seqLen
+    && session.box[0] === minx && session.box[1] === miny && session.box[2] === maxx && session.box[3] === maxy) {
+    const pSeq = session.seq!, pX = session.X!, pY = session.Y!;
+    let ok = true;
+    for (let i = 0; i < pSeq.length; i++) if (pSeq[i] !== seq[i]) { ok = false; break; }
+    for (let i = 0; ok && i < session.n; i++) if (pX[i] !== X[i] || pY[i] !== Y[i]) ok = false;
+    if (ok) {
+      base = session.m;
+      from = pSeq.length; hint = session.hint;
+      // The super-triangle's vertex ids follow the point count: shift them to this call's.
+      const shift = n - session.n;
+      if (shift > 0) {
+        const tv = base.tv, lim = session.n;
+        for (let i = 0, e = base.nt * 3; i < e; i++) if (tv[i]! >= lim) tv[i] = tv[i]! + shift;
+      }
+    }
+  }
+  if (!base) {
+    // ~2n+ triangles for n points; sized up front so growth is rare.
+    base = new Cdt(2 * n + 64);
+    base.alloc(s0, s1, s2, -1, -1, -1);
+  }
+  const scratch: Scratch = {
+    bad: [], stack: [], made: [], ea: [], eb: [], eext: [],
+    startTri: new Int32Array(nP), startStamp: new Uint32Array(nP),
+    endTri: new Int32Array(nP), endStamp: new Uint32Array(nP), epoch: 0,
+  };
+  for (let i = from; i < seqLen; i++) hint = insertPoint(base, X, Y, seq[i]!, hint, scratch);
+  // Everything from here on (constraint flips, cavity repairs) rewrites the triangulation, so a
+  // session keeps the pure insertion state and the rest of this call works on a copy.
+  let m = base;
+  if (session) {
+    session.m = base; session.n = n; session.X = X; session.Y = Y;
+    session.seq = seq.subarray(0, seqLen); session.hint = hint;
+    session.box = [minx, miny, maxx, maxy];
+    m = base.clone();
   }
   const dbgT1 = DBG ? Date.now() : 0;
 
   // Force the constraint (boundary) edges.
-  const v2t: number[][] = Array.from({ length: pts.length }, () => []);
-  for (let i = 0; i < m.nt; i++) {
-    if (m.dead[i]) continue;
-    const o = i * 3;
-    v2t[m.tv[o]!]!.push(i); v2t[m.tv[o + 1]!]!.push(i); v2t[m.tv[o + 2]!]!.push(i);
-  }
+  const v2t = buildV2T(m, nP);
   const constraints = new Set<number>();
   for (const loop of loops) for (let i = 0; i < loop.length; i++) {
     const a = loop[i]!, b = loop[(i + 1) % loop.length]!;
     constraints.add(ckey(a, b));
-    forceEdge(m, pts, v2t, a, b);
+    forceEdge(m, X, Y, v2t, a, b);
   }
   const dbgT2 = DBG ? Date.now() : 0;
   // Second pass: any constraint the flip method left unrealised (stuck on non-convex quads) is
   // enforced by deleting the crossed triangles and ear-clipping the cavity. (A fixpoint iteration
   // of this pass was tried and REGRESSED: re-forcing hopeless constraints churns the triangulation
   // and trips fold audits on other faces — one pass, like it always was.)
+  // Nearly every face realises all its constraints in the flip pass. That is checked against the
+  // live triangulation first (a few triangle lookups per constraint); only when something is
+  // unrealised is the full snapshot of present edges built, which the repair below works from.
+  let unrealized = 0, chainRealized = 0;
+  for (const ck of constraints) if (!liveEdge(m, v2t, Math.floor(ck / 0x8000000), ck % 0x8000000)) unrealized++;
+  if (unrealized > 0) {
+  const pts = getPts();
   const present = new Set<number>();
   for (let t = 0; t < m.nt; t++) {
     if (m.dead[t]) continue;
@@ -804,8 +988,6 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     constraints.delete(ck);
     return true;
   };
-  let unrealized = 0, chainRealized = 0;
-  for (const ck of constraints) if (!present.has(ck)) unrealized++;
   // Cavity enforcement is a repair for a FEW stuck constraints (non-convex quads the flip pass
   // couldn't turn). A boundary whose lift is systemically degenerate (a collapsed param domain)
   // arrives with HUNDREDS of unrealisable constraints, every attempt pays a full O(triangles)
@@ -835,6 +1017,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   } else if (DBG) {
     console.error(`[cdt] enforcement skipped: ${unrealized}/${constraints.size} constraints unrealised after flips — systemically degenerate boundary`);
   }
+  }
   if (out && chainRealized > 0) out.equiv = chainRealized;
   if (DBG && Date.now() - dbgT0 > 500) {
     console.error(`[cdt] SLOW n=${n} constraints=${constraints.size} unrealized=${unrealized}: insert=${dbgT1 - dbgT0}ms force=${dbgT2 - dbgT1}ms enforce=${Date.now() - dbgT2}ms`);
@@ -843,14 +1026,16 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // Region extraction: flood fill from a super-triangle (outside), toggling in/out at constraints.
   // Build edge adjacency FRESH from the live triangles — the per-triangle `n` links get mangled by
   // constraint flipping, and trusting them leaves unreachable interior triangles (holes).
-  const edgeTris = new Map<number, number[]>();
-  for (let i = 0; i < m.nt; i++) {
-    if (m.dead[i]) continue;
-    const o = i * 3;
-    for (let e = 0; e < 3; e++) {
-      const k = ckey(m.tv[o + e]!, m.tv[o + ((e + 1) % 3)]!);
-      const a = edgeTris.get(k); if (a) a.push(i); else edgeTris.set(k, [i]);
-    }
+  // The adjacency is the hash-free incidence of edge-topo.ts (formerly a Map with one array per
+  // edge); the triangles of an edge come out in the same ascending slot order.
+  const topo = buildEdgeTopo(m.tv, m.nt, nP, m.dead);
+  const { eid, cnt: eCnt, t0: eT0, t1: eT1, extra: eExtra } = topo;
+  // Constraint flag per edge; a constraint with no edge in the triangulation is `missing`.
+  const isCon = new Uint8Array(topo.nE);
+  let missing = 0;
+  for (const ck of constraints) {
+    const id = topo.find(Math.floor(ck / 0x8000000), ck % 0x8000000);
+    if (id < 0) missing++; else isCon[id] = 1;
   }
   // 1 = outside, 2 = inside, 0 = unseen. Head-index BFS: q.shift() moves the whole queue per pop
   // (quadratic on big faces); the head pointer visits in the identical order for free.
@@ -862,18 +1047,26 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     if (m.tv[o]! >= n || m.tv[o + 1]! >= n || m.tv[o + 2]! >= n) { startT = i; break; }
   }
   if (startT < 0) return [];
-  const q = [startT]; inside[startT] = 1;
-  for (let head = 0; head < q.length; head++) {
+  const q = new Int32Array(m.nt);
+  let qn = 0;
+  q[qn++] = startT; inside[startT] = 1;
+  for (let head = 0; head < qn; head++) {
     const t = q[head]!;
     const st = inside[t] === 2;
     const o = t * 3;
     for (let e = 0; e < 3; e++) {
-      const k = ckey(m.tv[o + e]!, m.tv[o + ((e + 1) % 3)]!);
-      const isC = constraints.has(k);
-      for (const nb of edgeTris.get(k) ?? []) {
-        if (nb === t || inside[nb]) continue;
-        inside[nb] = (isC ? !st : st) ? 2 : 1;
-        q.push(nb);
+      const id = eid[o + e]!;
+      const lab = (isCon[id] ? !st : st) ? 2 : 1;
+      const c = eCnt[id]!;
+      let nb = eT0[id]!;
+      if (nb !== t && !inside[nb]) { inside[nb] = lab; q[qn++] = nb; }
+      if (c >= 2) {
+        nb = eT1[id]!;
+        if (nb !== t && !inside[nb]) { inside[nb] = lab; q[qn++] = nb; }
+        if (c > 2) for (const x of eExtra.get(id)!) {
+          if (x === t || inside[x]) continue;
+          inside[x] = lab; q[qn++] = x;
+        }
       }
     }
   }
@@ -891,13 +1084,11 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // flood fill is exact, so we keep it untouched (the common case for every well-parametrised face).
   // (over the constraints set, not the raw loops: a chain-split constraint is realised by its
   // collinear pieces and must not count as missing)
-  let missing = 0;
-  for (const ck of constraints) if (!edgeTris.has(ck)) missing++;
   if (out) out.missing = missing;
   if (DBG && missing > 0) console.error(`[cdt] missing=${missing}/${constraints.size} pts=${n} loops=[${loops.map((l) => l.length).join(",")}] interior=${interior.length} flood=${flood.length}`);
   if (DBG && process.env.MESHSTEP_SLICEDBG && missing > 0) {
     for (const ck of constraints) {
-      if (edgeTris.has(ck)) continue;
+      if (topo.find(Math.floor(ck / 0x8000000), ck % 0x8000000) >= 0) continue;
       const a = Math.floor(ck / 0x8000000), b = ck % 0x8000000;
       const A = points[a]!, B = points[b]!;
       console.error(`[cdt]   STILL-MISSING ${a}-${b}: A=(${A[0]},${A[1]}) B=(${B[0]},${B[1]})`);
@@ -917,7 +1108,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
         const o = t * 3;
         const vs = [m.tv[o]!, m.tv[o + 1]!, m.tv[o + 2]!];
         if (!vs.includes(a) && !vs.includes(b)) continue;
-        console.error(`[cdt]     tri ${t}: ${vs.map((v) => `${v}${v >= n ? "S" : ""}=(${pts[v]![0].toFixed(4)},${pts[v]![1].toFixed(4)})`).join(" ")}`);
+        console.error(`[cdt]     tri ${t}: ${vs.map((v) => `${v}${v >= n ? "S" : ""}=(${X[v]!.toFixed(4)},${Y[v]!.toFixed(4)})`).join(" ")}`);
       }
     }
   }

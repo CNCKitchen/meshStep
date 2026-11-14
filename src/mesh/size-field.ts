@@ -19,6 +19,37 @@
 
 const LEAF = 8;
 
+/** Stable ascending sort of ids[lo..hi) by keys[lo..hi) (keys move with their ids): insertion
+ * sort on short runs, then bottom-up merging through the two scratch arrays. Equal keys keep
+ * their order, so the result is what Array.prototype.sort gives with a `key(p) - key(q)`
+ * comparator, without a comparator call per comparison. Keys must not be NaN. */
+function stableSortRange(ids: Int32Array, keys: Float64Array, tmpIds: Int32Array, tmpKeys: Float64Array, lo: number, hi: number): void {
+  const RUN = 12;
+  for (let a = lo; a < hi; a += RUN) {
+    const b = a + RUN < hi ? a + RUN : hi;
+    for (let i = a + 1; i < b; i++) {
+      const k = keys[i]!, id = ids[i]!;
+      let j = i - 1;
+      while (j >= a && keys[j]! > k) { keys[j + 1] = keys[j]!; ids[j + 1] = ids[j]!; j--; }
+      keys[j + 1] = k; ids[j + 1] = id;
+    }
+  }
+  for (let w = RUN; w < hi - lo; w *= 2) {
+    for (let a = lo; a < hi; a += 2 * w) {
+      const m = a + w < hi ? a + w : hi, b = a + 2 * w < hi ? a + 2 * w : hi;
+      if (m >= b) continue; // a lone run, already in place
+      let i = a, j = m, o = a;
+      while (i < m && j < b) {
+        if (keys[j]! < keys[i]!) { tmpKeys[o] = keys[j]!; tmpIds[o++] = ids[j++]!; }
+        else { tmpKeys[o] = keys[i]!; tmpIds[o++] = ids[i++]!; }
+      }
+      while (i < m) { tmpKeys[o] = keys[i]!; tmpIds[o++] = ids[i++]!; }
+      while (j < b) { tmpKeys[o] = keys[j]!; tmpIds[o++] = ids[j++]!; }
+      for (let q = a; q < b; q++) { keys[q] = tmpKeys[q]!; ids[q] = tmpIds[q]!; }
+    }
+  }
+}
+
 export class SizeField {
   /** Size growth per unit distance (growthRate − 1). */
   readonly g: number;
@@ -74,6 +105,7 @@ export class SizeField {
     for (let i = 0; i < n; i++) order[i] = i;
     this.nLo = []; this.nHi = []; this.nLeft = []; this.nRight = []; this.nMinH = []; this.nBox = [];
     const coord = (i: number, ax: number): number => src[i * 4 + ax]!;
+    const sortKey = new Float64Array(n), tmpKey = new Float64Array(n), tmpOrder = new Int32Array(n);
     // Iterative build; each work item is a node id with its source range already recorded.
     const make = (lo: number, hi: number): number => {
       const id = this.nLo.length;
@@ -101,8 +133,8 @@ export class SizeField {
       if (!(Math.max(ex, ey, ez) > 0)) continue; // all sources coincide — keep as one leaf
       // Median split on the longest box axis. The subarray sort is O(n log n) per level; the
       // source count of one body (a few per boundary node) keeps the whole build in milliseconds.
-      const sub = Array.from(order.subarray(lo, hi)).sort((p, q) => coord(p, ax) - coord(q, ax));
-      for (let k = 0; k < sub.length; k++) order[lo + k] = sub[k]!;
+      for (let k = lo; k < hi; k++) sortKey[k] = coord(order[k]!, ax);
+      stableSortRange(order, sortKey, tmpOrder, tmpKey, lo, hi);
       const mid = (lo + hi) >> 1;
       const l = make(lo, mid), r = make(mid, hi);
       this.nLeft[id] = l; this.nRight[id] = r;

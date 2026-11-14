@@ -33,6 +33,7 @@
 // The input must be a clean triangulation (manifold, consistently wound, no zero-area
 // triangle); for anything else the function declines and the caller keeps what it had.
 import type { Vec3 } from "../geom/vec.ts";
+import { hypot2, hypot3 } from "../geom/vec.ts";
 
 export interface OptimizeInput {
   /** Parameter-plane coordinates per vertex. Extended and modified IN PLACE. */
@@ -131,7 +132,7 @@ export function optimizeFace(inp: OptimizeInput): OptimizeResult | null {
   for (let t = 0; t < nT0; t++) touch(t);
 
   // ---- small helpers --------------------------------------------------------------------------
-  const len3 = (a: number, b: number): number => Math.hypot(P[a * 3]! - P[b * 3]!, P[a * 3 + 1]! - P[b * 3 + 1]!, P[a * 3 + 2]! - P[b * 3 + 2]!);
+  const len3 = (a: number, b: number): number => hypot3(P[a * 3]! - P[b * 3]!, P[a * 3 + 1]! - P[b * 3 + 1]!, P[a * 3 + 2]! - P[b * 3 + 2]!);
   /** Radius-ratio quality (1 = equilateral, 0 = degenerate) of the 3D triangle (a,b,c). */
   const qual = (a: number, b: number, c: number): number => {
     const ab = len3(a, b), bc = len3(b, c), ca = len3(c, a);
@@ -326,7 +327,7 @@ export function optimizeFace(inp: OptimizeInput): OptimizeResult | null {
     const ux = P[u * 3]! - P[at * 3]!, uy = P[u * 3 + 1]! - P[at * 3 + 1]!, uz = P[u * 3 + 2]! - P[at * 3 + 2]!;
     const wx = P[w * 3]! - P[at * 3]!, wy = P[w * 3 + 1]! - P[at * 3 + 1]!, wz = P[w * 3 + 2]! - P[at * 3 + 2]!;
     const cx = uy * wz - uz * wy, cy = uz * wx - ux * wz, cz = ux * wy - uy * wx;
-    return [Math.hypot(cx, cy, cz), ux * wx + uy * wy + uz * wz];
+    return [hypot3(cx, cy, cz), ux * wx + uy * wy + uz * wz];
   };
   /** Flip edge e of triangle t if that is a valid Delaunay improvement. */
   const tryFlip = (t: number, e: number): boolean => {
@@ -338,7 +339,7 @@ export function optimizeFace(inp: OptimizeInput): OptimizeResult | null {
     // Delaunay in 3D: flip when the angles at c and d, facing the edge, sum past 180 degrees,
     // i.e. sin(C + D) < 0. Scale-free via the products of the two (unnormalised) sin/cos.
     const [sc, cc] = ang(c, a, b), [sd, cd] = ang(d, b, a);
-    if (sc * cd + cc * sd >= -1e-9 * (Math.hypot(sc, cc) * Math.hypot(sd, cd))) return false;
+    if (sc * cd + cc * sd >= -1e-9 * (hypot2(sc, cc) * hypot2(sd, cd))) return false;
     // The quad a-d-b-c must be strictly convex in the parameter plane.
     if (!(area2(a, d, c) > EPS) || !(area2(d, b, c) > EPS)) return false;
     const tbc = tn[t * 3 + (e + 1) % 3]!, tca = tn[t * 3 + (e + 2) % 3]!;
@@ -386,7 +387,7 @@ export function optimizeFace(inp: OptimizeInput): OptimizeResult | null {
         const u = tv[r * 3 + (i + 1) % 3]!, w = tv[r * 3 + (i + 2) % 3]!;
         const ux = P[u * 3]! - px, uy = P[u * 3 + 1]! - py, uz = P[u * 3 + 2]! - pz;
         const vx = P[w * 3]! - px, vy = P[w * 3 + 1]! - py, vz = P[w * 3 + 2]! - pz;
-        const ar = Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+        const ar = hypot3(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
         const h = (hv[v]! + hv[u]! + hv[w]!) / 3;
         const wt = ar / (h * h);
         wx += wt * (ux + vx) / 3; wy += wt * (uy + vy) / 3; wz += wt * (uz + vz) / 3; ws += wt;

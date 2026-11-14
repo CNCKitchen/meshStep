@@ -686,9 +686,40 @@ function deBoorTri(degree: number, knots: number[], u: number, k: number, dst: F
   }
 }
 
-// De Boor scratch (grown on demand): the v-direction triangle and the row of u-direction inputs.
+/** The blend factors of one de Boor triangle, in the order deBoorTri computes and uses them. A
+ * surface point runs the v-direction triangle once per control row with the SAME factors, so
+ * they are computed once (one division each) and replayed by deBoorTriWith for every row. */
+function deBoorFactors(degree: number, knots: number[], u: number, k: number, out: Float64Array): void {
+  let n = 0;
+  for (let r = 1; r <= degree; r++) {
+    for (let j = degree; j >= r; j--) {
+      const i = k - degree + j;
+      const lo = knots[i]!, hi = knots[i + degree - r + 1]!;
+      out[n++] = hi > lo ? (u - lo) / (hi - lo) : 0;
+    }
+  }
+}
+
+/** deBoorTri with the blend factors given (see deBoorFactors): the same arithmetic in the same order. */
+function deBoorTriWith(degree: number, fac: Float64Array, dst: Float64Array): void {
+  let n = 0;
+  for (let r = 1; r <= degree; r++) {
+    for (let j = degree; j >= r; j--) {
+      const a = fac[n++]!;
+      const pj = (j - 1) * 4, qj = j * 4;
+      dst[qj] = dst[pj]! + (dst[qj]! - dst[pj]!) * a;
+      dst[qj + 1] = dst[pj + 1]! + (dst[qj + 1]! - dst[pj + 1]!) * a;
+      dst[qj + 2] = dst[pj + 2]! + (dst[qj + 2]! - dst[pj + 2]!) * a;
+      dst[qj + 3] = dst[pj + 3]! + (dst[qj + 3]! - dst[pj + 3]!) * a;
+    }
+  }
+}
+
+// De Boor scratch (grown on demand): the v-direction triangle, the row of u-direction inputs and
+// the v-direction blend factors.
 let dbTri = new Float64Array(4 * 8);
 let dbRow = new Float64Array(4 * 8);
+let dbFac = new Float64Array(64);
 
 function expandKnots(mults: number[], vals: number[]): number[] {
   const k: number[] = [];
@@ -780,12 +811,22 @@ class BSplineSurface implements Surface {
     const RU = 24, RV = 24;
     const rU = (i: number): number => this.u0 + ((this.u1 - this.u0) * i) / RU;
     const rV = (j: number): number => this.v0 + ((this.v1 - this.v0) * j) / RV;
+    // Every lattice node is shared by up to three cells (as a, as its u-neighbour's b and as its
+    // v-neighbour's c): evaluate the point and normal of each node once and look them up, instead
+    // of 15 surface evaluations per cell. Same arguments, same values.
+    const nodeP: Vec3[] = [], nodeN: Vec3[] = [];
+    for (let i = 0; i <= RU; i++) for (let j = 0; j <= RV; j++) {
+      if (i === RU && j === RV) break; // the far corner belongs to no cell
+      nodeP[i * (RV + 1) + j] = this.evaluate(rU(i), rV(j));
+      nodeN[i * (RV + 1) + j] = this.normalAt(rU(i), rV(j));
+    }
     let minR = Infinity;
     for (let i = 0; i < RU; i++) {
       const row: number[] = [];
       for (let j = 0; j < RV; j++) {
-        const a = this.evaluate(rU(i), rV(j)), b = this.evaluate(rU(i + 1), rV(j)), c = this.evaluate(rU(i), rV(j + 1));
-        const n1 = this.normalAt(rU(i), rV(j)), n2 = this.normalAt(rU(i + 1), rV(j)), n3 = this.normalAt(rU(i), rV(j + 1));
+        const k = i * (RV + 1) + j;
+        const a = nodeP[k]!, b = nodeP[k + RV + 1]!, c = nodeP[k + 1]!;
+        const n1 = nodeN[k]!, n2 = nodeN[k + RV + 1]!, n3 = nodeN[k + 1]!;
         const du = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
         const dv = Math.hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
         const tu = Math.acos(Math.max(-1, Math.min(1, dot(n1, n2))));
@@ -810,13 +851,16 @@ class BSplineSurface implements Surface {
     const kv = findSpan(vDeg, this.nvCps, this.vKnots, v);
     if (dbRow.length < (uDeg + 1) * 4) dbRow = new Float64Array((uDeg + 1) * 4);
     if (dbTri.length < (vDeg + 1) * 4) dbTri = new Float64Array((vDeg + 1) * 4);
+    if (dbFac.length < (vDeg * (vDeg + 1)) / 2) dbFac = new Float64Array(vDeg * (vDeg + 1));
+    deBoorFactors(vDeg, this.vKnots, v, kv, dbFac);
     const stride = this.nvCps * 4;
     const lo = ku - uDeg, vlo = kv - vDeg;
     const nvals = (vDeg + 1) * 4;
+    const cps = this.cpsF;
     for (let j = 0; j <= uDeg; j++) {
       const rowOff = (lo + j) * stride + vlo * 4;
-      for (let c = 0; c < nvals; c++) dbTri[c] = this.cpsF[rowOff + c]!;
-      deBoorTri(vDeg, this.vKnots, v, kv, dbTri);
+      for (let c = 0; c < nvals; c++) dbTri[c] = cps[rowOff + c]!;
+      deBoorTriWith(vDeg, dbFac, dbTri);
       const res = vDeg * 4, o = j * 4;
       dbRow[o] = dbTri[res]!; dbRow[o + 1] = dbTri[res + 1]!; dbRow[o + 2] = dbTri[res + 2]!; dbRow[o + 3] = dbTri[res + 3]!;
     }

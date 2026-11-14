@@ -3,7 +3,7 @@
 // the final edge-defect audit, so a consumer can tell a clean conversion from a suspect one (and
 // advise the user to export a mesh directly from CAD) without re-deriving mesh topology.
 import type { IndexedMesh } from "../io/stl.ts";
-import { EdgeTable } from "./edge-table.ts";
+import { buildEdgeTopo } from "./edge-topo.ts";
 
 /** "error" = geometry is missing or the mesh is defective — the import cannot be trusted.
  * "warning" = a heuristic repair produced a result that is PROBABLY right but was not derived
@@ -121,16 +121,20 @@ export interface EdgeDefects { openEdges: number; nonManifoldEdges: number; }
 export function meshDefects(mesh: IndexedMesh, solidOfTri?: Uint32Array, openSolids?: number[]): EdgeDefects {
   const skip = openSolids && openSolids.length > 0 && solidOfTri ? new Set(openSolids) : null;
   const I = mesh.indices;
-  const nt = I.length / 3;
-  // EdgeTable, not a Map: an assembly mesh can carry more unique edges than a Map's 2^24 cap.
-  const inc = new EdgeTable(nt * 1.6);
-  for (let t = 0; t < nt; t++) {
-    if (skip && skip.has(solidOfTri![t]!)) continue;
-    for (let e = 0; e < 3; e++) inc.bump(I[t * 3 + e]!, I[t * 3 + (e + 1) % 3]!);
+  const nt = (I.length / 3) | 0;
+  // Hash-free edge incidence (edge-topo.ts): no Map (an assembly mesh can carry more unique edges
+  // than a Map's 2^24 cap) and no per-edge hashing.
+  let skipTri: Uint8Array | undefined;
+  if (skip) {
+    skipTri = new Uint8Array(nt);
+    for (let t = 0; t < nt; t++) if (skip.has(solidOfTri![t]!)) skipTri[t] = 1;
   }
+  let nv = 0; // from the indices themselves: this is a public entry point, the mesh may be anyone's
+  for (let i = 0; i < nt * 3; i++) if (I[i]! >= nv) nv = I[i]! + 1;
+  const { cnt, nE } = buildEdgeTopo(I, nt, nv, skipTri);
   let openEdges = 0, nonManifoldEdges = 0;
-  for (let s = 0; s < inc.capacity; s++) {
-    const c = inc.cnt[s]!;
+  for (let e = 0; e < nE; e++) {
+    const c = cnt[e]!;
     if (c === 1) openEdges++; else if (c > 2) nonManifoldEdges++;
   }
   return { openEdges, nonManifoldEdges };

@@ -10,7 +10,7 @@
 // Every triangle is oriented outward using the STEP face's same_sense flag and the analytic
 // surface normal. Inner-loop holes / B-spline curves land in M3b; isotropic remesh is M4.
 import type { Vec3 } from "../geom/vec.ts";
-import { cross, dot, lerp, normalize } from "../geom/vec.ts";
+import { cross, dot, hypot2, hypot3, lerp, normalize } from "../geom/vec.ts";
 import { ref, refList, list, num, numList } from "../step/entities.ts";
 import type { Param } from "../step/parser.ts";
 import type { BrepModel, BFace, BLoop } from "../brep/build.ts";
@@ -21,10 +21,12 @@ import { sampleEdge } from "../geom/curves.ts";
 import { EdgeSeeder } from "./edge-seed.ts";
 import { optimizeFace } from "./optimize.ts";
 import { isoCurvature, mappedMesh, matchRailStations, type MappedSide } from "./mapped.ts";
-import { constrainedTriangulate, type CdtOut } from "./cdt2d.ts";
+import { constrainedTriangulate, CdtSession, type CdtOut } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
 import { beginWarnings, takeWarnings, warn, type MeshWarning } from "./diag.ts";
+import { buildEdgeTopo, type EdgeTopo } from "./edge-topo.ts";
+import { PointIds, TripleSet } from "./int-hash.ts";
 
 const TWO_PI = Math.PI * 2;
 
@@ -1010,35 +1012,51 @@ function tessellateParamGrid(
   // grid is therefore a proof of a folded result: roll the face back and let the caller's rail-ribbon
   // fallback mesh between the shared rails directly. UNDER-coverage is deliberately not flagged —
   // dropped 3D-degenerate slivers legitimately leave segments uncovered (the ftc-slot family).
+  // The tally works on point IDS (one per distinct 1e-6-quantised position, int-hash.ts) and the
+  // hash-free edge incidence over them. It used to build two "x,y,z|x,y,z" strings per triangle
+  // edge for Map keys, which made this audit cost more than the triangulation on plane-heavy
+  // models; the string-keyed maps survive only in the rare surgery path at the end.
   const qz = (x: number): number => Math.round(x * 1e6);
-  const skey = (a: Vec3, b: Vec3): string => {
-    const ka = `${qz(a[0])},${qz(a[1])},${qz(a[2])}`, kb = `${qz(b[0])},${qz(b[1])},${qz(b[2])}`;
-    return ka < kb ? ka + "|" + kb : kb + "|" + ka;
-  };
-  const bound = new Map<string, number>();
+  const pids = new PointIds(outer.p3.length + ((verts.length - v0) / 18 | 0));
+  // Boundary segments as id pairs with their multiplicity (how often the boundary walks them).
+  const BK = 0x4000000;
+  const bound = new Map<number, number>();
   for (const lp of [outer, ...holes]) {
     const n = lp.p3.length;
+    let prev = -1, first = -1;
     for (let i = 0; i < n; i++) {
-      const k = skey(lp.p3[i]!, lp.p3[(i + 1) % n]!);
-      bound.set(k, (bound.get(k) ?? 0) + 1);
+      const q = lp.p3[i]!;
+      const id = pids.idOf(qz(q[0]), qz(q[1]), qz(q[2]));
+      if (i === 0) first = id;
+      else { const k = prev < id ? prev * BK + id : id * BK + prev; bound.set(k, (bound.get(k) ?? 0) + 1); }
+      prev = id;
     }
+    if (n > 0) { const k = prev < first ? prev * BK + first : first * BK + prev; bound.set(k, (bound.get(k) ?? 0) + 1); }
   }
-  const used = new Map<string, number>();
-  const all = new Map<string, number>();
+  // Per distinct edge of the emitted triangles: how many triangle edges lie on it (`eAll`), and
+  // the boundary multiplicity of that edge (`eBound`, 0 off the boundary).
+  let eAll = new Int32Array(0), eBound = new Int32Array(0), nEdges = 0;
+  let boundUsed: number[] = []; // per boundary segment (in `bound` order): triangle edges on it
   // (Re)tally this face's emitted triangle edges and return whether any boundary segment is
-  // OVER-covered (proof of a fold). Rebuilds `used`/`all` in place so the surgery below sees them.
+  // OVER-covered (proof of a fold).
   const overCovered = (): boolean => {
-    used.clear(); all.clear();
-    for (let t = v0; t < verts.length; t += 9) {
-      for (let e = 0; e < 3; e++) {
-        const i1 = t + e * 3, i2 = t + ((e + 1) % 3) * 3;
-        const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
-        if (bound.has(k)) used.set(k, (used.get(k) ?? 0) + 1);
-        all.set(k, (all.get(k) ?? 0) + 1);
-      }
+    const nTri = ((verts.length - v0) / 9) | 0;
+    const tid = new Int32Array(nTri * 3);
+    for (let i = 0, o = v0; i < nTri * 3; i++, o += 3) tid[i] = pids.idOf(qz(verts[o]!), qz(verts[o + 1]!), qz(verts[o + 2]!));
+    const topo = buildEdgeTopo(tid, nTri, pids.count);
+    nEdges = topo.nE;
+    eAll = new Int32Array(nEdges); eBound = new Int32Array(nEdges);
+    for (let h = 0; h < nTri * 3; h++) eAll[topo.eid[h]!]!++;
+    boundUsed = [];
+    let over = false;
+    for (const [k, m] of bound) {
+      const id = topo.find(Math.floor(k / BK), k % BK);
+      const u = id >= 0 ? eAll[id]! : 0;
+      if (id >= 0) eBound[id] = m;
+      boundUsed.push(u);
+      if (u > m) over = true;
     }
-    for (const [k, m] of bound) if ((used.get(k) ?? 0) > m) return true;
-    return false;
+    return over;
   };
   if (overCovered()) {
     // The fold is usually introduced by the Delaunay REFINEMENT (its inserted circumcentres push the
@@ -1086,8 +1104,8 @@ function tessellateParamGrid(
   // grid result (bare segments are often closed by the stitching passes, ABC 00031564), so the
   // decline can never cost a face that meshes today.
   if (outerWinds) {
-    let bare = 0, segs = 0;
-    for (const [k, m] of bound) { segs += m; if (!used.has(k)) bare++; }
+    let bare = 0, segs = 0, bi = 0;
+    for (const m of bound.values()) { segs += m; if (boundUsed[bi++]! === 0) bare++; }
     if (bare > Math.max(3, 0.05 * segs)) {
       if (DBG) console.error(`[grid] fid=${fid} winding outer leaves ${bare}/${segs} boundary segments bare — declined`);
       declinedGrid.set(fid, { verts: verts.slice(v0), faceIds: faceIds.slice(f0) });
@@ -1101,7 +1119,31 @@ function tessellateParamGrid(
   // its entire open rim — worse. Instead peel the redundant sheet: greedily drop the triangle whose
   // edges are most over-covered until every edge is ≤2, which removes a fully-pancaked flap without
   // opening anything (its edges stay covered by the base sheet underneath).
-  {
+  let overAny = false;
+  for (let e = 0; e < nEdges; e++) if (eAll[e]! > 2 && eBound[e]! < eAll[e]!) { overAny = true; break; }
+  if (overAny) {
+    // Rare (a folded projection): the surgery edits the triangle list while it tallies, so it
+    // keeps its original string-keyed bookkeeping, rebuilt here from scratch.
+    const skey = (a: Vec3, b: Vec3): string => {
+      const ka = `${qz(a[0])},${qz(a[1])},${qz(a[2])}`, kb = `${qz(b[0])},${qz(b[1])},${qz(b[2])}`;
+      return ka < kb ? ka + "|" + kb : kb + "|" + ka;
+    };
+    const bound = new Map<string, number>();
+    for (const lp of [outer, ...holes]) {
+      const n = lp.p3.length;
+      for (let i = 0; i < n; i++) {
+        const k = skey(lp.p3[i]!, lp.p3[(i + 1) % n]!);
+        bound.set(k, (bound.get(k) ?? 0) + 1);
+      }
+    }
+    const all = new Map<string, number>();
+    for (let t = v0; t < verts.length; t += 9) {
+      for (let e = 0; e < 3; e++) {
+        const i1 = t + e * 3, i2 = t + ((e + 1) % 3) * 3;
+        const k = skey([verts[i1]!, verts[i1 + 1]!, verts[i1 + 2]!], [verts[i2]!, verts[i2 + 1]!, verts[i2 + 2]!]);
+        all.set(k, (all.get(k) ?? 0) + 1);
+      }
+    }
     let over = 0;
     for (const [k, m] of all) if (m > 2 && (bound.get(k) ?? 0) < m) over++;
     let guard = 0, peeled = 0;
@@ -1475,8 +1517,38 @@ function gridCDT(
   const gGrow = ISO ? ISO.g : 0.45, gGrow2 = ISO ? ISO.g * ISO.g : 0.2025;
   const csz = Math.max(target, 1e-6) * (ISO ? Math.max(1, 0.5 / ISO.g) : 1);
   const hkey = (ix: number, iy: number): number => Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663);
-  const segHash = new Map<number, number[]>();
-  for (let i = 0; i < sseg.length; i++) { const k = hkey(Math.floor((sseg[i]![0] + sseg[i]![2]) / 2 / csz), Math.floor((sseg[i]![1] + sseg[i]![3]) / 2 / csz)); (segHash.get(k) ?? segHash.set(k, []).get(k)!).push(i); }
+  // Segments bucketed by the hash of their midpoint's cell. The buckets are keyed by the HASH
+  // VALUE (two cells with one hash share a bucket, as they did in the Map this replaces) and kept
+  // in a flat table: the scan below probes 25 cells per query.
+  const nSeg = sseg.length;
+  let hcap = 16;
+  while (hcap < nSeg * 2) hcap *= 2;
+  const hmask = hcap - 1;
+  const hKeys = new Int32Array(hcap), hBucket = new Int32Array(hcap); // bucket id + 1; 0 = empty slot
+  const hslot = (k: number): number => {
+    let s = (Math.imul(k, 0x9e3779b1) >>> 7) & hmask;
+    while (hBucket[s] !== 0 && hKeys[s] !== k) s = (s + 1) & hmask;
+    return s;
+  };
+  const segBucket = new Int32Array(nSeg);
+  let nBuckets = 0;
+  let cellX0 = Infinity, cellX1 = -Infinity, cellY0 = Infinity, cellY1 = -Infinity; // occupied cell range
+  for (let i = 0; i < nSeg; i++) {
+    const ix = Math.floor((sseg[i]![0] + sseg[i]![2]) / 2 / csz), iy = Math.floor((sseg[i]![1] + sseg[i]![3]) / 2 / csz);
+    if (ix < cellX0) cellX0 = ix; if (ix > cellX1) cellX1 = ix; if (iy < cellY0) cellY0 = iy; if (iy > cellY1) cellY1 = iy;
+    const k = hkey(ix, iy);
+    const sl = hslot(k);
+    if (hBucket[sl] === 0) { hKeys[sl] = k; hBucket[sl] = ++nBuckets; }
+    segBucket[i] = hBucket[sl]! - 1;
+  }
+  const bStart = new Int32Array(nBuckets + 1);
+  for (let i = 0; i < nSeg; i++) bStart[segBucket[i]! + 1]!++;
+  for (let b = 0; b < nBuckets; b++) bStart[b + 1]! += bStart[b]!;
+  const bList = new Int32Array(nSeg); // segment ids per bucket, ascending
+  {
+    const fill = bStart.slice(1);
+    for (let i = nSeg - 1; i >= 0; i--) bList[--fill[segBucket[i]!]!] = i;
+  }
   // Flat copy for the hot scan below: sizeDist is the single most-queried function on large
   // models (a query per base-grid cell, per candidate circumcentre per refinement iteration), and
   // tuple-array destructuring plus an unconditional Math.hypot per segment dominated whole-model
@@ -1484,40 +1556,109 @@ function gridCDT(
   // and for the rare segments fine enough to tighten the size bound, so results are unchanged.
   const segF = new Float64Array(sseg.length * 5);
   for (let i = 0; i < sseg.length; i++) { const s = sseg[i]!; const o = i * 5; segF[o] = s[0]; segF[o + 1] = s[1]; segF[o + 2] = s[2]; segF[o + 3] = s[3]; segF[o + 4] = s[4]; }
+  // Two accelerations of the scan, neither of which changes what a query answers:
+  //  - Buckets with many segments (a fine rail crossing a coarse cell) are cut into GROUPS of
+  //    consecutive segments, each with its bounding box and shortest grading length. A group is
+  //    skipped when even its box is farther than the nearest segment found so far AND too far to
+  //    lower the size (boundary segments are consecutive along the loop, so a group is compact).
+  //    The bounds carry a 1e-9 relative margin against rounding; segments are still visited in
+  //    the same order, so the same segment wins every tie.
+  //  - The 25 cell lookups of a query read a dense table of bucket ids over the occupied cell
+  //    range (built on the first query, same cell -> bucket mapping as the hash), instead of
+  //    hashing 25 keys; cells outside that range still go through the hash.
+  const GROUP = 8, GROUP_MIN = 5;
+  const gStart = new Int32Array(nBuckets + 1);
+  for (let b = 0; b < nBuckets; b++) {
+    const L = bStart[b + 1]! - bStart[b]!;
+    gStart[b + 1] = gStart[b]! + (L >= GROUP_MIN ? Math.ceil(L / GROUP) : 0);
+  }
+  const gBox = new Float64Array(gStart[nBuckets]! * 5); // x0, y0, x1, y1, shortest grading length
+  for (let b = 0; b < nBuckets; b++) {
+    for (let g = gStart[b]!, k0 = bStart[b]!; g < gStart[b + 1]!; g++, k0 += GROUP) {
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity, lnMin = Infinity;
+      for (let k = k0, ke = Math.min(k0 + GROUP, bStart[b + 1]!); k < ke; k++) {
+        const o = bList[k]! * 5;
+        const ax = segF[o]!, ay = segF[o + 1]!, bx = segF[o + 2]!, by = segF[o + 3]!, ln = segF[o + 4]!;
+        if (ax < x0) x0 = ax; if (bx < x0) x0 = bx; if (ax > x1) x1 = ax; if (bx > x1) x1 = bx;
+        if (ay < y0) y0 = ay; if (by < y0) y0 = by; if (ay > y1) y1 = ay; if (by > y1) y1 = by;
+        if (ln < lnMin) lnMin = ln;
+      }
+      const o = g * 5;
+      gBox[o] = x0; gBox[o + 1] = y0; gBox[o + 2] = x1; gBox[o + 3] = y1; gBox[o + 4] = lnMin;
+    }
+  }
+  const SAFE = 1 - 1e-9;
+  // Dense cell -> bucket table over the occupied cells padded by the scan radius.
+  const DENSE_MAX = 1 << 22;
+  let dense: Int32Array | null = null, denseTried = false;
+  const dX0 = cellX0 - 2, dY0 = cellY0 - 2, dW = cellX1 - cellX0 + 5, dH = cellY1 - cellY0 + 5;
+  const buildDense = (): void => {
+    denseTried = true;
+    if (!(dW > 0 && dH > 0 && dW * dH <= DENSE_MAX)) return; // empty, non-finite or too large
+    dense = new Int32Array(dW * dH);
+    for (let ix = 0; ix < dW; ix++) for (let iy = 0; iy < dH; iy++) dense[ix * dH + iy] = hBucket[hslot(hkey(dX0 + ix, dY0 + iy))]!;
+  };
   const floor = target / 40;
-  const sizeDist = (sx: number, sy: number): [number, number] => {
+  // Returns the size; the distance to the nearest boundary segment of the same query is left in
+  // `sdDist` (a second return value without allocating a pair per query).
+  let sdDist = Infinity;
+  const sizeDist = (sx: number, sy: number): number => {
     // Out-of-range query = a degenerate triangle's circumcenter blew up. Without this guard the
     // cell scan below never terminates: beyond 2^53, gx++ no longer changes gx, so even a FINITE
     // 1e300 circumcenter loops forever (ABC 00004166 fid=786) — Infinity likewise.
-    if (!(Math.abs(sx) < 1e12 && Math.abs(sy) < 1e12)) return [floor, Infinity];
+    if (!(Math.abs(sx) < 1e12 && Math.abs(sy) < 1e12)) { sdDist = Infinity; return floor; }
     // Size field = min of (a) the LOCAL curvature target — so a face whose curvature varies is
     // refined where it actually bends, not just at the patch midpoint — and (b) the boundary-graded
     // size, growing from each edge's own length outward. Capped at the face target, floored to bound.
     let size = Math.min(faceTarget(surface, targetEdge, chordTol, normalDev, sx / uSc, sy / vSc), sizeCap);
     let d2min = Infinity, dxMin = 0, dyMin = 0;
     const cx = Math.floor(sx / csz), cy = Math.floor(sy / csz);
+    if (!denseTried) buildDense();
+    const inDense = dense !== null && cx - 2 >= dX0 && cx + 2 < dX0 + dW && cy - 2 >= dY0 && cy + 2 < dY0 + dH;
     for (let gx = cx - 2; gx <= cx + 2; gx++) for (let gy = cy - 2; gy <= cy + 2; gy++) {
-      const arr = segHash.get(hkey(gx, gy)); if (!arr) continue;
-      for (let k = 0; k < arr.length; k++) {
-        const o = arr[k]! * 5;
-        const ax = segF[o]!, ay = segF[o + 1]!, ex = segF[o + 2]! - ax, ey = segF[o + 3]! - ay, ln = segF[o + 4]!;
-        const l2 = ex * ex + ey * ey;
-        let tt = l2 > 0 ? ((sx - ax) * ex + (sy - ay) * ey) / l2 : 0; tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
-        const dx = sx - (ax + tt * ex), dy = sy - (ay + tt * ey), d2 = dx * dx + dy * dy;
-        if (d2 < d2min) { d2min = d2; dxMin = dx; dyMin = dy; }
-        if (ln < size) { // s = ln + 0.45·d can only tighten when ln alone is under the bound
-          const lim = size - ln;
-          if (gGrow2 * d2 < lim * lim) { const s = ln + gGrow * Math.hypot(dx, dy); if (s < size) size = s; }
+      const bk = inDense ? dense![(gx - dX0) * dH + (gy - dY0)]! : hBucket[hslot(hkey(gx, gy))]!;
+      if (bk === 0) continue;
+      const kEnd = bStart[bk]!;
+      let k = bStart[bk - 1]!;
+      const g1 = gStart[bk]!;
+      let g = gStart[bk - 1]!;
+      const grouped = g1 > g;
+      while (k < kEnd) {
+        let ke = kEnd;
+        if (grouped) {
+          // one group of consecutive segments: skip it when its box rules out any effect
+          ke = k + GROUP < kEnd ? k + GROUP : kEnd;
+          const o = g * 5; g++;
+          const x0 = gBox[o]!, y0 = gBox[o + 1]!, x1 = gBox[o + 2]!, y1 = gBox[o + 3]!, lnMin = gBox[o + 4]!;
+          const bx = sx < x0 ? x0 - sx : sx > x1 ? sx - x1 : 0, by = sy < y0 ? y0 - sy : sy > y1 ? sy - y1 : 0;
+          const lb2 = (bx * bx + by * by) * SAFE;
+          if (lb2 > d2min) {
+            const lim = size - lnMin;
+            if (!(lnMin < size && gGrow2 * lb2 < lim * lim)) { k = ke; continue; }
+          }
+        }
+        for (; k < ke; k++) {
+          const o = bList[k]! * 5;
+          const ax = segF[o]!, ay = segF[o + 1]!, ex = segF[o + 2]! - ax, ey = segF[o + 3]! - ay, ln = segF[o + 4]!;
+          const l2 = ex * ex + ey * ey;
+          let tt = l2 > 0 ? ((sx - ax) * ex + (sy - ay) * ey) / l2 : 0; tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
+          const dx = sx - (ax + tt * ex), dy = sy - (ay + tt * ey), d2 = dx * dx + dy * dy;
+          if (d2 < d2min) { d2min = d2; dxMin = dx; dyMin = dy; }
+          if (ln < size) { // s = ln + 0.45·d can only tighten when ln alone is under the bound
+            const lim = size - ln;
+            if (gGrow2 * d2 < lim * lim) { const s = ln + gGrow * hypot2(dx, dy); if (s < size) size = s; }
+          }
         }
       }
     }
-    return [Math.max(floor, size), d2min === Infinity ? Infinity : Math.hypot(dxMin, dyMin)];
+    sdDist = d2min === Infinity ? Infinity : hypot2(dxMin, dyMin);
+    return Math.max(floor, size);
   };
   // Base interior: a uniform grid at the (coarse) face target. Refinement adds the fine detail.
   const interiorIdx: number[] = [];
   const tryAdd = (u: number, v: number): void => {
     if (!inRegion([u, v])) return;
-    const [sz, dist] = sizeDist(SX(u), SY(v));
+    const sz = sizeDist(SX(u), SY(v)), dist = sdDist;
     if (dist < 0.3 * sz) return; // hugs a boundary edge -> would make it un-enforceable
     interiorIdx.push(allP2.length); allP2.push([u, v]); allP3.push(surface.evaluate(u, v));
   };
@@ -1692,7 +1833,10 @@ function gridCDT(
     console.error(`@@CDTDUMP@@${JSON.stringify({ fid, outerIdx, holeIdx, cdtPts, p3: allP3, altOuter, altHoles, interiorIdx })}@@END@@`);
   }
   const cdtOut: CdtOut = { missing: 0 };
-  let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
+  // The refinement below re-triangulates after every round of inserts; the session lets each of
+  // those runs continue the previous one's point insertion instead of starting over.
+  const cdtSession = noRefine || ISO ? undefined : new CdtSession();
+  let tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut, cdtSession);
   // OUTCOME-VERIFIED DE-SLIT. Adopt the keyhole candidate only when the original loops
   // demonstrably fail: count boundary segments absent from the triangulation's edges (the exact
   // signature of a leaking face — the mate samples the same shared polyline and finds no twin),
@@ -1804,79 +1948,103 @@ function gridCDT(
     }
     return false;
   };
-  for (const p of cdtPts) dupSeen.add(dupKey(p[0], p[1]));
+  if (maxIter > 0) for (const p of cdtPts) dupSeen.add(dupKey(p[0], p[1])); // only the loop below reads it
   // Points never move during refinement (they are only appended), so a triangle that survives a
   // re-triangulation reaches the identical verdict every iteration — memoize the stable skips
   // (degenerate, small-enough, out-of-region, boundary-hugging, already-seen duplicate) so later
   // iterations pay one Set lookup instead of a sizeDist scan per surviving triangle.
   const memo = maxIter > 1; // a single-pass refinement has no later iteration to reuse verdicts
-  const skipTri = new Set<string>();
-  const triKey = (a: number, b: number, c: number): string => {
-    const lo = a < b ? (a < c ? a : c) : (b < c ? b : c);
-    const hi = a > b ? (a > c ? a : c) : (b > c ? b : c);
-    return `${lo},${a + b + c - lo - hi},${hi}`;
-  };
+  // (keyed by the sorted vertex triple — a set of integer triples, formerly of "a,b,c" strings)
+  const skipTri = new TripleSet();
+  const rgn: P2 = [0, 0]; // scratch point for the region tests (they only read it)
   for (let iter = 0; iter < maxIter && interiorIdx.length < cap; iter++) {
-    const fresh: [number, number, number, string][] = []; // (px, py, local size, tri key) — sizeDist carried to the dedup pass
-    for (const [a, b, c] of tris) {
-      let key = "";
-      if (memo) { key = triKey(a, b, c); if (iter > 0 && skipTri.has(key)) continue; }
+    // Proposals of this round: position, local size (sizeDist carried to the dedup pass) and the
+    // proposing triangle's sorted vertex triple.
+    const fX: number[] = [], fY: number[] = [], fS: number[] = [], fLo: number[] = [], fMid: number[] = [], fHi: number[] = [];
+    for (let ti = 0; ti < tris.length; ti++) {
+      const tr = tris[ti]!;
+      const a = tr[0], b = tr[1], c = tr[2];
+      let lo = 0, mid = 0, hi = 0;
+      if (memo) {
+        lo = a < b ? (a < c ? a : c) : (b < c ? b : c);
+        hi = a > b ? (a > c ? a : c) : (b > c ? b : c);
+        mid = a + b + c - lo - hi;
+        if (iter > 0 && skipTri.has(lo, mid, hi)) continue;
+      }
       const A = cdtPts[a]!, B = cdtPts[b]!, C = cdtPts[c]!;
       const d = 2 * (A[0] * (B[1] - C[1]) + B[0] * (C[1] - A[1]) + C[0] * (A[1] - B[1]));
-      if (Math.abs(d) < 1e-12) { if (memo) skipTri.add(key); continue; }
+      if (Math.abs(d) < 1e-12) { if (memo) skipTri.add(lo, mid, hi); continue; }
       const a2 = A[0] * A[0] + A[1] * A[1], b2 = B[0] * B[0] + B[1] * B[1], c2 = C[0] * C[0] + C[1] * C[1];
       let px = (a2 * (B[1] - C[1]) + b2 * (C[1] - A[1]) + c2 * (A[1] - B[1])) / d;
       let py = (a2 * (C[0] - B[0]) + b2 * (A[0] - C[0]) + c2 * (B[0] - A[0])) / d;
       // Degenerate (near-zero-area) triangle: the circumcenter blows up. Beyond ~2^53 the integer
       // cell loops in sizeDist/dupHas cannot terminate (x+1 === x), so bound the magnitude — 1e12
       // in metric-scaled units is far beyond any real face.
-      if (!(Math.abs(px) < 1e12 && Math.abs(py) < 1e12)) { if (memo) skipTri.add(key); continue; }
-      const r = Math.hypot(px - A[0], py - A[1]);
+      if (!(Math.abs(px) < 1e12 && Math.abs(py) < 1e12)) { if (memo) skipTri.add(lo, mid, hi); continue; }
+      const r = hypot2(px - A[0], py - A[1]);
       // sizeDist never returns below `floor`, so a circumradius under 0.65·floor can never refine —
       // skip without paying the boundary-segment scan at all.
-      if (r <= 0.65 * floor) { if (memo) skipTri.add(key); continue; }
-      let [sz, dist] = sizeDist(px, py);
+      if (r <= 0.65 * floor) { if (memo) skipTri.add(lo, mid, hi); continue; }
+      let sz = sizeDist(px, py), dist = sdDist;
       // Refine where the circumradius exceeds 0.65× the local size: fills the graded band near a
       // fine boundary (fillet-into-chamfer), follows intra-face curvature the base grid under-sampled,
       // and improves Delaunay quality generally. The remesh later coarsens over-dense flat regions.
-      if (r <= sz * 0.65) { if (memo) skipTri.add(key); continue; }
+      if (r <= sz * 0.65) { if (memo) skipTri.add(lo, mid, hi); continue; }
       let u = px / uSc, v = py / vSc;
-      if (!inRegion([u, v])) {
+      rgn[0] = u; rgn[1] = v;
+      if (!inRegion(rgn)) {
         px = (A[0] + B[0] + C[0]) / 3; py = (A[1] + B[1] + C[1]) / 3; u = px / uSc; v = py / vSc;
-        if (!inRegion([u, v])) { if (memo) skipTri.add(key); continue; }
-        [sz, dist] = sizeDist(px, py); // moved to the centroid — re-query there
+        rgn[0] = u; rgn[1] = v;
+        if (!inRegion(rgn)) { if (memo) skipTri.add(lo, mid, hi); continue; }
+        sz = sizeDist(px, py); dist = sdDist; // moved to the centroid — re-query there
       }
       // A centre exactly half a size from the boundary is kept: with no stretch, the centres next to a
       // column-aligned boundary land there, and losing them on a float tie left the boundary cells'
       // (full column, full row) diagonal, which adds both sagittas where both directions curve (ABC
       // 00026167 #52: 1.36x the chord tolerance). It also stops identical faces meshing differently
       // (roundedCube's 12 fillets: 478-490 triangles, now 496 each).
-      if (dist < 0.5 * sz * (1 - 1e-9)) { if (memo) skipTri.add(key); continue; }
-      fresh.push([px, py, sz, key]);
+      if (dist < 0.5 * sz * (1 - 1e-9)) { if (memo) skipTri.add(lo, mid, hi); continue; }
+      fX.push(px); fY.push(py); fS.push(sz);
+      if (memo) { fLo.push(lo); fMid.push(mid); fHi.push(hi); }
     }
-    if (!fresh.length) break;
+    if (!fX.length) break;
     // Dedup new points that fall within ~half a local size of each other (avoid over-insertion).
-    const acc = new Map<number, [number, number][]>();
+    // Accepted points of this round, chained per cell hash in a flat table (the test below only
+    // asks whether ANY point of a cell is too close, so the order within a cell is immaterial).
+    let acap = 64;
+    while (acap < fX.length * 2) acap *= 2;
+    const amask = acap - 1;
+    const aKey = new Int32Array(acap), aHead = new Int32Array(acap); // head = point + 1; 0 = empty slot
+    const aNext = new Int32Array(fX.length), aX = new Float64Array(fX.length), aY = new Float64Array(fX.length);
+    let aN = 0;
+    const aslot = (k: number): number => {
+      let sl = (Math.imul(k, 0x9e3779b1) >>> 7) & amask;
+      while (aHead[sl] !== 0 && aKey[sl] !== k) sl = (sl + 1) & amask;
+      return sl;
+    };
     let added = false;
-    for (const [px, py, sz, key] of fresh) {
+    for (let fi = 0; fi < fX.length; fi++) {
+      const px = fX[fi]!, py = fY[fi]!, sz = fS[fi]!;
       // dupSeen only ever grows, so a duplicate-rejected proposal is rejected forever — the
       // proposing triangle (if it survives) need never be reconsidered. An acc-proximity
       // rejection below is NOT stable (acc resets each iteration) and stays unmemoized.
-      if (dupHas(px, py)) { if (memo) skipTri.add(key); continue; }
+      if (dupHas(px, py)) { if (memo) skipTri.add(fLo[fi]!, fMid[fi]!, fHi[fi]!); continue; }
       const hx = Math.floor(px / sz), hy = Math.floor(py / sz);
       let ok = true;
       for (let gx = hx - 1; gx <= hx + 1 && ok; gx++) for (let gy = hy - 1; gy <= hy + 1 && ok; gy++) {
-        for (const [qx, qy] of acc.get(hkey(gx, gy)) ?? []) if ((px - qx) ** 2 + (py - qy) ** 2 < (0.5 * sz) ** 2) ok = false;
+        for (let q = aHead[aslot(hkey(gx, gy))]!; q !== 0; q = aNext[q - 1]!) {
+          if ((px - aX[q - 1]!) ** 2 + (py - aY[q - 1]!) ** 2 < (0.5 * sz) ** 2) ok = false;
+        }
       }
       if (!ok) continue;
-      (acc.get(hkey(hx, hy)) ?? acc.set(hkey(hx, hy), []).get(hkey(hx, hy))!).push([px, py]);
+      { const hk = hkey(hx, hy); const sl = aslot(hk); aKey[sl] = hk; aX[aN] = px; aY[aN] = py; aNext[aN] = aHead[sl]!; aHead[sl] = ++aN; }
       dupSeen.add(dupKey(px, py));
       interiorIdx.push(allP2.length); allP2.push([px / uSc, py / vSc]); allP3.push(surface.evaluate(px / uSc, py / vSc)); cdtPts.push([px, py]);
       added = true;
     }
     if (!added) break;
     const prevTris = tris;
-    tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut);
+    tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], interiorIdx, cdtOut, cdtSession);
     if (cdtOut.missing > prevMissing) {
       if (DBG) console.error(`[grid] fid=${fid} refinement iter ${iter} lost ${cdtOut.missing - prevMissing} constraint(s) — rolled back`);
       tris = prevTris;
@@ -1913,7 +2081,10 @@ function gridCDT(
   const minBLn = sseg.reduce((m, s) => Math.min(m, s[4] > 1e-9 ? s[4] : m), Infinity);
   if (!ISO && !noRefine && prevMissing === 0 && !prevRescue && interiorIdx.length > 0
     && nBoundaryPts <= 8000 && minBLn < 0.35 * target && uSc === uScale && vSc === vScale) {
-    const interior = new Set(interiorIdx);
+    // (points are never added during the sweeps, so one flag array per role serves all of them)
+    const isInterior = new Uint8Array(cdtPts.length);
+    for (const v of interiorIdx) isInterior[v] = 1;
+    const referenced = new Uint8Array(cdtPts.length);
     for (let sweep = 0; sweep < 6; sweep++) {
       const nP = cdtPts.length;
       const accX = new Float64Array(nP), accY = new Float64Array(nP), accW = new Float64Array(nP);
@@ -1937,9 +2108,9 @@ function gridCDT(
           );
           if ((cx2 - gx) ** 2 + (cy2 - gy) ** 2 <= 4 * e2) { px = cx2; py = cy2; }
         }
-        if (interior.has(a)) { accX[a] += ar * px; accY[a] += ar * py; accW[a] += ar; }
-        if (interior.has(b)) { accX[b] += ar * px; accY[b] += ar * py; accW[b] += ar; }
-        if (interior.has(c)) { accX[c] += ar * px; accY[c] += ar * py; accW[c] += ar; }
+        if (isInterior[a]) { accX[a]! += ar * px; accY[a]! += ar * py; accW[a]! += ar; }
+        if (isInterior[b]) { accX[b]! += ar * px; accY[b]! += ar * py; accW[b]! += ar; }
+        if (isInterior[c]) { accX[c]! += ar * px; accY[c]! += ar * py; accW[c]! += ar; }
       }
       const movedIdx: number[] = [];
       const oldP2: P2[] = [], oldP3: Vec3[] = [], oldC: P2[] = [];
@@ -1948,7 +2119,7 @@ function gridCDT(
         const px = cdtPts[v]![0] + 0.8 * (accX[v]! / accW[v]! - cdtPts[v]![0]);
         const py = cdtPts[v]![1] + 0.8 * (accY[v]! / accW[v]! - cdtPts[v]![1]);
         if (!Number.isFinite(px) || !Number.isFinite(py)) continue;
-        const [sz, dist] = sizeDist(px, py);
+        const sz = sizeDist(px, py), dist = sdDist;
         if (dist < 0.3 * sz) continue;
         if ((px - cdtPts[v]![0]) ** 2 + (py - cdtPts[v]![1]) ** 2 < (0.02 * sz) ** 2) continue;
         const u = px / uSc, vv = py / vSc;
@@ -1959,9 +2130,9 @@ function gridCDT(
       if (movedIdx.length === 0) break;
       // Re-seat only interior points the kept triangulation references: a refinement rollback may
       // have orphaned inserts whose re-inclusion would reproduce the very constraint loss it undid.
-      const referenced = new Set<number>();
-      for (const t of tris) { referenced.add(t[0]); referenced.add(t[1]); referenced.add(t[2]); }
-      const liveInterior = interiorIdx.filter((v) => referenced.has(v));
+      referenced.fill(0);
+      for (const t of tris) { referenced[t[0]] = 1; referenced[t[1]] = 1; referenced[t[2]] = 1; }
+      const liveInterior = interiorIdx.filter((v) => referenced[v] === 1);
       const prevTris = tris;
       tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], liveInterior, cdtOut);
       if (cdtOut.missing > prevMissing) {
@@ -2004,7 +2175,7 @@ function gridCDT(
       x: X, y: Y, p: P, tris, nFrozen: nLoopPts,
       isConstrained: (a, b) => con.has(a < b ? a * K + b : b * K + a),
       evalAt: (x, y) => surface.evaluate(x / uSc, y / vSc),
-      sizeAt: (x, y) => sizeDist(x, y)[0],
+      sizeAt: (x, y) => sizeDist(x, y),
       // The plane's x is u and y is v: a ruled face slides along its flat parameter.
       ...(ruledC === 0 ? { slideAxis: 1 as const } : ruledC === 1 ? { slideAxis: 0 as const } : {}),
     });
@@ -2028,23 +2199,41 @@ function gridCDT(
   // exactly when the diagonal follows the ruling, so the flips converge to kernel-style rows; on a
   // plane every choice ties (no-op); constraint/boundary edges are never flipped, so the shared
   // edge samples — and watertightness — are untouched.
-  const triNormal = (a: number, b: number, c: number): [number, number, number, number] => {
-    const A = allP3[a]!, B = allP3[b]!, C = allP3[c]!;
-    const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2];
-    const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
-    const n: Vec3 = [uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx];
-    const l = Math.hypot(n[0], n[1], n[2]);
-    const s = l || 1;
-    return [n[0] / s, n[1] / s, n[2] / s, l];
-  };
-  const area2s = (a: number, b: number, c: number): number => {
-    const A = cdtPts[a]!, B = cdtPts[b]!, C = cdtPts[c]!;
-    return (B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]);
-  };
+  // The passes below work on flat copies: triangles as one Int32Array, the scaled plane and the
+  // 3D points as coordinate arrays, and the edge incidence of edge-topo.ts in place of a Map with
+  // an array of pairs per edge (rebuilt every pass, it was the largest allocation of a face).
   const NPTS = cdtPts.length;
-  const ekey = (i: number, j: number): number => (i < j ? i * NPTS + j : j * NPTS + i);
-  const constrained = new Set<number>();
-  for (const idx of [outerIdx, ...holeIdx]) for (let i = 0; i < idx.length; i++) constrained.add(ekey(idx[i]!, idx[(i + 1) % idx.length]!));
+  const nT = tris.length;
+  const TF = new Int32Array(nT * 3);
+  for (let t = 0; t < nT; t++) { const tr = tris[t]!; TF[t * 3] = tr[0]; TF[t * 3 + 1] = tr[1]; TF[t * 3 + 2] = tr[2]; }
+  const CX = new Float64Array(NPTS), CY = new Float64Array(NPTS), Q3 = new Float64Array(NPTS * 3);
+  for (let i = 0; i < NPTS; i++) {
+    const q = cdtPts[i]!, p3 = allP3[i]!;
+    CX[i] = q[0]; CY[i] = q[1];
+    Q3[i * 3] = p3[0]; Q3[i * 3 + 1] = p3[1]; Q3[i * 3 + 2] = p3[2];
+  }
+  // Unit normal and (twice the) area of 3D triangle (a,b,c), written to NB[o..o+3].
+  const NB = new Float64Array(48);
+  const triNormal = (a: number, b: number, c: number, o: number): void => {
+    const ia = a * 3, ib = b * 3, ic = c * 3;
+    const ux = Q3[ib]! - Q3[ia]!, uy = Q3[ib + 1]! - Q3[ia + 1]!, uz = Q3[ib + 2]! - Q3[ia + 2]!;
+    const vx = Q3[ic]! - Q3[ia]!, vy = Q3[ic + 1]! - Q3[ia + 1]!, vz = Q3[ic + 2]! - Q3[ia + 2]!;
+    const n0 = uy * vz - uz * vy, n1 = uz * vx - ux * vz, n2 = ux * vy - uy * vx;
+    const l = hypot3(n0, n1, n2);
+    const s = l || 1;
+    NB[o] = n0 / s; NB[o + 1] = n1 / s; NB[o + 2] = n2 / s; NB[o + 3] = l;
+  };
+  const area2s = (a: number, b: number, c: number): number =>
+    (CX[b]! - CX[a]!) * (CY[c]! - CY[a]!) - (CY[b]! - CY[a]!) * (CX[c]! - CX[a]!);
+  // SHAPE GUARD measure (see below): longest edge squared over twice the area, in the scaled plane.
+  const asp2 = (i: number, j: number, l: number): number => {
+    const ax = CX[i]!, ay = CY[i]!, bx = CX[j]!, by = CY[j]!, cx = CX[l]!, cy = CY[l]!;
+    const e1 = (bx - ax) ** 2 + (by - ay) ** 2;
+    const e2 = (cx - bx) ** 2 + (cy - by) ** 2;
+    const e3 = (ax - cx) ** 2 + (ay - cy) ** 2;
+    const ar = Math.abs((bx - ax) * (cy - ay) - (by - ay) * (cx - ax));
+    return ar > 1e-30 ? Math.max(e1, e2, e3) / ar : 1e9;
+  };
   // Boundary vertices are pushed before any interior point, so "is boundary" is an index compare.
   // A flipped diagonal may not SHORTCUT between two nearby vertices of the same boundary ring: a
   // face that abuts (or mirrors) a twin along that boundary — a periodic seam side, a symmetric
@@ -2068,55 +2257,76 @@ function gridCDT(
     const d = Math.abs(ringPos[i]! - ringPos[j]!);
     return Math.min(d, L - d) <= 4;
   };
+  const dirty = new Uint8Array(nT);
   for (let pass = 0; pass < (ISO ? 0 : 6); pass++) {
-    const use = new Map<number, [number, number][]>(); // edge -> [triIndex, oppositeVertex]
-    for (let ti = 0; ti < tris.length; ti++) {
-      const t = tris[ti]!;
-      for (let e = 0; e < 3; e++) {
-        const k = ekey(t[e]!, t[(e + 1) % 3]!);
-        (use.get(k) ?? use.set(k, []).get(k)!).push([ti, t[(e + 2) % 3]!]);
-      }
+    // Edge incidence of the triangulation as it stands at the start of the pass. It is NOT kept
+    // up to date while the pass flips: a flipped triangle is marked dirty and never read again
+    // in this pass, exactly as the per-pass edge Map was used.
+    const topo = buildEdgeTopo(TF, nT, NPTS);
+    const { eid, cnt, t0: eT0, t1: eT1 } = topo;
+    const conE = new Uint8Array(topo.nE); // constraint (boundary) edges are never flipped
+    for (const idx of [outerIdx, ...holeIdx]) for (let i = 0; i < idx.length; i++) {
+      const id = topo.find(idx[i]!, idx[(i + 1) % idx.length]!);
+      if (id >= 0) conE[id] = 1;
     }
-    const dirty = new Set<number>();
+    // The triangle across edge (x,y) from `self`, when that edge has exactly two triangles and
+    // the other one is still clean: its normal goes to NB[o..], and true is returned.
+    const nbr = (x: number, y: number, self: number, o: number): boolean => {
+      const id = topo.find(x, y);
+      if (id < 0 || cnt[id] !== 2) return false;
+      const other = eT0[id] === self ? eT1[id]! : eT0[id]!;
+      if (dirty[other]) return false;
+      triNormal(TF[other * 3]!, TF[other * 3 + 1]!, TF[other * 3 + 2]!, o);
+      return true;
+    };
+    const dotN = (has: boolean, p: number, q: number): number =>
+      has ? NB[p]! * NB[q]! + NB[p + 1]! * NB[q + 1]! + NB[p + 2]! * NB[q + 2]! : 0;
+    dirty.fill(0);
+    const seenE = new Uint8Array(topo.nE);
     let flips = 0;
-    for (const [k, ts] of use) {
-      if (ts.length !== 2 || constrained.has(k)) continue;
-      const [[t1, c1], [t2, c2]] = ts as [[number, number], [number, number]];
-      if (dirty.has(t1) || dirty.has(t2)) continue;
+    // Edges in order of first appearance over the triangle list (the Map's iteration order).
+    for (let h = 0; h < nT * 3; h++) {
+      const k = eid[h]!;
+      if (seenE[k]) continue;
+      seenE[k] = 1;
+      if (cnt[k] !== 2 || conE[k]) continue;
+      const t1 = eT0[k]!, t2 = eT1[k]!;
+      if (dirty[t1] || dirty[t2]) continue;
+      // The edge's half-edge in each triangle (the two lowest, should one triangle carry both),
+      // and the vertex opposite to it.
+      const e1 = h - t1 * 3;
+      let e2 = eid[t2 * 3] === k ? 0 : eid[t2 * 3 + 1] === k ? 1 : 2;
+      if (t2 === t1) e2 = e1 === 0 && eid[t2 * 3 + 1] === k ? 1 : 2;
+      const c1 = TF[t1 * 3 + (e1 + 2) % 3]!, c2 = TF[t2 * 3 + (e2 + 2) % 3]!;
       if (boundaryShortcut(c1, c2)) continue;
-      let a = Math.floor(k / NPTS), b = k % NPTS;
+      const p = TF[h]!, q = TF[t1 * 3 + (e1 + 1) % 3]!;
+      let a = p < q ? p : q, b = p < q ? q : p;
       // The key sorts the edge's endpoints; recover the direction it runs in t1 (c1 sits to the
       // LEFT of t1's directed edge, since triangles are CCW) so the flipped pair stays CCW.
       if (area2s(a, b, c1) < 0) { const tmp = a; a = b; b = tmp; }
+      const o1 = t1 * 3, o2 = t2 * 3;
       // Flip (a,b) -> (c1,c2). Both new triangles must stay CCW with non-vanishing area in the
       // scaled plane (else the quad is non-convex and the flip would fold it).
-      const eps = 1e-9 * (Math.abs(area2s(...tris[t1]!)) + Math.abs(area2s(...tris[t2]!)));
+      const eps = 1e-9 * (Math.abs(area2s(TF[o1]!, TF[o1 + 1]!, TF[o1 + 2]!)) + Math.abs(area2s(TF[o2]!, TF[o2 + 1]!, TF[o2 + 2]!)));
       const nA1 = area2s(c1, a, c2), nA2 = area2s(c2, b, c1);
       if (nA1 <= eps || nA2 <= eps) continue;
-      const o1 = triNormal(...tris[t1]!), o2 = triNormal(...tris[t2]!);
-      const f1 = triNormal(c1, a, c2), f2 = triNormal(c2, b, c1);
+      // normals: o1 -> NB[0], o2 -> NB[4], f1 -> NB[8], f2 -> NB[12]
+      triNormal(TF[o1]!, TF[o1 + 1]!, TF[o1 + 2]!, 0); triNormal(TF[o2]!, TF[o2 + 1]!, TF[o2 + 2]!, 4);
+      triNormal(c1, a, c2, 8); triNormal(c2, b, c1, 12);
       // Fold guards: a quad can be convex in the 2D plane yet FOLD in 3D near a degenerate or
       // pinched patch (zero-area triangles make the dihedral criterion pure noise, and a folded
       // pair overlaps its neighbours into non-manifold edges after welding). Require the flipped
       // triangles to be non-degenerate in 3D and their normals to stay on the originals' side.
-      if (f1[3]! < 1e-6 * (o1[3]! + o2[3]!) || f2[3]! < 1e-6 * (o1[3]! + o2[3]!)) continue;
-      if (f1[0] * o1[0] + f1[1] * o1[1] + f1[2] * o1[2] <= 0 || f2[0] * o2[0] + f2[1] * o2[1] + f2[2] * o2[2] <= 0) continue;
-      if (f1[0] * o2[0] + f1[1] * o2[1] + f1[2] * o2[2] <= 0 || f2[0] * o1[0] + f2[1] * o1[1] + f2[2] * o1[2] <= 0) continue;
+      if (NB[11]! < 1e-6 * (NB[3]! + NB[7]!) || NB[15]! < 1e-6 * (NB[3]! + NB[7]!)) continue;
+      if (NB[8]! * NB[0]! + NB[9]! * NB[1]! + NB[10]! * NB[2]! <= 0 || NB[12]! * NB[4]! + NB[13]! * NB[5]! + NB[14]! * NB[6]! <= 0) continue;
+      if (NB[8]! * NB[4]! + NB[9]! * NB[5]! + NB[10]! * NB[6]! <= 0 || NB[12]! * NB[0]! + NB[13]! * NB[1]! + NB[14]! * NB[2]! <= 0) continue;
       // SHAPE GUARD: a flip may choose the smoother diagonal of a quad, but it may not butcher
       // triangle quality for it. The greedy normal criterion alone happily un-Delaunays a gently
       // curved patch into needle fans — the normal gain is microscopic (dihedrals there are near
       // zero) while the 2D aspect explodes 1000-fold, which reads as sliver stripes in a slicer's
       // wireframe. Allow a flip only while the flipped pair's worst aspect (in the scaled CDT
       // plane, where near-unit is ideal) stays below 4, or does not worsen an already-bad quad.
-      const asp2 = (i: number, j: number, l: number): number => {
-        const A = cdtPts[i]!, B = cdtPts[j]!, C = cdtPts[l]!;
-        const e1 = (B[0] - A[0]) ** 2 + (B[1] - A[1]) ** 2;
-        const e2 = (C[0] - B[0]) ** 2 + (C[1] - B[1]) ** 2;
-        const e3 = (A[0] - C[0]) ** 2 + (A[1] - C[1]) ** 2;
-        const ar = Math.abs((B[0] - A[0]) * (C[1] - A[1]) - (B[1] - A[1]) * (C[0] - A[0]));
-        return ar > 1e-30 ? Math.max(e1, e2, e3) / ar : 1e9;
-      };
-      const curAsp = Math.max(asp2(...tris[t1]!), asp2(...tris[t2]!));
+      const curAsp = Math.max(asp2(TF[o1]!, TF[o1 + 1]!, TF[o1 + 2]!), asp2(TF[o2]!, TF[o2 + 1]!, TF[o2 + 2]!));
       const flpAsp = Math.max(asp2(c1, a, c2), asp2(c2, b, c1));
       if (flpAsp > Math.max(4, curAsp)) continue;
       // Score the WHOLE 1-ring, not just the flipped pair against each other: each configuration's
@@ -2124,35 +2334,29 @@ function gridCDT(
       // edges (whose neighbour triangles stay fixed). A pair-only criterion happily makes two
       // triangles coplanar while shearing against the rail neighbours — adjacent quads then flip
       // inconsistently and the fillet silhouette saw-tooths.
-      const nbr = (x: number, y: number, self: number): [number, number, number, number] | null => {
-        const arr = use.get(ekey(x, y));
-        if (!arr || arr.length !== 2) return null;
-        const other = arr[0]![0] === self ? arr[1]![0] : arr[0]![0];
-        if (dirty.has(other)) return null;
-        return triNormal(...tris[other]!);
-      };
-      const dotN = (p: [number, number, number, number] | null, q: [number, number, number, number]): number =>
-        p ? p[0] * q[0] + p[1] * q[1] + p[2] * q[2] : 0;
-      const nAC1 = nbr(a, c1, t1), nC1B = nbr(c1, b, t1), nBC2 = nbr(b, c2, t2), nC2A = nbr(c2, a, t2);
-      const cur = dotN(o1, o2) + dotN(nAC1, o1) + dotN(nC1B, o1) + dotN(nBC2, o2) + dotN(nC2A, o2);
-      const flp = dotN(f1, f2) + dotN(nAC1, f1) + dotN(nC1B, f2) + dotN(nBC2, f2) + dotN(nC2A, f1);
+      // neighbours: across (a,c1) -> NB[16], (c1,b) -> NB[20], (b,c2) -> NB[24], (c2,a) -> NB[28]
+      const hAC1 = nbr(a, c1, t1, 16), hC1B = nbr(c1, b, t1, 20), hBC2 = nbr(b, c2, t2, 24), hC2A = nbr(c2, a, t2, 28);
+      const cur = dotN(true, 0, 4) + dotN(hAC1, 16, 0) + dotN(hC1B, 20, 0) + dotN(hBC2, 24, 4) + dotN(hC2A, 28, 4);
+      const flp = dotN(true, 8, 12) + dotN(hAC1, 16, 8) + dotN(hC1B, 20, 12) + dotN(hBC2, 24, 12) + dotN(hC2A, 28, 8);
       if (flp <= cur + 1e-9) continue;
-      tris[t1] = [c1, a, c2]; tris[t2] = [c2, b, c1];
-      dirty.add(t1); dirty.add(t2); flips++;
+      TF[o1] = c1; TF[o1 + 1] = a; TF[o1 + 2] = c2;
+      TF[o2] = c2; TF[o2 + 1] = b; TF[o2 + 2] = c1;
+      dirty[t1] = 1; dirty[t2] = 1; flips++;
     }
     if (!flips) break;
   }
-  if (DBG) console.error(`[grid] fid=${fid} final tris=${tris.length} pts=${cdtPts.length}`);
+  if (DBG) console.error(`[grid] fid=${fid} final tris=${nT} pts=${cdtPts.length}`);
   // Every vertex carries its (u,v) — orient by the surface normal at the triangle's uv centroid
   // instead of inverse-mapping the 3D centroid (a Newton solve per triangle on B-splines). The
   // pcurves are seam-unwrapped into one continuous chart, so averaging u/v across a triangle is
   // safe; evaluate/normal wrap periodic coordinates themselves.
-  for (const [a, b, c] of tris) {
+  for (let t = 0; t < nT; t++) {
+    const a = TF[t * 3]!, b = TF[t * 3 + 1]!, c = TF[t * 3 + 2]!;
     const A2 = allP2[a]!, B2 = allP2[b]!, C2 = allP2[c]!;
     const nrm = surface.normal((A2[0] + B2[0] + C2[0]) / 3, (A2[1] + B2[1] + C2[1]) / 3);
     emitTri(verts, faceIds, allP3[a]!, allP3[b]!, allP3[c]!, fid, surface, sign, nrm);
   }
-  return tris.length > 0;
+  return nT > 0;
 }
 
 interface RailEdge { id: number; fwd: boolean; n: number }
@@ -6603,22 +6807,25 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     // stay below half of that or it would merge neighbouring nodes of a fine open rim.
     const z = zipSlivers(mesh, 0.05, ISO ? Math.min(1e-2, 0.5 * ISO.hMin) : 1e-2);
     tick(stitchQ);
-    const keptFaceIds: number[] = [];
-    for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) keptFaceIds.push(faceIds[t]!);
+    let keptFaceIds = faceIds;
+    if (z.keep) {
+      keptFaceIds = [];
+      for (let t = 0; t < faceIds.length; t++) if (z.keep[t]) keptFaceIds.push(faceIds[t]!);
+    }
     // T-junction crack repair — skipped for open-shell surface bodies, whose boundary is open by
     // design (splitting their rims against each other would only churn).
     const tj = solid.open || (DBG && process.env.MESHSTEP_NOZIP)
-      ? { indices: z.indices, faceOf: keptFaceIds }
-      : zipTJunctions(z.positions, z.indices, keptFaceIds, 0.02);
+      ? { indices: z.indices, faceOf: keptFaceIds, topo: z.topo }
+      : zipTJunctions(z.positions, z.indices, keptFaceIds, 0.02, z.topo);
     tick(stitchQ);
     const fill = fillMicroHoles(z.positions, tj.indices, tj.faceOf, 0.05,
-      solid.open ? undefined : { edge: targetEdge, dev: 0.75 * chordTol });
-    for (const x of z.positions) positions.push(x);
-    for (const ix of tj.indices) indices.push(ix + voff);
-    for (const ix of fill.indices) indices.push(ix + voff);
+      solid.open ? undefined : { edge: targetEdge, dev: 0.75 * chordTol }, tj.topo);
+    { const zp = z.positions; for (let i = 0; i < zp.length; i++) positions.push(zp[i]!); }
+    { const ti = tj.indices; for (let i = 0; i < ti.length; i++) indices.push(ti[i]! + voff); }
+    for (let i = 0; i < fill.indices.length; i++) indices.push(fill.indices[i]! + voff);
     voff += z.positions.length / 3;
-    for (const f of tj.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
-    for (const f of fill.faceOf) { faceOfTri.push(f); solidOfTri.push(solid.id); }
+    for (let i = 0; i < tj.faceOf.length; i++) { faceOfTri.push(tj.faceOf[i]!); solidOfTri.push(solid.id); }
+    for (let i = 0; i < fill.faceOf.length; i++) { faceOfTri.push(fill.faceOf[i]!); solidOfTri.push(solid.id); }
     tick(stitchQ);
   }
 
@@ -6677,9 +6884,9 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   }
 
   return {
-    mesh: { positions: Float64Array.from(positions), indices: Uint32Array.from(indices) },
-    faceOfTri: Uint32Array.from(faceOfTri),
-    solidOfTri: Uint32Array.from(solidOfTri),
+    mesh: { positions: new Float64Array(positions), indices: new Uint32Array(indices) },
+    faceOfTri: new Uint32Array(faceOfTri),
+    solidOfTri: new Uint32Array(solidOfTri),
     openSolids: brep.solids.filter((s) => s.open).map((s) => s.id),
     stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped, ...(facesDegenerate ? { degenerate: facesDegenerate } : {}) },
     warnings: takeWarnings(),
@@ -6698,28 +6905,33 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
  * EDGE_CURVEs sampled at non-matching positions, so we match vertex-to-nearest-vertex rather than
  * edge-to-edge. Triangles that collapse to a repeated vertex are dropped.
  */
-function zipSlivers(mesh: IndexedMesh, tol: number, capFloor = 1e-2): { positions: Float64Array; indices: Uint32Array; keep: boolean[] } {
+function zipSlivers(mesh: IndexedMesh, tol: number, capFloor = 1e-2): { positions: Float64Array; indices: Uint32Array; keep: Uint8Array | null; topo: EdgeTopo | null } {
   const I = mesh.indices, P = mesh.positions, nv = P.length / 3, nt = I.length / 3;
-  const keepAll = (): boolean[] => { const k = new Array(nt); for (let t = 0; t < nt; t++) k[t] = true; return k; };
-  const KEY = 2 ** 26;
-  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
-  const use = new Map<number, number>();
-  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) { const k = ek(I[i + e]!, I[i + (e + 1) % 3]!); use.set(k, (use.get(k) ?? 0) + 1); }
-  const openV = new Set<number>();
+  // Edge use-counts via the hash-free incidence (edge-topo.ts). A sound body has no open edge at
+  // all: that is decided here in one sweep, and the incidence is handed on to the next two
+  // passes, which used to rebuild the same per-edge Map each.
+  const topo = buildEdgeTopo(I, nt, nv);
+  const { eid, cnt } = topo;
+  let anyOpen = false;
+  for (let e = 0; e < topo.nE; e++) if (cnt[e] === 1) { anyOpen = true; break; }
+  if (!anyOpen) return { positions: P, indices: I, keep: null, topo };
+  // Open vertices in order of first appearance (the order the weld loop below visits them in).
+  const openV: number[] = [];
+  const isOpenV = new Uint8Array(nv);
   // Per-vertex weld cap = half its shortest incident open-edge segment: on a part with
   // sub-tolerance features (micro-fillets, fine threads) the fixed tol exceeds real feature
   // spacing and would weld distinct geometry into non-manifold garbage. A sliver gap is always
   // far narrower than its rails' own segment length, so this cap never blocks a genuine zip.
-  const vCap = new Map<number, number>();
+  const vCap = new Float64Array(nv).fill(Infinity);
   for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+    if (cnt[eid[i + e]!] !== 1) continue;
     const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
-    if (use.get(ek(a, b)) === 1) {
-      openV.add(a); openV.add(b);
-      const L = Math.hypot(P[a * 3]! - P[b * 3]!, P[a * 3 + 1]! - P[b * 3 + 1]!, P[a * 3 + 2]! - P[b * 3 + 2]!);
-      vCap.set(a, Math.min(vCap.get(a) ?? Infinity, L)); vCap.set(b, Math.min(vCap.get(b) ?? Infinity, L));
-    }
+    if (!isOpenV[a]) { isOpenV[a] = 1; openV.push(a); }
+    if (!isOpenV[b]) { isOpenV[b] = 1; openV.push(b); }
+    const L = Math.hypot(P[a * 3]! - P[b * 3]!, P[a * 3 + 1]! - P[b * 3 + 1]!, P[a * 3 + 2]! - P[b * 3 + 2]!);
+    if (L < vCap[a]!) vCap[a] = L;
+    if (L < vCap[b]!) vCap[b] = L;
   }
-  if (!openV.size) return { positions: P, indices: I, keep: keepAll() };
 
   // Union-find; representative = lowest index (keeps a stable surviving vertex).
   const parent = new Int32Array(nv); for (let i = 0; i < nv; i++) parent[i] = i;
@@ -6740,12 +6952,12 @@ function zipSlivers(mesh: IndexedMesh, tol: number, capFloor = 1e-2): { position
     // No real CAD feature lives at 10 µm, so the floor cannot weld distinct geometry.
     // (The isotropic mode passes a smaller floor on models whose own minimum edge length is
     // below 20 µm: there its boundary nodes do sit that close to each other.)
-    const cap = Math.min(tol, Math.max(0.5 * (vCap.get(v) ?? Infinity), capFloor));
+    const cap = Math.min(tol, Math.max(0.5 * vCap[v]!, capFloor));
     let best = -1, bestD = cap * cap;
     const cx = Math.round(px(v) / cell), cy = Math.round(py(v) / cell), cz = Math.round(pz(v) / cell);
     for (let gx = -1; gx <= 1; gx++) for (let gy = -1; gy <= 1; gy++) for (let gz = -1; gz <= 1; gz++) {
       for (const w of hash.get(`${cx + gx},${cy + gy},${cz + gz}`) ?? []) {
-        if (w === v || find(w) === find(v) || use.has(ek(v, w))) continue;
+        if (w === v || find(w) === find(v) || topo.find(v, w) >= 0) continue;
         const d = (px(v) - px(w)) ** 2 + (py(v) - py(w)) ** 2 + (pz(v) - pz(w)) ** 2;
         if (d < bestD) { bestD = d; best = w; }
       }
@@ -6757,14 +6969,15 @@ function zipSlivers(mesh: IndexedMesh, tol: number, capFloor = 1e-2): { position
   const remap = new Int32Array(nv).fill(-1);
   const pos: number[] = [];
   const idxOf = (v: number): number => { const r = find(v); if (remap[r] === -1) { remap[r] = pos.length / 3; pos.push(px(r), py(r), pz(r)); } return remap[r]!; };
-  const outI: number[] = [];
-  const keep: boolean[] = new Array(nt);
+  const outI = new Uint32Array(nt * 3);
+  let no = 0;
+  const keep = new Uint8Array(nt);
   for (let t = 0; t < nt; t++) {
     const a = idxOf(I[t * 3]!), b = idxOf(I[t * 3 + 1]!), c = idxOf(I[t * 3 + 2]!);
-    if (a === b || b === c || c === a) { keep[t] = false; continue; }
-    keep[t] = true; outI.push(a, b, c);
+    if (a === b || b === c || c === a) continue;
+    keep[t] = 1; outI[no++] = a; outI[no++] = b; outI[no++] = c;
   }
-  return { positions: Float64Array.from(pos), indices: Uint32Array.from(outI), keep };
+  return { positions: new Float64Array(pos), indices: outI.slice(0, no), keep, topo: null };
 }
 
 /**
@@ -6778,22 +6991,24 @@ function zipSlivers(mesh: IndexedMesh, tol: number, capFloor = 1e-2): { position
  * vertex must sit within `tol` of the segment's interior and clear of its endpoints, and the pass
  * iterates at most 3 rounds. Returns retriangulated indices + faceOf (same positions).
  */
-function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol: number): { indices: Uint32Array; faceOf: number[] } {
+function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol: number, topo0: EdgeTopo | null = null): { indices: Uint32Array; faceOf: number[]; topo: EdgeTopo | null } {
   let I = I0, faceOf = faceOf0;
-  const KEY = 2 ** 26;
-  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
+  // `topo` is the edge incidence of the CURRENT `I` (null once a round has rewritten it).
+  let topo: EdgeTopo | null = topo0;
   for (let round = 0; round < 3; round++) {
-    const use = new Map<number, number>();
-    for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) use.set(ek(I[i + e]!, I[i + (e + 1) % 3]!), (use.get(ek(I[i + e]!, I[i + (e + 1) % 3]!)) ?? 0) + 1);
+    topo ??= buildEdgeTopo(I, I.length / 3, P.length / 3);
+    const { eid, cnt } = topo;
+    let anyOpen = false;
+    for (let e = 0; e < topo.nE; e++) if (cnt[e] === 1) { anyOpen = true; break; }
+    if (!anyOpen) break;
     const openE: { a: number; b: number; tri: number; edge: number }[] = [];
     const openV = new Set<number>();
     for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+      if (cnt[eid[i + e]!] !== 1) continue;
       const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
-      if (use.get(ek(a, b)) !== 1) continue;
       openE.push({ a, b, tri: i / 3, edge: e });
       openV.add(a); openV.add(b);
     }
-    if (!openE.length) break;
     // Spatial hash of open vertices at the tolerance scale. Two-level NUMERIC keys (x column →
     // packed y/z): string keys made FindOrderedHashSetEntry the top profile entry corpus-wide —
     // a model with a handful of long rescue-density open edges spent 15 MINUTES here.
@@ -6868,9 +7083,10 @@ function zipTJunctions(P: Float64Array, I0: Uint32Array, faceOf0: number[], tol:
       }
       for (let i = 1; i + 1 < poly.length; i++) { outI.push(poly[0]!, poly[i]!, poly[i + 1]!); outF.push(faceOf[t]!); }
     }
-    I = Uint32Array.from(outI); faceOf = outF;
+    I = new Uint32Array(outI); faceOf = outF;
+    topo = null;
   }
-  return { indices: I, faceOf };
+  return { indices: I, faceOf, topo };
 }
 
 /**
@@ -7212,26 +7428,6 @@ function orientSheets(P: number[], I: number[], solidOfTri: number[], frameKey: 
  * once, to its best mutual match, and only when BOTH rings track each other everywhere (a rim
  * half-covered by two caps fails the mutual gate and stays open rather than sewn wrong).
  */
-/** Which undirected edges of triangles [t0, t1) are used by exactly one of them (boundary edges).
- * Counted over a sorted key array, not a Map: V8 Maps stop at 2^24 entries, which one large body
- * can exceed. Vertex ids must stay below 2^26 (keys exact in a double). */
-function singleUseEdges(I: ArrayLike<number>, t0: number, t1: number): (a: number, b: number) => boolean {
-  const KEY = 2 ** 26;
-  const keys = new Float64Array((t1 - t0) * 3);
-  let n = 0;
-  for (let t = t0; t < t1; t++) for (let e = 0; e < 3; e++) {
-    const a = I[t * 3 + e]!, b = I[t * 3 + (e + 1) % 3]!;
-    keys[n++] = a < b ? a * KEY + b : b * KEY + a;
-  }
-  keys.sort();
-  return (a, b) => {
-    const k = a < b ? a * KEY + b : b * KEY + a;
-    let lo = 0, hi = n;
-    while (lo < hi) { const m = (lo + hi) >>> 1; if (keys[m]! < k) lo = m + 1; else hi = m; }
-    return lo < n && keys[lo] === k && (lo + 1 >= n || keys[lo + 1] !== k);
-  };
-}
-
 function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: number[], tol: number, openIds: Set<number>, unsewn?: Set<number>, sewnSolids?: Set<number>): number {
   // Directed boundary edges and their owning triangle; walk simple rings (skip ambiguous pinches).
   // Edge use is counted per body: bodies are contiguous triangle runs welded independently, so no
@@ -7243,10 +7439,17 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
   for (let r0 = 0; r0 < nTri;) {
     let r1 = r0 + 1;
     while (r1 < nTri && solidOfTri[r1] === solidOfTri[r0]) r1++;
-    const once = singleUseEdges(I, r0, r1);
+    // Boundary edges of this body = edges used by exactly one of its triangles, from the
+    // hash-free incidence over the body's own vertex range (formerly a sorted key array with a
+    // binary search per half-edge).
+    let vLo = Infinity, vHi = -1;
+    for (let i = r0 * 3; i < r1 * 3; i++) { const v = I[i]!; if (v < vLo) vLo = v; if (v > vHi) vHi = v; }
+    const local = new Int32Array((r1 - r0) * 3);
+    for (let i = 0; i < local.length; i++) local[i] = I[r0 * 3 + i]! - vLo;
+    const bodyTopo = buildEdgeTopo(local, r1 - r0, vHi - vLo + 1);
     for (let t = r0; t < r1; t++) for (let e = 0; e < 3; e++) {
+      if (bodyTopo.cnt[bodyTopo.eid[(t - r0) * 3 + e]!] !== 1) continue;
       const a = I[t * 3 + e]!, b = I[t * 3 + (e + 1) % 3]!;
-      if (!once(a, b)) continue;
       if (nxt.has(a)) multi.add(a);
       nxt.set(a, b); triAt.set(a, t);
     }
@@ -7410,18 +7613,21 @@ function sewSolids(P: number[], I: number[], faceOfTri: number[], solidOfTri: nu
   return sewn;
 }
 
-function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number, big?: { edge: number; dev: number }): { indices: number[]; faceOf: number[] } {
+function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: number, big?: { edge: number; dev: number }, topo0: EdgeTopo | null = null): { indices: number[]; faceOf: number[] } {
   const KEY = 2 ** 26;
-  const ek = (a: number, b: number): number => (a < b ? a * KEY + b : b * KEY + a);
-  const use = new Map<number, number>();
-  for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) use.set(ek(I[i + e]!, I[i + (e + 1) % 3]!), (use.get(ek(I[i + e]!, I[i + (e + 1) % 3]!)) ?? 0) + 1);
+  const topo = topo0 ?? buildEdgeTopo(I, I.length / 3, P.length / 3);
+  const { eid, cnt } = topo;
+  let anyOpen = false;
+  for (let e = 0; e < topo.nE; e++) if (cnt[e] === 1) { anyOpen = true; break; }
+  if (!anyOpen) return { indices: [], faceOf: [] }; // no open edge, no ring to fill
+  const hasEdge = (a: number, b: number): boolean => topo.find(a, b) >= 0;
   // Directed boundary edges a->b (as traversed by their owning triangle) and the owning face.
   const nxt = new Map<number, number>();
   const faceAt = new Map<number, number>();
   const multi = new Set<number>(); // boundary vertices with >1 outgoing edge — walking is ambiguous
   for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+    if (cnt[eid[i + e]!] !== 1) continue;
     const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
-    if (use.get(ek(a, b)) !== 1) continue;
     if (nxt.has(a)) multi.add(a);
     nxt.set(a, b); faceAt.set(a, faceOf[i / 3]!);
   }
@@ -7482,7 +7688,7 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
       if (DBG) console.error(`[fill] ring not filled: len=${ring.length} per=${per.toFixed(3)} dev=${planarDev(ring).toExponential(2)}`);
       continue;
     }
-    triangulateRing(P, ring, use, ek, per, outI, outF, faceAt.get(ring[0]!)!);
+    triangulateRing(P, ring, hasEdge, per, outI, outF, faceAt.get(ring[0]!)!);
     for (const v of ring) filled.add(v);
   }
   // UNDIRECTED pass (big only): what the directed walk can't close. Two shapes land here: a notch
@@ -7501,8 +7707,8 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
     const edges: { a: number; b: number; face: number; used: boolean }[] = [];
     const inc = new Map<number, number[]>(); // vertex -> incident open-edge ids
     for (let i = 0; i < I.length; i += 3) for (let e = 0; e < 3; e++) {
+      if (cnt[eid[i + e]!] !== 1) continue;
       const a = I[i + e]!, b = I[i + (e + 1) % 3]!;
-      if (use.get(ek(a, b)) !== 1) continue;
       dirOpen.add(a * KEY + b);
       if (filled.has(a) || filled.has(b)) continue; // already closed by the directed pass
       const id = edges.length;
@@ -7555,7 +7761,7 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
         let agree = 0;
         for (let i = 0; i < n; i++) if (dirOpen.has(ring[i]! * KEY + ring[(i + 1) % n]!)) agree++;
         const r = 2 * agree >= n ? ring : ring.slice().reverse();
-        triangulateRing(P, r, use, ek, per, outI, outF, E.face);
+        triangulateRing(P, r, hasEdge, per, outI, outF, E.face);
         for (const v of ring) filled.add(v);
         if (DBG) console.error(`[fill] undirected ring filled: len=${n} per=${per.toFixed(3)}`);
       }
@@ -7574,7 +7780,7 @@ function fillMicroHoles(P: Float64Array, I: Uint32Array, faceOf: number[], tol: 
  * are emitted wound AGAINST ring order — DP triangle (i,m,j), i<m<j, as (ring[j],ring[m],ring[i])
  * — so every ring edge is traversed opposite its owning open edge and pairs manifold-consistently.
  */
-function triangulateRing(P: Float64Array, ring: number[], use: Map<number, number>, ek: (a: number, b: number) => number, per: number, outI: number[], outF: number[], face: number): void {
+function triangulateRing(P: Float64Array, ring: number[], hasEdge: (a: number, b: number) => boolean, per: number, outI: number[], outF: number[], face: number): void {
   const n = ring.length;
   if (n < 3) return;
   if (n === 3) { outI.push(ring[2]!, ring[1]!, ring[0]!); outF.push(face); return; }
@@ -7586,7 +7792,7 @@ function triangulateRing(P: Float64Array, ring: number[], use: Map<number, numbe
   };
   // Ring edges (j = i+1, and the closing pair 0,n-1) are the hole boundary — free. Interior chords
   // cost their existing-edge penalty once, charged where the DP creates them as a split boundary.
-  const pen = (i: number, j: number): number => (j - i <= 1 || (i === 0 && j === n - 1)) ? 0 : (use.has(ek(ring[i]!, ring[j]!)) ? 1e6 * per * per : 0);
+  const pen = (i: number, j: number): number => (j - i <= 1 || (i === 0 && j === n - 1)) ? 0 : (hasEdge(ring[i]!, ring[j]!) ? 1e6 * per * per : 0);
   const cost = new Float64Array(n * n);
   const split = new Int32Array(n * n).fill(-1);
   for (let len = 2; len < n; len++) for (let i = 0; i + len < n; i++) {
@@ -7608,18 +7814,26 @@ function triangulateRing(P: Float64Array, ring: number[], use: Map<number, numbe
   }
 }
 
-/** Weld coincident triangle-soup vertices into an indexed mesh (positions quantised to eps). */
-export function weld(verts: number[], eps = 1e-6): { mesh: IndexedMesh } {
-  const map = new Map<string, number>();
-  const pos: number[] = [];
-  const indices: number[] = [];
-  const q = (x: number): number => Math.round(x / eps);
-  for (let i = 0; i < verts.length; i += 3) {
-    const x = verts[i]!, y = verts[i + 1]!, z = verts[i + 2]!;
-    const key = `${q(x)},${q(y)},${q(z)}`;
-    let idx = map.get(key);
-    if (idx === undefined) { idx = pos.length / 3; pos.push(x, y, z); map.set(key, idx); }
-    indices.push(idx);
+/** Weld coincident triangle-soup vertices into an indexed mesh (positions quantised to eps).
+ * Two vertices are one when their three quantised coordinates are equal; the surviving position
+ * is the first one seen and vertices are numbered in order of first appearance. The lookup is an
+ * open-addressing table over the quantised triple (formerly a Map keyed by a string built per
+ * vertex, 9 strings per triangle: ~6% of a whole import on a multi-million-triangle model). */
+export function weld(verts: ArrayLike<number>, eps = 1e-6): { mesh: IndexedMesh } {
+  const n = (verts.length / 3) | 0;
+  const indices = new Uint32Array(n);
+  const ids = new PointIds(n / 6); // a closed mesh has ~n/6 distinct vertices; the table grows if not
+  let pos = new Float64Array(Math.max(48, (n >> 2) * 3));
+  for (let i = 0, o = 0; i < n; i++, o += 3) {
+    const x = verts[o]!, y = verts[o + 1]!, z = verts[o + 2]!;
+    const before = ids.count;
+    const idx = ids.idOf(Math.round(x / eps), Math.round(y / eps), Math.round(z / eps));
+    if (idx === before) {
+      if (ids.count * 3 > pos.length) { const np = new Float64Array(pos.length * 2); np.set(pos); pos = np; }
+      const w = idx * 3;
+      pos[w] = x; pos[w + 1] = y; pos[w + 2] = z;
+    }
+    indices[i] = idx;
   }
-  return { mesh: { positions: Float64Array.from(pos), indices: Uint32Array.from(indices) } };
+  return { mesh: { positions: pos.slice(0, ids.count * 3), indices } };
 }
