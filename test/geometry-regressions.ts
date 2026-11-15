@@ -632,5 +632,50 @@ for (const pocket of [false, true]) {
   check("helical strip over 20 turns: the surface stays within 1.5x the chord tolerance of the mesh", worst < 1.5 * tol, `${(worst / tol).toFixed(2)}x`);
 }
 
+// ---- plane cut from a disk whose long arc passes just below a slot corner (SMILEY's grip plate:
+// R 16.25 arc 0.074 mm from the corner at 0.0845 mm chord tolerance). The arc's chords sag past the
+// corner, so the boundary polygon crosses itself; with the slot wall's samples between them the
+// crossings are far apart along the loop, which the micro-face pre-pass left alone, and the CDT
+// rescue fill then dropped part of the face.
+{
+  const R = 16.25, d = 5.651, xs0 = -13.688, xs1 = -9, tol = 0.0845;
+  const yc = -Math.sqrt(R * R - xs0 * xs0) + 0.074, xa = Math.sqrt(R * R - d * d);
+  const L: string[] = [];
+  let id = 100;
+  const point = (p: number[]): number => { const i = id++; L.push(`#${i}=CARTESIAN_POINT('',(${p.map((x) => x.toFixed(9)).join(",")}));`); return i; };
+  const direction = (v: number[]): number => { const i = id++; L.push(`#${i}=DIRECTION('',(${v.join(",")}));`); return i; };
+  const vertex = (p: number[]): number => { const c = point(p), i = id++; L.push(`#${i}=VERTEX_POINT('',#${c});`); return i; };
+  const line = (a: number[], b: number[]): number => {
+    const l = Math.hypot(b[0]! - a[0]!, b[1]! - a[1]!), p = point(a), dd = direction([(b[0]! - a[0]!) / l, (b[1]! - a[1]!) / l, 0]), v = id++, i = id++;
+    L.push(`#${v}=VECTOR('',#${dd},${l});`, `#${i}=LINE('',#${p},#${v});`);
+    return i;
+  };
+  const edge = (a: number, b: number, c: number): number => { const i = id++; L.push(`#${i}=EDGE_CURVE('',#${a},#${b},#${c},.T.);`); return i; };
+  const oe = (e: number): number => { const i = id++; L.push(`#${i}=ORIENTED_EDGE('',*,*,#${e},.T.);`); return i; };
+  // the slot's outer wall is split into 12 collinear edges: their samples put the two crossing
+  // segments far apart along the loop, as the neighbouring faces' samples do in the model
+  const pts = [[xa, d, 0], [xs1, d, 0], [xs1, yc, 0], [xs0, yc, 0], ...Array.from({ length: 11 }, (_, k) => [xs0, yc + ((d - yc) * (k + 1)) / 12, 0]), [xs0, d, 0], [-xa, d, 0]];
+  const V = pts.map(vertex), es: number[] = [];
+  for (let k = 0; k + 1 < pts.length; k++) es.push(edge(V[k]!, V[k + 1]!, line(pts[k]!, pts[k + 1]!)));
+  const o = point([0, 0, 0]), z = direction([0, 0, 1]), x = direction([1, 0, 0]), ax = id++, circ = id++;
+  L.push(`#${ax}=AXIS2_PLACEMENT_3D('',#${o},#${z},#${x});`, `#${circ}=CIRCLE('',#${ax},${R});`);
+  es.push(edge(V[pts.length - 1]!, V[0]!, circ)); // counterclockwise through the bottom
+  const loop = id++, pl = id++, fb = id++, fc = id++;
+  L.push(`#${loop}=EDGE_LOOP('',(${es.map((e) => "#" + oe(e)).join(",")}));`, `#${pl}=PLANE('',#${ax});`, `#${fb}=FACE_OUTER_BOUND('',#${loop},.T.);`,
+    `#${fc}=ADVANCED_FACE('',(#${fb}),#${pl},.T.);`, `#${id}=OPEN_SHELL('',(#${fc}));`, `#${id + 1}=SHELL_BASED_SURFACE_MODEL('',(#${id}));`);
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${L.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src, { surfaceDeviation: tol, normalDeviation: 15, maxEdge: 8.45 });
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    const a = [0, 1, 2].map((k) => I[t * 3 + k]! * 3);
+    area += 0.5 * ((P[a[1]!]! - P[a[0]!]!) * (P[a[2]! + 1]! - P[a[0]! + 1]!) - (P[a[1]! + 1]! - P[a[0]! + 1]!) * (P[a[2]!]! - P[a[0]!]!));
+  }
+  const exact = Math.PI * R * R - (R * R * Math.acos(d / R) - d * Math.sqrt(R * R - d * d)) - (xs1 - xs0) * (d - yc);
+  const codes = res.diagnostics.warnings.map((w) => w.code);
+  check("arc sagging past a slot corner: boundary kept, no rescue fill", !codes.includes("cdt-degenerate-boundary"), codes.join(","));
+  check("arc sagging past a slot corner: area matches", Math.abs(area - exact) < 0.003 * exact, `mesh ${area.toFixed(3)} vs exact ${exact.toFixed(3)} mm²`);
+}
+
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
 console.log("geometry-regressions: all passed");

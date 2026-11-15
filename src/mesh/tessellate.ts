@@ -6670,7 +6670,49 @@ export function createTessSession(brep: BrepModel, opts: TessOptions = {}, prep?
           return true;
         });
         if (tangledLoops.length === 0) continue;
-        if (nonLocal) { rescueCollapsed(); continue; }
+        if (nonLocal && surface.kind !== "PLANE") { rescueCollapsed(); continue; }
+        if (nonLocal) {
+          // A distant-pair crossing on a larger face is usually genuine overlap or a pinch, where
+          // densifying every edge of the loop perturbs the neighbours for nothing. On a PLANE, whose
+          // (u,v) is exact, one kind is a plain sampling artifact: a CURVED edge whose chords sag
+          // past a nearby corner of the same loop (SMILEY's grip plate: an R 16.25 arc passing 0.074 mm below a slot corner at
+          // 0.0845 mm chord tolerance, with the slot wall's samples between the two). Densify only
+          // the curved edges that own a crossing segment, 4x only (16x left OpenVessel's counterbore
+          // neighbours with 4x the slivers), and commit only when every loop of the face comes out simple.
+          const owners = new Set<number>();
+          const key = (p: Vec3): string => `${p[0]},${p[1]},${p[2]}`;
+          for (const lp of tangledLoops) {
+            const uv = loopParam(surface, lp, sampled);
+            const pairs: [number, number][] = [];
+            if (countSelfIntersections(uv.p2, 64, pairs) === 0) continue;
+            const ownerOf = new Map<string, number>();
+            for (const oe of lp.edges) {
+              const e = brep.edges.get(oe.edgeId);
+              const rec = e ? brep.table.model.entities.get(e.curveId) : undefined;
+              const kind = rec && "type" in rec ? rec.type : undefined;
+              if (kind === undefined || kind === "LINE" || kind === "POLYLINE") continue;
+              for (const p of sampled.get(oe.edgeId) ?? []) ownerOf.set(key(p), oe.edgeId);
+            }
+            const n = uv.p3.length;
+            for (const [i, j] of pairs) for (const k of [i, (i + 1) % n, j, (j + 1) % n]) {
+              const id = ownerOf.get(key(uv.p3[k]!));
+              if (id !== undefined) owners.add(id);
+            }
+          }
+          let cured = false;
+          if (owners.size > 0) for (const f of [4]) {
+            const probe = new Map(sampled);
+            for (const id of owners) probe.set(id, resample(id, f));
+            if (face.loops.every((lp) => { const p2 = loopParam(surface, lp, probe).p2; return p2.length < 4 || countSelfIntersections(p2, 1) === 0; })) {
+              if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} distant crossings cured at tol/${f} (${owners.size} curved edges)`);
+              for (const id of owners) level.set(id, Math.max(level.get(id) ?? 0, f));
+              cured = true;
+              break;
+            }
+          }
+          if (!cured) rescueCollapsed();
+          continue;
+        }
         for (const f of [4, 16, 64]) {
           const probe = new Map(sampled);
           const ids = new Set<number>();
