@@ -6002,6 +6002,51 @@ function sphereTiltedGreatRim(s: Sphere, loop: BLoop, sampled: Map<number, Vec3[
   return dev <= 1e-3 * s.r && Math.abs(d) < Math.cos(1.31) * s.r;
 }
 
+/** The material zone of a single-loop sphere face whose rim is a planar circle, when it reaches
+ * more than 75° from its centre (the reach where reorientSphere refuses); null otherwise. Left of
+ * the rim against the face normal is material (the cap mesher's rule), so the zone's centre lies
+ * along u = sign × the loop's Newell normal, and the rim plane sits at m along u from the sphere
+ * centre: the zone is {(p - o)·u >= m}, of area 2πR(R - m), reaching acos(m / R) from its centre. */
+interface SphereZone { o: Vec3; u: Vec3; m: number; area: number; slack: number }
+function sphereLargeZone(s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, sign: number, chordTol: number): SphereZone | null {
+  const n = loopNormal(loop, sampled);
+  if (!n) return null;
+  const pts: Vec3[] = [];
+  for (const oe of loop.edges) for (const p of sampled.get(oe.edgeId) ?? []) pts.push(p);
+  if (pts.length < 4) return null;
+  let cx = 0, cy = 0, cz = 0;
+  for (const p of pts) { cx += p[0]; cy += p[1]; cz += p[2]; }
+  cx /= pts.length; cy /= pts.length; cz /= pts.length;
+  // planar within 1e-3 R (a circle: a plane cuts a sphere in one), so the zone is exact
+  for (const p of pts) if (Math.abs((p[0] - cx) * n[0] + (p[1] - cy) * n[1] + (p[2] - cz) * n[2]) > 1e-3 * s.r) return null;
+  const o = s.f.o, R = s.r;
+  const u: Vec3 = [sign * n[0], sign * n[1], sign * n[2]];
+  const m = (cx - o[0]) * u[0] + (cy - o[1]) * u[1] + (cz - o[2]) * u[2];
+  if (m >= Math.cos(1.31) * R) return null;
+  // an inscribed mesh falls short of the surface by up to ~2·chordTol/R of its area
+  return { o, u, m, area: 2 * Math.PI * R * (R - m), slack: 0.05 + Math.min(0.5, 3 * chordTol / R) };
+}
+
+/** Run a mesher for a large sphere zone and keep its triangles only when they cover the zone:
+ * area within the slack of the exact zone area, area-weighted centroid on the material side of
+ * the rim plane. Otherwise the triangles are rolled back and false returned. */
+function sphereZoneChecked(z: SphereZone, verts: number[], faceIds: number[], mesher: () => boolean): boolean {
+  const v0 = verts.length, f0 = faceIds.length;
+  if (!mesher()) return false;
+  let area = 0, side = 0;
+  for (let i = v0; i + 8 < verts.length; i += 9) {
+    const ax = verts[i]!, ay = verts[i + 1]!, az = verts[i + 2]!;
+    const n = cross([verts[i + 3]! - ax, verts[i + 4]! - ay, verts[i + 5]! - az], [verts[i + 6]! - ax, verts[i + 7]! - ay, verts[i + 8]! - az]);
+    const a = 0.5 * Math.hypot(n[0], n[1], n[2]);
+    const cx = (ax + verts[i + 3]! + verts[i + 6]!) / 3 - z.o[0], cy = (ay + verts[i + 4]! + verts[i + 7]!) / 3 - z.o[1], cz = (az + verts[i + 5]! + verts[i + 8]!) / 3 - z.o[2];
+    area += a; side += a * (cx * z.u[0] + cy * z.u[1] + cz * z.u[2]);
+  }
+  if (area > 0 && Math.abs(area - z.area) <= z.slack * z.area && side / area > z.m) return true;
+  if (DBG) console.error(`[tess] sphere zone: mesh area ${area.toFixed(3)} vs ${z.area.toFixed(3)}, centroid ${(side / Math.max(area, 1e-300)).toFixed(3)} vs rim ${z.m.toFixed(3)} — rolled back`);
+  verts.length = v0; faceIds.length = f0;
+  return false;
+}
+
 function tessellateSphereCapAnyAxis(
   s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, fid: number,
   verts: number[], faceIds: number[], chordTol: number, targetEdge: number, normalDev: number, sign: number,
@@ -6744,6 +6789,7 @@ export function createTessSession(brep: BrepModel, opts: TessOptions = {}, prep?
         // or fans from the hole's rim and leaves the real shared rim fully open. A multi-loop
         // sphere zone is a revolution band like any other: band -> unroll -> param grid.
         const single = loops.length === 1;
+        const zone = single ? sphereLargeZone(surface, louter, sampled, sign, chordTol) : null;
         ok = (single && mark(face.faceId, "sphereCap", tessellateSphereCap(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
           || (stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
@@ -6752,7 +6798,18 @@ export function createTessSession(brep: BrepModel, opts: TessOptions = {}, prep?
           // reorientSphere): the grid meshes it as a flattened dome — re-aim the pole first.
           || (single && sphereTiltedGreatRim(surface, louter, sampled)
             && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-          || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          // A LARGE zone inside one circle rim (reaching more than 75° from its centre) has its
+          // side only in the loop's orientation, which the grid ignores: it meshes what the loop
+          // encloses in (u,v). Beyond a hemisphere that is the small cap, the complement (a ball
+          // knob pierced by its stem, ABC 00021287); at a hemisphere whose rim runs through both
+          // parametrisation poles it is either side, or an oversized sheet (ball pockets cut
+          // through their axis, ABC 00026830/00026831). The zone's area and side are exact for a
+          // circle rim: keep the grid's mesh when it matches them, otherwise roll it back and fan
+          // the oriented side with the pole re-aimed on the rim normal.
+          || mark(face.faceId, "grid", zone
+            ? sphereZoneChecked(zone, verts, faceIds, () => tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            : tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || (zone !== null && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
           || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)))
           || (single && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))

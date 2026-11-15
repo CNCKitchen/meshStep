@@ -510,5 +510,84 @@ const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: nu
   check("horn torus outer half: area matches", Math.abs(t.area - t.exact) < 0.01 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
 }
 
+// ---- ball cut flat by a plane that is not a parallel of the sphere's frame (ABC 00021287, a vise
+// spindle's ball knobs pierced by the stem): the sphere face is one circle loop plus two VERTEX_LOOP
+// poles on ±X; the cut plane is normal to Y. Whether the face is the big zone or the small cap is
+// only in the loop's orientation, and the param grid meshed the small cap either way.
+const ballCut = (big: boolean) => {
+  const R = 10, a = 4, h = Math.sqrt(R * R - a * a);
+  const dir = (id: number, d: number[]): string => `#${id}=DIRECTION('',(${d.join(",")}));`;
+  // big: material on +Y, the hole circle at y = -h; small: the cap beyond y = +h
+  const y = big ? -h : h;
+  const lines = [pt(1, [0, 0, 0]), dir(2, [-1, 0, 0]), dir(3, [0, 0, 1]), `#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);`, `#5=SPHERICAL_SURFACE('',#4,${R});`,
+    pt(6, [0, y, 0]), dir(7, [0, 1, 0]), dir(8, [1, 0, 0]), `#9=AXIS2_PLACEMENT_3D('',#6,#7,#8);`, `#10=CIRCLE('',#9,${a});`,
+    pt(11, [a, y, 0]), `#12=VERTEX_POINT('',#11);`, `#13=EDGE_CURVE('',#12,#12,#10,.T.);`,
+    // the circle runs counterclockwise about +Y: material on its +Y side, the big zone for a hole at
+    // -h (clockwise seen from outside), the small cap at +h; the flat face looks down -Y either way
+    `#14=ORIENTED_EDGE('',*,*,#13,.T.);`, `#15=EDGE_LOOP('',(#14));`, `#16=FACE_BOUND('',#15,.T.);`,
+    pt(17, [-R, 0, 0]), `#18=VERTEX_POINT('',#17);`, `#19=VERTEX_LOOP('',#18);`, `#20=FACE_BOUND('',#19,.T.);`,
+    pt(21, [R, 0, 0]), `#22=VERTEX_POINT('',#21);`, `#23=VERTEX_LOOP('',#22);`, `#24=FACE_BOUND('',#23,.T.);`,
+    `#25=ADVANCED_FACE('',(#24,#20,#16),#5,.T.);`,
+    dir(26, [0, -1, 0]), `#27=AXIS2_PLACEMENT_3D('',#6,#26,#8);`, `#28=PLANE('',#27);`,
+    `#29=ORIENTED_EDGE('',*,*,#13,.F.);`, `#30=EDGE_LOOP('',(#29));`, `#31=FACE_OUTER_BOUND('',#30,.T.);`, `#32=ADVANCED_FACE('',(#31),#28,.T.);`,
+    `#33=CLOSED_SHELL('',(#25,#32));`, `#34=MANIFOLD_SOLID_BREP('',#33);`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src, { surfaceDeviation: 0.01, normalDeviation: 15 });
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0;
+  for (let t = 0; t < I.length / 3; t++) {
+    if (res.faceOfTri[t] !== 25) continue;
+    const V = [0, 1, 2].map((k) => [P[I[t * 3 + k]! * 3]!, P[I[t * 3 + k]! * 3 + 1]!, P[I[t * 3 + k]! * 3 + 2]!]);
+    const e1 = [0, 1, 2].map((k) => V[1]![k]! - V[0]![k]!), e2 = [0, 1, 2].map((k) => V[2]![k]! - V[0]![k]!);
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  const exact = 2 * Math.PI * R * (big ? R + h : R - h);
+  return { area, exact, ok: res.diagnostics.openEdges === 0 && res.diagnostics.nonManifoldEdges === 0, folds: selfIntersections(P, I, res.faceOfTri).sameFace };
+};
+for (const big of [true, false]) {
+  const t = ballCut(big), name = big ? "ball cut off-axis, big zone" : "ball cut off-axis, small cap";
+  check(`${name}: area matches`, Math.abs(t.area - t.exact) < 0.01 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+  check(`${name}: watertight, no fold`, t.ok && t.folds === 0, `closed ${t.ok}, ${t.folds} crossing pairs`);
+}
+
+// ---- hemisphere whose great-circle rim runs through both poles of the sphere's frame (ABC 00026831,
+// a ball pocket cut by a plane through its axis): pole axis -Y, rim in z = 0, the face is z ≤ 0.
+// The grid meshed a sheet 40% too large over the wrong side (or declined, and the region band
+// wound the face backwards). Both senses: a half ball, and the same shell as a pocket (void).
+const halfBall = (pocket: boolean) => {
+  const R = 10;
+  const dir = (id: number, d: number[]): string => `#${id}=DIRECTION('',(${d.join(",")}));`;
+  const lines = [pt(1, [0, 0, 0]), dir(2, [0, -1, 0]), dir(3, [-1, 0, 0]), `#4=AXIS2_PLACEMENT_3D('',#1,#2,#3);`, `#5=SPHERICAL_SURFACE('',#4,${R});`,
+    dir(7, [0, 0, 1]), dir(8, [1, 0, 0]), `#9=AXIS2_PLACEMENT_3D('',#1,#7,#8);`, `#10=CIRCLE('',#9,${R});`,
+    pt(11, [R, 0, 0]), `#12=VERTEX_POINT('',#11);`, `#13=EDGE_CURVE('',#12,#12,#10,.T.);`,
+    // material on the -Z side: clockwise about +Z against the outward normal, counterclockwise for the void
+    `#14=ORIENTED_EDGE('',*,*,#13,${pocket ? ".T." : ".F."});`, `#15=EDGE_LOOP('',(#14));`, `#16=FACE_OUTER_BOUND('',#15,.T.);`,
+    `#25=ADVANCED_FACE('',(#16),#5,${pocket ? ".F." : ".T."});`,
+    dir(26, [0, 0, pocket ? -1 : 1]), `#27=AXIS2_PLACEMENT_3D('',#1,#26,#8);`, `#28=PLANE('',#27);`,
+    `#29=ORIENTED_EDGE('',*,*,#13,${pocket ? ".F." : ".T."});`, `#30=EDGE_LOOP('',(#29));`, `#31=FACE_OUTER_BOUND('',#30,.T.);`, `#32=ADVANCED_FACE('',(#31),#28,.T.);`,
+    `#33=CLOSED_SHELL('',(#25,#32));`, `#34=MANIFOLD_SOLID_BREP('',#33);`];
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${lines.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src, { surfaceDeviation: 0.002, normalDeviation: 15, maxEdge: 0.4 });
+  const P = res.mesh.positions, I = res.mesh.indices;
+  let area = 0, zMax = -Infinity;
+  for (let t = 0; t < I.length / 3; t++) {
+    if (res.faceOfTri[t] !== 25) continue;
+    const V = [0, 1, 2].map((k) => [P[I[t * 3 + k]! * 3]!, P[I[t * 3 + k]! * 3 + 1]!, P[I[t * 3 + k]! * 3 + 2]!]);
+    for (const v of V) zMax = Math.max(zMax, v[2]!);
+    const e1 = [0, 1, 2].map((k) => V[1]![k]! - V[0]![k]!), e2 = [0, 1, 2].map((k) => V[2]![k]! - V[0]![k]!);
+    area += 0.5 * Math.hypot(e1[1]! * e2[2]! - e1[2]! * e2[1]!, e1[2]! * e2[0]! - e1[0]! * e2[2]!, e1[0]! * e2[1]! - e1[1]! * e2[0]!);
+  }
+  // directed edges: a consistently oriented closed shell uses each one exactly once
+  const seen = new Set<string>(); let twice = 0;
+  for (let t = 0; t < I.length / 3; t++) for (let e = 0; e < 3; e++) { const k = `${I[t * 3 + e]},${I[t * 3 + (e + 1) % 3]}`; if (seen.has(k)) twice++; seen.add(k); }
+  return { area, exact: 2 * Math.PI * R * R, zMax, twice, ok: res.diagnostics.openEdges === 0 && res.diagnostics.nonManifoldEdges === 0 };
+};
+for (const pocket of [false, true]) {
+  const t = halfBall(pocket), name = pocket ? "ball pocket cut through its axis" : "half ball cut through its axis";
+  check(`${name}: area matches`, Math.abs(t.area - t.exact) < 0.01 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+  check(`${name}: stays on its side of the rim`, t.zMax < 1e-6, `reaches z = ${t.zMax.toFixed(3)}`);
+  check(`${name}: watertight and consistently oriented`, t.ok && t.twice === 0, `closed ${t.ok}, ${t.twice} edges used twice in the same direction`);
+}
+
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }
 console.log("geometry-regressions: all passed");
