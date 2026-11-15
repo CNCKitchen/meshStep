@@ -337,7 +337,7 @@ const pretty = importStep(stepText, { ...opts, isotropic: true, mergeTolerance: 
 console.log(pretty.merged); // { edges, faces, maxMove, reverted }
 ```
 
-Both options are on `main` and come to npm with the next release (0.1.2 does not have them).
+Both options need version 0.2.0 or later.
 
 **Units:** `mesh.positions` — and every derived length (areas, radii, measure geometry) — are
 **always millimetres**, whatever length unit the STEP file declares (inch, metre, mixed-unit

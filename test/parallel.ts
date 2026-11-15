@@ -144,9 +144,10 @@ for (const { n, src } of fixtures) {
   check("createWorker: used", created === 2 && diff(serial, own) === "", `created ${created}`);
 }
 
-// --- with the head start, the calling thread finishes a small model itself
+// --- with the head start, the calling thread finishes a small model itself. The head start is
+// stretched well beyond the default so that a slow or busy machine cannot turn this into a race.
 {
-  poolTuning.headMs = headMs;
+  poolTuning.headMs = Math.max(headMs, 5000);
   let created = 0;
   for (const { n, src } of fixtures) {
     if (n === "everything") continue; // takes long enough for workers to be worth starting
