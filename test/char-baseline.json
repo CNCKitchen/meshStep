@@ -1,11 +1,11 @@
 {
   "chamferFillet": {
-    "hash": "983b51c7003c2c09f9cfb30f8f28efbb33e4390a7a4caf0bd4ec42ed692ec7ed",
-    "verts": 28765,
-    "tris": 57526,
+    "hash": "26c7a3189479394c2e51300f1aba57ea5b9f7cfb47ac8e307179dbf088a3740e",
+    "verts": 28951,
+    "tris": 57898,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 103225.811,
+    "volume": 103225.993,
     "dispatch": {
       "grid": 27
     },
@@ -14,17 +14,17 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.95,
-      "tiltMaxDeg": 2.9,
+      "devRatio": 1.27,
+      "tiltMaxDeg": 2.4,
       "slivers": 0
     },
     "remesh": {
-      "hash": "0c815e495e97d4e0d4f52ad95603db89bc7acc57ca61dd7fcee3fda10913c8ad",
-      "verts": 21875,
-      "tris": 43746,
+      "hash": "835d281c2a73413a7f203174ec49f4f38d43bd2ae86ec8bf65dc9418995b4d35",
+      "verts": 21884,
+      "tris": 43764,
       "openEdges": 0,
       "nonManifoldEdges": 0,
-      "volume": 103224.038
+      "volume": 103224.021
     }
   },
   "cone": {
@@ -141,12 +141,12 @@
     }
   },
   "ETA 6497-1 Movement Corrected": {
-    "hash": "0a4fd711f9be390e201ecd5d42f5d6869c169c32d0d95f2352a6b609591e04bc",
-    "verts": 569595,
-    "tris": 1139366,
+    "hash": "cc8c8a388c700b286587e3eb4f7cf58c6f6fc513c5687c8cefd2cf8b4bba65b7",
+    "verts": 569612,
+    "tris": 1139400,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2735.675,
+    "volume": 2735.677,
     "dispatch": {
       "coneSlice": 21,
       "grid": 4670,
@@ -164,12 +164,12 @@
     }
   },
   "everything": {
-    "hash": "8f5a72185eb6ddf6d2b98c62b8ea20bf96562f493e3964c8d1e98f5fd9b4aab8",
-    "verts": 68684,
-    "tris": 137352,
+    "hash": "78d3f3e9a208753358c7ebd5b7b4280d0282b5ce0306a825895e29493ebab6fa",
+    "verts": 69166,
+    "tris": 138316,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 27707.465,
+    "volume": 27707.659,
     "dispatch": {
       "bsplineFull": 1,
       "cone": 1,
@@ -187,12 +187,12 @@
     }
   },
   "GoProHandlePod": {
-    "hash": "0288240cd61bb19875b4e33571aaf13374cd85e51e67ad819288be6573313d0c",
-    "verts": 332072,
-    "tris": 664152,
+    "hash": "517b67ab7e929d32448eff4ebeefef374e60ac96d77196ac70b458eae4327b12",
+    "verts": 332720,
+    "tris": 665448,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 34354.624,
+    "volume": 34354.916,
     "dispatch": {
       "grid": 121
     },
@@ -207,12 +207,12 @@
     }
   },
   "INDX M3x16 ISO7380-3 Torx button head": {
-    "hash": "8eacebc6017c7cbe4c8075a9885bf1ec1590cabd141de3d6e39e01bea390cc4e",
-    "verts": 3525,
-    "tris": 7046,
+    "hash": "a636cbc8a03330efb57d686aeeece59529c4d2000d2c96538d0bb8fc1cb43743",
+    "verts": 3718,
+    "tris": 7432,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 132.231,
+    "volume": 132.406,
     "dispatch": {
       "grid": 20
     },
@@ -221,18 +221,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 3.22,
+      "devRatio": 1.64,
       "tiltMaxDeg": 9.5,
       "slivers": 0
     }
   },
   "INDX XT30 connector (818 sheets)": {
-    "hash": "570e2d3450b7a08ffc0efdb1ff2be849a821bd3cc356f9ae8c1c384f21263c04",
-    "verts": 14969,
-    "tris": 19481,
+    "hash": "763b957e6b0527bfcfc2d3785ba7413e2b6cc5768a46b148b97bf080b44835d7",
+    "verts": 15285,
+    "tris": 20113,
     "openEdges": 8887,
     "nonManifoldEdges": 0,
-    "volume": 398.464,
+    "volume": 398.502,
     "dispatch": {
       "grid": 818
     },
@@ -241,18 +241,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.63,
+      "devRatio": 1.12,
       "tiltMaxDeg": 7.4,
       "slivers": 69
     }
   },
   "Insta360GO3_case": {
-    "hash": "976d77ef240789cd078df2414a8286f4513cd27bc0d501f23cbda952f17d6055",
-    "verts": 29427,
-    "tris": 58874,
+    "hash": "36b6b4df69739b408e007612ebc2694b5b35ff55ed3256581e3cc8a4843dc606",
+    "verts": 32164,
+    "tris": 64348,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 5324.063,
+    "volume": 5324.337,
     "dispatch": {
       "grid": 151
     },
@@ -261,7 +261,7 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.71,
+      "devRatio": 1.09,
       "tiltMaxDeg": 40.2,
       "slivers": 5
     }
@@ -295,12 +295,12 @@
     }
   },
   "MicHolder_Inserts": {
-    "hash": "01c4e0c220f657e077de13435f08da8abda7f1aaab6cc3a6f80c9cb238496d51",
-    "verts": 73562,
-    "tris": 147124,
+    "hash": "6709a7cca83bf4c648b7ab48be3b00c4bf4e3ed81a91c0be0717b5e4614b8c4b",
+    "verts": 76975,
+    "tris": 153950,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 82620.088,
+    "volume": 82621.481,
     "dispatch": {
       "grid": 112
     },
@@ -309,18 +309,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 3.04,
-      "tiltMaxDeg": 7.2,
+      "devRatio": 2.56,
+      "tiltMaxDeg": 9.7,
       "slivers": 0
     }
   },
   "newtestmodels/boomerang-v2": {
-    "hash": "751942425b08841c5f4439c66e14de5908b1989682af8f8b8a019c47e896c6e2",
-    "verts": 285461,
-    "tris": 558513,
+    "hash": "419c92ea10ebd672f3e5f90e5566845aee87f97549f38f95b394661b1a9fc32b",
+    "verts": 286352,
+    "tris": 560295,
     "openEdges": 12415,
     "nonManifoldEdges": 0,
-    "volume": 95880.986,
+    "volume": 95881.55,
     "dispatch": {
       "grid": 143
     },
@@ -335,12 +335,12 @@
     }
   },
   "newtestmodels/bottle-cage": {
-    "hash": "2e890055d210af5847b35e3195e8f20569c6280a4c4d84fdfde03ee04e8a113d",
-    "verts": 273679,
-    "tris": 547510,
+    "hash": "5c140ccdfe0c8dfc1f5712d3e7c3fb6676d6f8d045b991fb42f0806b62343203",
+    "verts": 277386,
+    "tris": 554924,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 48297.94,
+    "volume": 48299.601,
     "dispatch": {
       "grid": 1143,
       "ribbon": 2
@@ -350,9 +350,9 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 2,
-      "devRatio": 8.13,
+      "devRatio": 6.09,
       "tiltMaxDeg": 82.5,
-      "slivers": 306
+      "slivers": 305
     }
   },
   "newtestmodels/GARMIN_MOUNT_v15": {
@@ -397,12 +397,12 @@
     }
   },
   "newtestmodels/Goblin drone V3 (extra reinforced)": {
-    "hash": "35755f8d5dcc28f55b3a07c83519fe3745988a0a77cdd5f58d311fa5a2399be4",
-    "verts": 125040,
-    "tris": 250324,
+    "hash": "e630d94883e4c05d6c41353bc285674e5d5f26b6dff697e198d1f9e57d55a2ec",
+    "verts": 127582,
+    "tris": 255408,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 28945.374,
+    "volume": 28945.943,
     "dispatch": {
       "grid": 912,
       "thinFace": 8
@@ -414,7 +414,7 @@
       "flips": 0,
       "devRatio": 2.56,
       "tiltMaxDeg": 35.4,
-      "slivers": 74
+      "slivers": 78
     }
   },
   "newtestmodels/GoblinDrone": {
@@ -439,12 +439,12 @@
     }
   },
   "newtestmodels/Ontos_V2": {
-    "hash": "b49c01181507a6e6c615dc7dc6e028f90ae943ddb9e5c58ad6da221fea978537",
-    "verts": 2844334,
-    "tris": 5688996,
+    "hash": "18f3cf8c8f9cbfe0cb316e485153f959ddea4b681466ba094658e50f1e07d1fb",
+    "verts": 2855453,
+    "tris": 5711234,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2937306.756,
+    "volume": 2937310.652,
     "dispatch": {
       "band": 271,
       "cone": 7,
@@ -460,7 +460,7 @@
       "flips": 4,
       "devRatio": 23.51,
       "tiltMaxDeg": 62.9,
-      "slivers": 1273
+      "slivers": 1285
     }
   },
   "newtestmodels/Ratched toothpaste tube squeezer v2": {
@@ -485,12 +485,12 @@
     }
   },
   "newtestmodels/Rugged Box Parametric V2": {
-    "hash": "e44852cb50a4e2b654bf90f3c427dd479c28520706f76b7049ceda15db4be36b",
-    "verts": 224526,
-    "tris": 449100,
+    "hash": "a45e3e4d8c964db408f951926af8e1cad3c3d6af9bf8d020c5e6c1a1de078638",
+    "verts": 225222,
+    "tris": 450492,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 110038.417,
+    "volume": 110038.775,
     "dispatch": {
       "grid": 634
     },
@@ -499,18 +499,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.45,
-      "tiltMaxDeg": 4.5,
+      "devRatio": 1.22,
+      "tiltMaxDeg": 3.1,
       "slivers": 0
     }
   },
   "newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2": {
-    "hash": "70168cb2038a24979797a6a01cf8dde7e638331a6d75120029dd4bc9fede3e48",
-    "verts": 1728713,
-    "tris": 3457830,
+    "hash": "47a9db38cba468d983d6ae094d88a84b341793c52af4c17ed9f6722f0e0c91e7",
+    "verts": 1752759,
+    "tris": 3505922,
     "openEdges": 0,
     "nonManifoldEdges": 2,
-    "volume": 1258861.847,
+    "volume": 1258865.182,
     "dispatch": {
       "grid": 5880,
       "thinFace": 25
@@ -520,18 +520,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.07,
+      "devRatio": 2,
       "tiltMaxDeg": 82.8,
-      "slivers": 385
+      "slivers": 395
     }
   },
   "newtestmodels/trivenger": {
-    "hash": "2b3c2dc17c92cc5e1353fe47bb813a2a4fb65f428398d09610b8c370e9ef5af3",
-    "verts": 93700,
-    "tris": 187396,
+    "hash": "cf676bcc3669a5b5602fc0bbdc53a09cb08953a23b353aecc9e316eff9b25cc3",
+    "verts": 93853,
+    "tris": 187702,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 29868.555,
+    "volume": 29868.67,
     "dispatch": {
       "grid": 141
     },
@@ -541,17 +541,17 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2.71,
-      "tiltMaxDeg": 15.4,
+      "tiltMaxDeg": 14.2,
       "slivers": 132
     }
   },
   "newtestmodels/wallganizer": {
-    "hash": "2637daa70fcf9407e6445075875b06957b1e176d0232908db864786108507d67",
-    "verts": 29173956,
-    "tris": 58349376,
+    "hash": "8a0bb133f32bcaef780516e9692627533239ad2c0e4778dfc57b507f6f390e75",
+    "verts": 29203217,
+    "tris": 58407898,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 10244191.985,
+    "volume": 10244197.612,
     "dispatch": {
       "cone": 2,
       "grid": 13517,
@@ -562,18 +562,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.49,
+      "devRatio": 2.4,
       "tiltMaxDeg": 84.9,
       "slivers": 16372
     }
   },
   "roundedCube": {
-    "hash": "d9dedafc4daa4959b7fd8b8062130f40ae5136c7c803f0a4f774296731483a2d",
-    "verts": 7566,
-    "tris": 15128,
+    "hash": "5a2bbcdb66edf8395f62affa0ec6287262a1b5f2449cc981b4de0e437805fa2f",
+    "verts": 8048,
+    "tris": 16092,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 7802.536,
+    "volume": 7802.73,
     "dispatch": {
       "grid": 26
     },
@@ -582,17 +582,17 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.21,
-      "tiltMaxDeg": 3,
+      "devRatio": 1.35,
+      "tiltMaxDeg": 3.3,
       "slivers": 0
     },
     "remesh": {
-      "hash": "5bd0cd21ea42d9534bacd5f6156c972cbfb774ed76897d2ad131f243ef7d38c3",
-      "verts": 12754,
-      "tris": 25504,
+      "hash": "aa8c7030c3f4749cf0ff24f2677e5f59c05c78f0466da93655ecb9a28199ee66",
+      "verts": 12816,
+      "tris": 25628,
       "openEdges": 0,
       "nonManifoldEdges": 0,
-      "volume": 7803.261
+      "volume": 7803.316
     }
   },
   "sourcemodels/1797609in": {
@@ -641,12 +641,12 @@
     }
   },
   "sourcemodels/filler": {
-    "hash": "737a2aa88cb73b6dc8cd4f9663a3100e2cc6e74dda8f5e0c877898ecbfdbaa39",
-    "verts": 2231,
-    "tris": 4458,
+    "hash": "8b006c214e978d1199f9b8c08abec350f33769e74f333c52a72faf48b3e95cb4",
+    "verts": 2420,
+    "tris": 4836,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 77.373,
+    "volume": 77.411,
     "dispatch": {
       "grid": 19
     },
@@ -655,8 +655,8 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 0.93,
-      "tiltMaxDeg": 4.5,
+      "devRatio": 0.92,
+      "tiltMaxDeg": 4.1,
       "slivers": 0
     }
   },
@@ -712,12 +712,12 @@
     "error": "meshStep: one body needs at least 16M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/hose-fitting": {
-    "hash": "5d6311e8efacd51a7f9fdaa5d66953345ea3a878439735f85950e13325a9a0c6",
-    "verts": 27282,
-    "tris": 54564,
+    "hash": "0828ac5bd09256ed85cdacf9a95150decb4fde384a1f9835dc6171f36da51fde",
+    "verts": 27834,
+    "tris": 55668,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 14727.65,
+    "volume": 14727.904,
     "dispatch": {
       "grid": 70
     },
@@ -727,7 +727,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2.41,
-      "tiltMaxDeg": 4,
+      "tiltMaxDeg": 2.9,
       "slivers": 0
     }
   },
@@ -743,12 +743,12 @@
     "error": "meshStep: one body needs at least 101M triangles at these settings, more than one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them."
   },
   "sourcemodels/jack_in_the_box": {
-    "hash": "e03731c1815c5c39bfa04b627f44af780eb765f1b44bb5c50de98f3906fcd20b",
-    "verts": 69396,
-    "tris": 138568,
+    "hash": "ae504497f566737d9676ce8bc967a22c65ad4efdb4f06deade190d91a1db12d8",
+    "verts": 70028,
+    "tris": 139832,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12348.742,
+    "volume": 12348.917,
     "dispatch": {
       "band": 41,
       "coneCap": 1,
@@ -764,7 +764,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 5.39,
-      "tiltMaxDeg": 12,
+      "tiltMaxDeg": 18.2,
       "slivers": 105
     }
   },
@@ -821,12 +821,12 @@
     }
   },
   "sourcemodels/nist_ctc_04_asme1_ap242-e1": {
-    "hash": "51f9be1d5a46a43a79ef35b5d64841347358987a7b600b4255290f323f54364e",
-    "verts": 2640129,
-    "tris": 5280278,
+    "hash": "3069627a09ee5b4d9bd677fbe6fb474a3bb75b418363cb85af80f662868c1ad8",
+    "verts": 2645547,
+    "tris": 5291114,
     "openEdges": 110,
     "nonManifoldEdges": 0,
-    "volume": 17524428.057,
+    "volume": 17524426.824,
     "dispatch": {
       "grid": 484
     },
@@ -841,12 +841,12 @@
     }
   },
   "sourcemodels/nist_ctc_05_asme1_ap242-e1": {
-    "hash": "5c00a7b3717cbc49573c7b1a48a64bb4030f0731c907e12b18cbf47e804a7b8c",
-    "verts": 1529393,
-    "tris": 3058822,
+    "hash": "0ebfecf5e6ce79066b841ba1c32a2a2f66d9bd2057c6208c2a47b6329b558923",
+    "verts": 1529937,
+    "tris": 3059910,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 12695064.688,
+    "volume": 12695064.128,
     "dispatch": {
       "band": 36,
       "cone": 10,
@@ -864,12 +864,12 @@
     }
   },
   "sourcemodels/nist_ftc_06_asme1_ap242-e2": {
-    "hash": "4dcc2bcfaca949a9607cec96e51c15d63b12d648ed57575ace62a1a3549ec873",
-    "verts": 842092,
-    "tris": 1684220,
+    "hash": "fc2499c5fd5c615469cfc9439e59df9e9360411ae807760c593e7d98856519fe",
+    "verts": 842294,
+    "tris": 1684624,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 3323553.001,
+    "volume": 3323552.879,
     "dispatch": {
       "coneSlice": 4,
       "grid": 183
@@ -885,12 +885,12 @@
     }
   },
   "sourcemodels/nist_ftc_07_asme1_ap242-e2": {
-    "hash": "f8d379883414edfce8506fb30be17a14bfae0a87d0cc4cc5f71509cbbf5194d7",
-    "verts": 983948,
-    "tris": 1967914,
+    "hash": "7fb1ee10f5989a1675c7e658b2cc4cab4d4363bb3a08481c7d4e21c3b323902f",
+    "verts": 985707,
+    "tris": 1971432,
     "openEdges": 34,
     "nonManifoldEdges": 0,
-    "volume": 1726324.371,
+    "volume": 1726324.931,
     "dispatch": {
       "coneSlice": 16,
       "grid": 290
@@ -901,7 +901,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2.98,
-      "tiltMaxDeg": 23.8,
+      "tiltMaxDeg": 14.4,
       "slivers": 149
     }
   },
@@ -924,12 +924,12 @@
     }
   },
   "sourcemodels/nist_ftc_08_asme1_ap242-e2": {
-    "hash": "e110af441a263e197277e7b81d8d21e61b55e3ed3185a235f37e34dba8bf11e6",
-    "verts": 454789,
-    "tris": 909674,
+    "hash": "f697dbfb6a60b58b89470393740b5ebf53b41b2978f27e30fbb399718688dae3",
+    "verts": 456233,
+    "tris": 912562,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 503640.036,
+    "volume": 503640.184,
     "dispatch": {
       "band": 20,
       "grid": 227
@@ -940,7 +940,7 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2.2,
-      "tiltMaxDeg": 5.1,
+      "tiltMaxDeg": 5,
       "slivers": 0
     }
   },
@@ -965,12 +965,12 @@
     }
   },
   "sourcemodels/nist_ftc_10_asme1_ap242-e2": {
-    "hash": "f499baf75c37ea49bc465676858b2b49fb0e7d497d290192ed41f62387d12b19",
-    "verts": 179228,
-    "tris": 357436,
+    "hash": "7ed21e23648163ec8e857afdd4fe43e97b1375026c06fb7a454b349ce04958eb",
+    "verts": 181756,
+    "tris": 362492,
     "openEdges": 1112,
     "nonManifoldEdges": 0,
-    "volume": 187494.551,
+    "volume": 187495.317,
     "dispatch": {
       "coneSlice": 16,
       "grid": 266
@@ -980,8 +980,8 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.65,
-      "tiltMaxDeg": 8.6,
+      "devRatio": 1.18,
+      "tiltMaxDeg": 6.3,
       "slivers": 928
     }
   },
@@ -1007,12 +1007,12 @@
     }
   },
   "sourcemodels/nist_stc_06_asme1_ap242-e3": {
-    "hash": "57dfffdd18f7fa99cac0517c12744d250d07e296d9e95fbd755e8b8b1afb9fff",
-    "verts": 206646,
-    "tris": 413328,
+    "hash": "89bf6580047a550f8cf52052aca75d64918521f001b76df1a74dc4db70aad8d0",
+    "verts": 206851,
+    "tris": 413738,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 3323533.323,
+    "volume": 3323533.204,
     "dispatch": {
       "band": 34,
       "cone": 2,
@@ -1026,17 +1026,17 @@
       "crossFace": 0,
       "flips": 0,
       "devRatio": 2.93,
-      "tiltMaxDeg": 4.1,
+      "tiltMaxDeg": 4.3,
       "slivers": 3330
     }
   },
   "sourcemodels/nist_stc_07_asme1_ap242-e3": {
-    "hash": "1534c4296f0bda4dffceaa9cd13a22e3a2027d780528eaee786b8d9394d31ca4",
-    "verts": 981651,
-    "tris": 1963320,
+    "hash": "6a8501bc930d12b97b1162fdfe43025c1342688181ba39b5fffc639e9daa889c",
+    "verts": 983492,
+    "tris": 1967002,
     "openEdges": 34,
     "nonManifoldEdges": 0,
-    "volume": 1726324.648,
+    "volume": 1726325.205,
     "dispatch": {
       "coneSlice": 16,
       "grid": 290
@@ -1046,18 +1046,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.76,
-      "tiltMaxDeg": 6,
+      "devRatio": 1.33,
+      "tiltMaxDeg": 5.5,
       "slivers": 149
     }
   },
   "sourcemodels/nist_stc_08_asme1_ap242-e3": {
-    "hash": "53a2d4fb923a671b1abd64d032a58e8b5d9657cd84e5de4b932fcc4c65e0f46b",
-    "verts": 470887,
-    "tris": 941596,
+    "hash": "7bf39df1eb6ca85ea266045802d31c0498918214b5589550ffdc7133398ab362",
+    "verts": 472335,
+    "tris": 944492,
     "openEdges": 272,
     "nonManifoldEdges": 0,
-    "volume": 387254.116,
+    "volume": 387254.264,
     "dispatch": {
       "grid": 271
     },
@@ -1066,7 +1066,7 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2,
+      "devRatio": 1.31,
       "tiltMaxDeg": 5,
       "slivers": 4
     }
@@ -1092,12 +1092,12 @@
     }
   },
   "sourcemodels/nist_stc_10_asme1_ap242-e2": {
-    "hash": "a28ffc796a0c296357c1a86badd113bd062fe502f65c1a2c222eef58c89a3217",
-    "verts": 215479,
-    "tris": 431042,
+    "hash": "14273940737191e7af31cd18ed0a455b72bf12f320113898ca295734bad83567",
+    "verts": 218170,
+    "tris": 436424,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 188350.183,
+    "volume": 188350.97,
     "dispatch": {
       "band": 40,
       "cone": 8,
@@ -1115,12 +1115,12 @@
     }
   },
   "sourcemodels/OpenVessel": {
-    "hash": "461963c4d51313684679f034072d79b7c4738615728c0c444dc029e781469db8",
-    "verts": 99609,
-    "tris": 199234,
+    "hash": "9e06f24c658effd5dda05275d2932292a90d57b21bff4af0b4ced1fc563289b0",
+    "verts": 101046,
+    "tris": 202108,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17306.845,
+    "volume": 17306.778,
     "dispatch": {
       "grid": 319,
       "sphereCap": 1,
@@ -1133,16 +1133,16 @@
       "flips": 12,
       "devRatio": 3.54,
       "tiltMaxDeg": 52.5,
-      "slivers": 249
+      "slivers": 250
     }
   },
   "sourcemodels/OpenVessel_extract-01": {
-    "hash": "6fc141fcb8cb52683e7e4ea79199748cb6ece29916aad801a7dcf419d1317a9a",
-    "verts": 3052,
-    "tris": 5516,
+    "hash": "41076d4bcd0abaa431a1428757218964f5fc34193a9d43d9a1581ef9f5cfdac2",
+    "verts": 3335,
+    "tris": 6082,
     "openEdges": 582,
     "nonManifoldEdges": 0,
-    "volume": 332.492,
+    "volume": 332.567,
     "dispatch": {
       "grid": 19,
       "sphereFull": 1
@@ -1158,12 +1158,12 @@
     }
   },
   "sourcemodels/OpenVessel_fusion360": {
-    "hash": "208f48824f7290069d63df2ac14ce96af97073720e3f988fb9a4e40f32589e3d",
-    "verts": 101289,
-    "tris": 202594,
+    "hash": "680037fecd64fc5a161a8b6a33f830d8da4196f53a395623d8bdd7ead140f62c",
+    "verts": 102900,
+    "tris": 205816,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 17307.05,
+    "volume": 17306.979,
     "dispatch": {
       "grid": 312,
       "sphereCap": 1,
@@ -1180,12 +1180,12 @@
     }
   },
   "sourcemodels/roundedCube": {
-    "hash": "d9dedafc4daa4959b7fd8b8062130f40ae5136c7c803f0a4f774296731483a2d",
-    "verts": 7566,
-    "tris": 15128,
+    "hash": "5a2bbcdb66edf8395f62affa0ec6287262a1b5f2449cc981b4de0e437805fa2f",
+    "verts": 8048,
+    "tris": 16092,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 7802.536,
+    "volume": 7802.73,
     "dispatch": {
       "grid": 26
     },
@@ -1194,8 +1194,8 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.21,
-      "tiltMaxDeg": 3,
+      "devRatio": 1.35,
+      "tiltMaxDeg": 3.3,
       "slivers": 0
     }
   },
@@ -1268,12 +1268,12 @@
     }
   },
   "SquAIRPot": {
-    "hash": "5d49a1e2926d30e780a7fbdadf5c75b9723216e043d89c27e03dad6364376ece",
-    "verts": 74777,
-    "tris": 149550,
+    "hash": "1e7ee6ff3e0684f4ff16df1b9019aee2438f5657ece555b11df0acd0608cb6e1",
+    "verts": 86568,
+    "tris": 173132,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 118528.262,
+    "volume": 118527.504,
     "dispatch": {
       "grid": 188
     },
@@ -1282,18 +1282,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.15,
-      "tiltMaxDeg": 9.6,
+      "devRatio": 1.4,
+      "tiltMaxDeg": 6.3,
       "slivers": 0
     }
   },
   "Tapered Collet Insert": {
-    "hash": "c4c54136070211e20393d6bf0a9b636af952bba0f60fe09073ae3db5cab6378f",
-    "verts": 12655,
-    "tris": 25310,
+    "hash": "2a8ab96e62af89976df4b11e3884414f48d01a4b11dcbb38e084ce07007f7151",
+    "verts": 15593,
+    "tris": 31186,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 5629.668,
+    "volume": 5627.699,
     "dispatch": {
       "grid": 12,
       "unroll": 1
@@ -1303,18 +1303,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.82,
-      "tiltMaxDeg": 3.2,
+      "devRatio": 1.14,
+      "tiltMaxDeg": 3.1,
       "slivers": 1
     }
   },
   "tool": {
-    "hash": "f9e675253e36b1057f6f9f7c9d996c7f03709cd13d9034a20ce0c99bc0228c65",
-    "verts": 31323,
-    "tris": 62646,
+    "hash": "d16867293f5f8eea3acda22480172358fb129d223e4141abbf97cc5eb51d71bf",
+    "verts": 31912,
+    "tris": 63824,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 2438.046,
+    "volume": 2438.015,
     "dispatch": {
       "grid": 233
     },
@@ -1323,18 +1323,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 1.64,
+      "devRatio": 1.23,
       "tiltMaxDeg": 8.2,
       "slivers": 9
     }
   },
   "Tool-free Z-Axis Belt Tensioner for Voron 2.4": {
-    "hash": "45fce92aabc8a0a2500fb7eff2110cf0211e8e8bf4c21628a7e8b3dfaf7e13f2",
-    "verts": 779336,
-    "tris": 1558704,
+    "hash": "1b00c3fec0e712d5751e67b2b9da7a6232b84f831abb663553c57d711c2ca2a3",
+    "verts": 784453,
+    "tris": 1568938,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 222561.066,
+    "volume": 222563.855,
     "dispatch": {
       "cone": 4,
       "coneCap": 2,
@@ -1347,18 +1347,18 @@
       "folds": 0,
       "crossFace": 0,
       "flips": 0,
-      "devRatio": 2.52,
+      "devRatio": 2.26,
       "tiltMaxDeg": 33.9,
       "slivers": 843
     }
   },
   "WN1452 K25x10 TX7 screw": {
-    "hash": "5b4428a4b6b62cf2663eb223247df23d86b9e8b2999651e61130d4d056470b92",
-    "verts": 6881,
-    "tris": 13758,
+    "hash": "6d9fe2ba535e8fa56c653bb2c5c44766e20925b5ff39e0bee3ec0885ffc9b8a9",
+    "verts": 6989,
+    "tris": 13974,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 41.422,
+    "volume": 41.434,
     "dispatch": {
       "grid": 35
     },

@@ -522,6 +522,17 @@ const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: nu
   check("deviation-only torus patch: area matches", Math.abs(t.area - t.exact) < 0.001 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
 }
 
+// Doubly curved grid (outer equator of a torus, both directions at their chord limit: the columns
+// stretch to their own step along the parallels, the rows to the tube's): each direction held the
+// chord tolerance, but a cell's diagonal bends by both, |κu·a² + κv·b²|/8, and its midpoint is the
+// deepest point of both triangles (benchmark: 1.3-2x on 26 of 63 test models, all in triangle
+// interiors). Edge midpoints include every diagonal.
+{
+  const t = torusPatch(40, 20, 60, -60, 60, 0.01, 40);
+  check("doubly curved torus patch: diagonals within 1.25x the chord tolerance", t.devEdge < 1.25, `${t.devEdge.toFixed(2)}x`);
+  check("doubly curved torus patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("doubly curved torus patch: area matches", Math.abs(t.area - t.exact) < 2e-4 * t.exact, `mesh ${t.area.toFixed(3)} vs exact ${t.exact.toFixed(3)} mm²`);
+}
 // Saddle (inner side of a torus, trivenger's R 31.8 / r 4 at its benchmark tolerance): the dihedral
 // flip pass picked each quad's diagonal by normal agreement alone, and across a cell that bends
 // both ways the normals agree best along the LONG diagonal, which left the surface by 2.4x the

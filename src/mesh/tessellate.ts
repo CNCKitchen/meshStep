@@ -1282,6 +1282,9 @@ function gridCDT(
   const epsU = Math.max(1e-6, spanU / 64), epsV = Math.max(1e-6, spanV / 64);
   let kU = 0, kV = 0;
   const uMags: number[] = [], vMags: number[] = [];
+  // Per sample: SIGNED normal curvature along u and v (1/mm), for the diagonal check below (a cell's
+  // diagonal bends by both directions at once).
+  const fForm: [number, number][] = [];
   for (const fu of [0.15, 0.5, 0.85]) for (const fv of [0.15, 0.5, 0.85]) {
     const su = umin + (umax - umin) * fu, sv = vmin + (vmax - vmin) * fv;
     const Pc = surface.evaluate(su, sv);
@@ -1298,6 +1301,9 @@ function gridCDT(
     };
     kU = Math.max(kU, normCurv(uPp, uPm, d1u, epsU));
     kV = Math.max(kV, normCurv(vPp, vPm, d1v, epsV));
+    const signedCurv = (Pp: Vec3, Pn: Vec3, d1: Vec3, e: number): number =>
+      ((Pp[0] + Pn[0] - 2 * Pc[0]) * nrm[0] + (Pp[1] + Pn[1] - 2 * Pc[1]) * nrm[1] + (Pp[2] + Pn[2] - 2 * Pc[2]) * nrm[2]) / (e * e) / Math.max(d1[0] * d1[0] + d1[1] * d1[1] + d1[2] * d1[2], 1e-30);
+    fForm.push([signedCurv(uPp, uPm, d1u, epsU), signedCurv(vPp, vPm, d1v, epsV)]);
   }
   // Metric scales from the MEDIAN of the 3x3 samples, not the domain midpoint: on a ruled/loft
   // surface (e.g. a degree-1xN dome) the midpoint u-metric can be 1000x below the typical value,
@@ -1464,6 +1470,52 @@ function gridCDT(
   };
   const uSc = uScale / stretchOf(stepU, (umax - umin) * uScale);
   const vSc = vScale / stretchOf(stepV, (vmax - vmin) * vScale);
+  // DOUBLY CURVED faces: each direction's step holds the chord tolerance on its own, but a grid
+  // cell's diagonal bends by both at once. Along the diagonal (a, b) of a cell with steps a along u
+  // and b along v the chord leaves the surface by |κu·a² + κv·b²|/8, and a right triangle's deepest
+  // point is the midpoint of that diagonal (its circumcentre): with both directions at their chord
+  // limit a sphere's grid sat 2x the chord tolerance off the surface (benchmark: devMax 1.3-2x on
+  // 26 of 63 test models, every one in a triangle interior; OCCT checks the deflection inside its
+  // triangles too). Shrink the face target (and the local size field with it) by the excess over
+  // the worse single direction, keeping the stretch: steps then scale as 1/√f in both directions.
+  // A single-curved face (κv = 0) has f = 1 exactly and is unchanged, and so is a saddle whose two
+  // bends cancel along the diagonal (its legs stay the deepest chords). Never below the size floor
+  // every other step respects. The twist term 2·κuv·a·b is left out: spheres and tori have none in
+  // their own parameters, and on B-splines the 3x3 difference estimate of it misreads multi-turn
+  // coils (ABC 00028282: f 8.8, 4% more triangles, twice the slivers, no deviation gained) while
+  // gaining nothing measurable on the benchmark or the pass sample.
+  let diagScale = 1;
+  {
+    const lim = 8 * chordTol;
+    let f = 1;
+    for (let i = 0; i < fForm.length; i++) {
+      const [ku, kv] = fForm[i]!;
+      const a = (target * uMags[i]!) / uSc, b = (target * vMags[i]!) / vSc;
+      const diag = Math.abs(ku * a * a + kv * b * b);
+      const leg = Math.max(lim, Math.abs(ku) * a * a, Math.abs(kv) * b * b);
+      if (diag > f * leg) f = diag / leg;
+    }
+    // Not on a face that reaches a parametric POLE (a (u,v) side where one direction's speed
+    // collapses: a sphere lune up to its pole). There the scaled plane already spreads a whole row of
+    // points around one 3D point, and finer rows add slivers along the parallels that face against
+    // the surface in 3D (nist_ftc_06's lunes: its known fold became 7 inverted triangles).
+    if (f > 1 + 1e-6) {
+      const speed = (u: number, v: number, alongU: boolean): number => {
+        const e = alongU ? epsU : epsV;
+        const p = alongU ? surface.evaluate(u + e, v) : surface.evaluate(u, v + e), m = alongU ? surface.evaluate(u - e, v) : surface.evaluate(u, v - e);
+        return Math.hypot(p[0] - m[0], p[1] - m[1], p[2] - m[2]) / (2 * e);
+      };
+      const poleRatio = Math.min(Math.min(speed(umid, vmin, true), speed(umid, vmax, true)) / uScale,
+        Math.min(speed(umin, vmid, false), speed(umax, vmid, false)) / vScale);
+      if (DBG) console.error(`[grid] fid=${fid} pole ratio ${poleRatio.toFixed(3)}`);
+      if (!(poleRatio < 0.05)) diagScale = 1 / Math.sqrt(f);
+    }
+    if (DBG) console.error(`[grid] fid=${fid} diagonal f=${f.toFixed(3)} target=${target.toExponential(3)} stretch ${(uScale / uSc).toFixed(2)}x${(vScale / vSc).toFixed(2)} kU=${kU.toExponential(2)} kV=${kV.toExponential(2)}`);
+  }
+  const sizeFloor = Math.min(targetEdge / 40, 30 * chordTol);
+  const diagShrink = (t: number): number => (diagScale === 1 ? t : Math.max(t * diagScale, Math.min(t, sizeFloor)));
+  target = diagShrink(target);
+  if (Number.isFinite(sizeCap)) sizeCap = diagShrink(sizeCap);
   const nU = Math.min(GRID_N, Math.max(1, Math.round(((umax - umin) * uSc) / target)));
   const nV = Math.min(GRID_N, Math.max(1, Math.round(((vmax - vmin) * vSc) / target)));
 
@@ -1618,7 +1670,7 @@ function gridCDT(
     // Size field = min of (a) the LOCAL curvature target — so a face whose curvature varies is
     // refined where it actually bends, not just at the patch midpoint — and (b) the boundary-graded
     // size, growing from each edge's own length outward. Capped at the face target, floored to bound.
-    let size = Math.min(faceTarget(surface, targetEdge, chordTol, normalDev, sx / uSc, sy / vSc), sizeCap);
+    let size = Math.min(diagShrink(faceTarget(surface, targetEdge, chordTol, normalDev, sx / uSc, sy / vSc)), sizeCap);
     let d2min = Infinity, dxMin = 0, dyMin = 0;
     const cx = Math.floor(sx / csz), cy = Math.floor(sy / csz);
     if (!denseTried) buildDense();
