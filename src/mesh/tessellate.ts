@@ -1272,7 +1272,14 @@ function gridCDT(
   // true fillet is single-curved at every sample so it keeps its full stretch, while a freeform
   // patch that is flat at the midpoint but bends elsewhere measures that bend and self-limits to
   // isotropic — no surface-kind special cases needed.
-  const epsU = Math.max(1e-6, (umax - umin) / 64), epsV = Math.max(1e-6, (vmax - vmin) / 64);
+  // An unrolled multi-turn helix spans many periods (a thread crest, ABC 00025511: 27 turns,
+  // 170 rad), and a span/64 step then measures a chord across most of the circle (|dS/du| 0.43
+  // instead of R = 2.5), so the grid laid its columns out 5.8x too wide and the band between the
+  // turns sagged up to 6x the chord tolerance. Past 4 periods the step is one 64th of a period;
+  // up to 4 the chord still reads 99.4% of the arc, and those faces keep their old step.
+  const perU = surface.periodicU ? (surface.uPeriod || TWO_PI) : Infinity, perV = surface.periodicV ? (surface.vPeriod || TWO_PI) : Infinity;
+  const spanU = umax - umin > 4 * perU ? perU : umax - umin, spanV = vmax - vmin > 4 * perV ? perV : vmax - vmin;
+  const epsU = Math.max(1e-6, spanU / 64), epsV = Math.max(1e-6, spanV / 64);
   let kU = 0, kV = 0;
   const uMags: number[] = [], vMags: number[] = [];
   for (const fu of [0.15, 0.5, 0.85]) for (const fv of [0.15, 0.5, 0.85]) {

@@ -14,6 +14,7 @@ import { makeSurface } from "../src/geom/surfaces.ts";
 import { unwrap } from "../src/mesh/tessellate.ts";
 import { importStep } from "../src/index.ts";
 import { selfIntersections } from "./self-intersect.ts";
+import { buildBVH, closestDist } from "./closest.ts";
 
 let failures = 0;
 const check = (label: string, cond: boolean, detail: string): void => {
@@ -587,6 +588,48 @@ for (const pocket of [false, true]) {
   check(`${name}: area matches`, Math.abs(t.area - t.exact) < 0.01 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
   check(`${name}: stays on its side of the rim`, t.zMax < 1e-6, `reaches z = ${t.zMax.toFixed(3)}`);
   check(`${name}: watertight and consistently oriented`, t.ok && t.twice === 0, `closed ${t.ok}, ${t.twice} edges used twice in the same direction`);
+}
+
+// ---- helical strip winding 20 times around a cylinder (ABC 00025511, a thread crest): the grid's
+// metric came from difference steps of span/64 in u, which across 20 periods is a chord over most of
+// the circle, so it measured |dS/du| far below R and laid its columns out several times too wide.
+{
+  const R = 2.5, pitch = 10, w = 8, N = 20, per = 64, tol = 0.0037;
+  const L: string[] = [];
+  let id = 100;
+  const point = (p: number[]): number => { const i = id++; L.push(`#${i}=CARTESIAN_POINT('',(${p.map((x) => x.toFixed(9)).join(",")}));`); return i; };
+  const H = (z0: number, t: number): number[] => [R * Math.cos(t), R * Math.sin(t), z0 + (pitch * t) / (2 * Math.PI)];
+  // each helix as a dense degree-1 B-spline (64 points per turn, 3 µm from the cylinder)
+  const helix = (z0: number): number => {
+    const n = N * per, ps: number[] = [];
+    for (let k = 0; k <= n; k++) ps.push(point(H(z0, (2 * Math.PI * k) / per)));
+    const i = id++;
+    L.push(`#${i}=B_SPLINE_CURVE_WITH_KNOTS('',1,(${ps.map((p) => "#" + p).join(",")}),.UNSPECIFIED.,.F.,.F.,(2,${Array(n - 1).fill(1).join(",")},2),(${Array.from({ length: n + 1 }, (_, k) => k).join(",")}),.UNSPECIFIED.);`);
+    return i;
+  };
+  const vertex = (p: number[]): number => { const c = point(p), i = id++; L.push(`#${i}=VERTEX_POINT('',#${c});`); return i; };
+  const direction = (d: number[]): number => { const i = id++; L.push(`#${i}=DIRECTION('',(${d.join(",")}));`); return i; };
+  const T = 2 * Math.PI * N, A = H(0, 0), B = H(0, T), C = H(w, T), D = H(w, 0);
+  const vertical = (a: number[]): number => { const p = point(a), d = direction([0, 0, 1]), v = id++, i = id++; L.push(`#${v}=VECTOR('',#${d},${w});`, `#${i}=LINE('',#${p},#${v});`); return i; };
+  const vA = vertex(A), vB = vertex(B), vC = vertex(C), vD = vertex(D);
+  const edge = (a: number, b: number, c: number): number => { const i = id++; L.push(`#${i}=EDGE_CURVE('',#${a},#${b},#${c},.T.);`); return i; };
+  const oe = (e: number, o: boolean): number => { const i = id++; L.push(`#${i}=ORIENTED_EDGE('',*,*,#${e},${o ? ".T." : ".F."});`); return i; };
+  const e1 = edge(vA, vB, helix(0)), e2 = edge(vB, vC, vertical(B)), e3 = edge(vD, vC, helix(w)), e4 = edge(vA, vD, vertical(A));
+  const loop = id++; L.push(`#${loop}=EDGE_LOOP('',(#${oe(e1, true)},#${oe(e2, true)},#${oe(e3, false)},#${oe(e4, false)}));`);
+  const o = point([0, 0, 0]), z = direction([0, 0, 1]), x = direction([1, 0, 0]), ax = id++, cyl = id++, fb = id++, fc = id++;
+  L.push(`#${ax}=AXIS2_PLACEMENT_3D('',#${o},#${z},#${x});`, `#${cyl}=CYLINDRICAL_SURFACE('',#${ax},${R});`, `#${fb}=FACE_OUTER_BOUND('',#${loop},.T.);`,
+    `#${fc}=ADVANCED_FACE('',(#${fb}),#${cyl},.T.);`, `#${id}=OPEN_SHELL('',(#${fc}));`, `#${id + 1}=SHELL_BASED_SURFACE_MODEL('',(#${id}));`);
+  const src = `ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION((''),'2;1');\nFILE_NAME('t','',(''),(''),'','','');\nFILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n${L.join("\n")}\nENDSEC;\nEND-ISO-10303-21;\n`;
+  const res = importStep(src, { surfaceDeviation: tol, normalDeviation: 15, maxEdge: 0.37 });
+  const P = res.mesh.positions, I = res.mesh.indices, tris = new Float64Array(I.length * 3);
+  for (let t = 0; t < I.length; t++) for (let k = 0; k < 3; k++) tris[t * 3 + k] = P[I[t]! * 3 + k]!;
+  const bvh = buildBVH(tris);
+  let worst = 0;
+  for (let k = 0; k < 4000; k++) {
+    const q = H(w * (0.1 + 0.8 * ((k * 0.618) % 1)), (T * (k + 0.5)) / 4000);
+    worst = Math.max(worst, closestDist(bvh, q[0]!, q[1]!, q[2]!));
+  }
+  check("helical strip over 20 turns: the surface stays within 1.5x the chord tolerance of the mesh", worst < 1.5 * tol, `${(worst / tol).toFixed(2)}x`);
 }
 
 if (failures) { console.log(`geometry-regressions: ${failures} assertion(s) failed`); process.exit(1); }

@@ -661,12 +661,12 @@
     }
   },
   "sourcemodels/furniture-leg": {
-    "hash": "f273d1a66806333fccce3cef0771e30bba7befa4c661942fbeba4174ad7b9e18",
-    "verts": 53889,
-    "tris": 107798,
+    "hash": "a4e41f709478774e1fe831274df840ba1b035562020db95d843487991eff1ff9",
+    "verts": 53639,
+    "tris": 107298,
     "openEdges": 0,
     "nonManifoldEdges": 0,
-    "volume": 21038.918,
+    "volume": 21038.638,
     "dispatch": {
       "grid": 257
     },
@@ -677,7 +677,7 @@
       "flips": 0,
       "devRatio": 2.34,
       "tiltMaxDeg": 34.5,
-      "slivers": 44
+      "slivers": 49
     }
   },
   "sourcemodels/GARMIN_MOUNT_v15": {
