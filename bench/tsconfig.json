@@ -1,0 +1,6 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": { "typeRoots": ["../node_modules/@types"] },
+  "include": [".", "../test/closest.ts"],
+  "exclude": ["node_modules", "out"]
+}
