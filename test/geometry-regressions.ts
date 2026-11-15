@@ -522,6 +522,17 @@ const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: nu
   check("deviation-only torus patch: area matches", Math.abs(t.area - t.exact) < 0.001 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
 }
 
+// Saddle (inner side of a torus, trivenger's R 31.8 / r 4 at its benchmark tolerance): the dihedral
+// flip pass picked each quad's diagonal by normal agreement alone, and across a cell that bends
+// both ways the normals agree best along the LONG diagonal, which left the surface by 2.4x the
+// chord tolerance with the interior points right beside it.
+{
+  const t = torusPatch(31.8, 4, 60, -180, -120, 0.032, 3.2, 15);
+  check("saddle torus patch: flipped diagonals within 1.25x the chord tolerance", t.devEdge < 1.25, `${t.devEdge.toFixed(2)}x`);
+  check("saddle torus patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("saddle torus patch: area matches", Math.abs(t.area - t.exact) < 0.005 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+}
+
 // ---- ball cut flat by a plane that is not a parallel of the sphere's frame (ABC 00021287, a vise
 // spindle's ball knobs pierced by the stem): the sphere face is one circle loop plus two VERTEX_LOOP
 // poles on ±X; the cut plane is normal to Y. Whether the face is the big zone or the small cap is

@@ -2265,6 +2265,24 @@ function gridCDT(
     const d = Math.abs(ringPos[i]! - ringPos[j]!);
     return Math.min(d, L - d) <= 4;
   };
+  // Distance of the chord (i,j)'s midpoint from the surface point at its (u,v) midpoint (the
+  // charts are seam-unwrapped, so the average is the chord's own parameter midpoint).
+  const sagOf = (i: number, j: number): number => {
+    const A2 = allP2[i]!, B2 = allP2[j]!;
+    const q = surface.evaluate((A2[0] + B2[0]) / 2, (A2[1] + B2[1]) / 2);
+    const ia = i * 3, ib = j * 3;
+    return hypot3(q[0] - (Q3[ia]! + Q3[ib]!) / 2, q[1] - (Q3[ia + 1]! + Q3[ib + 1]!) / 2, q[2] - (Q3[ia + 2]! + Q3[ib + 2]!) / 2);
+  };
+  // sagOf is an upper bound (a surface point, not the nearest one) and exact wherever the chord's
+  // parameter midpoint is its foot point. Where it is not (a chord across a cone's apex joins
+  // parameters half a turn apart, and their midpoint lies on the far side), confirm by projecting.
+  const sagExact = (i: number, j: number): number => {
+    const ia = i * 3, ib = j * 3, A2 = allP2[i]!;
+    const m: Vec3 = [(Q3[ia]! + Q3[ib]!) / 2, (Q3[ia + 1]! + Q3[ib + 1]!) / 2, (Q3[ia + 2]! + Q3[ib + 2]!) / 2];
+    const uv = surface.project(m, A2[0], A2[1]);
+    const q = surface.evaluate(uv[0], uv[1]);
+    return Math.min(sagOf(i, j), hypot3(q[0] - m[0], q[1] - m[1], q[2] - m[2]));
+  };
   const dirty = new Uint8Array(nT);
   for (let pass = 0; pass < (ISO ? 0 : 6); pass++) {
     // Edge incidence of the triangulation as it stands at the start of the pass. It is NOT kept
@@ -2337,6 +2355,15 @@ function gridCDT(
       const curAsp = Math.max(asp2(TF[o1]!, TF[o1 + 1]!, TF[o1 + 2]!), asp2(TF[o2]!, TF[o2 + 1]!, TF[o2 + 2]!));
       const flpAsp = Math.max(asp2(c1, a, c2), asp2(c2, b, c1));
       if (flpAsp > Math.max(4, curAsp)) continue;
+      // DEVIATION GUARD: the smoother diagonal is not always the one on the surface. Where the face
+      // bends both ways (a saddle: the inside of a torus), the normals agree best across the LONG
+      // diagonal of a cell that is short along one bend and long along the other, and that chord can
+      // leave the surface by several tolerances (trivenger's torus: a row-spanning diagonal at 2.2x,
+      // the interior points beside it). A flip may not push the diagonal's midpoint off the surface
+      // past the chord tolerance or past the diagonal it replaces (1% slack: on a single-curved face
+      // both diagonals of a cell sag alike, and a float tie must not decide).
+      const sagLim = 1.01 * Math.max(chordTol, sagOf(a, b));
+      if (sagOf(c1, c2) > sagLim && sagExact(c1, c2) > sagLim) continue;
       // Score the WHOLE 1-ring, not just the flipped pair against each other: each configuration's
       // smoothness is the summed normal agreement across the diagonal AND the quad's four outer
       // edges (whose neighbour triangles stay fixed). A pair-only criterion happily makes two
