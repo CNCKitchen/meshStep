@@ -510,6 +510,17 @@ const torusPatch = (R: number, r: number, uDeg: number, v0Deg: number, v1Deg: nu
   check("horn torus outer half: no fold", t.folds === 0, `${t.folds} crossing pairs`);
   check("horn torus outer half: area matches", Math.abs(t.area - t.exact) < 0.01 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
 }
+// Deviation-only settings (max edge ≫ chord tolerance, how the benchmark's "deviation only" row and a
+// CAD-style export call it): the grid's per-direction curvature step floored its chord term at
+// maxEdge/40 instead of faceTarget's min(maxEdge/40, 30·chordTol), so a 1000 mm max edge laid 25 mm
+// steps across a 20 mm tube and the surface deviation was ignored (the benchmark's own meshStep
+// reference sagged 3x its tolerance at the median, INDX M3 screw cylinders 32x).
+{
+  const t = torusPatch(40, 20, 30, -150, 150, 0.01, 1000);
+  check("deviation-only torus patch: edge chords within 1.6x the chord tolerance", t.devEdge < 1.6, `${t.devEdge.toFixed(2)}x`);
+  check("deviation-only torus patch: no fold", t.folds === 0, `${t.folds} crossing pairs`);
+  check("deviation-only torus patch: area matches", Math.abs(t.area - t.exact) < 0.001 * t.exact, `mesh ${t.area.toFixed(2)} vs exact ${t.exact.toFixed(2)} mm²`);
+}
 
 // ---- ball cut flat by a plane that is not a parallel of the sphere's frame (ABC 00021287, a vise
 // spindle's ball knobs pierced by the stem): the sphere face is one circle loop plus two VERTEX_LOOP

@@ -1310,7 +1310,7 @@ function gridCDT(
     if (!(kappa > 1e-9)) return targetEdge;
     const R = 1 / kappa;
     // Floor only the chord term (see faceTarget): the angular requirement must hold as given.
-    return Math.min(targetEdge, Math.max(targetEdge / 40, Math.sqrt(8 * chordTol * R)), R * normalDev);
+    return Math.min(targetEdge, Math.max(Math.min(targetEdge / 40, 30 * chordTol), Math.sqrt(8 * chordTol * R)), R * normalDev);
   };
   // A swept profile's curvature varies along the face and 3x3 samples can all miss its tight
   // stretch (an airfoil-like extrusion: R 28..1150 mm over one face, the samples read ~300): bound
@@ -6089,7 +6089,7 @@ function tessellateBSplineFull(
   };
   const Rc = s.rc; // global min — the full-patch grid is sized uniformly, so no local lookup
   let target = Number.isFinite(Rc) // floor only the chord term (see faceTarget)
-    ? Math.min(targetEdge, Math.max(targetEdge / 40, Math.sqrt(8 * Rc * chordTol)), Rc * normalDev) : targetEdge;
+    ? targetForRadius(Rc, targetEdge, chordTol, normalDev) : targetEdge;
   let nU = Math.max(2, Math.min(2000, Math.ceil(arcLen("u") / target)));
   // Joint per-face triangle budget: coarsen rows and columns by the same factor when over.
   {
