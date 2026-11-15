@@ -786,6 +786,11 @@ export interface CdtOut { missing: number; rescue?: string; equiv?: number }
  * box and hence the same super-triangle), the stored triangulation is continued with the new
  * points instead of re-inserting every old one. The result is the same triangulation, slot for
  * slot, as a run from scratch. Anything else (a moved point, other loops) silently starts over.
+ *
+ * The session also keeps the triangulation as it was after the LOOP points alone (they are
+ * inserted first). A call in the "boundary" mode starts from that one: for a caller that has
+ * moved interior points (the relaxation sweeps) but not the boundary, whose share of the
+ * insertion work is then not repeated. Again the result is that of a run from scratch.
  */
 export class CdtSession {
   /** @internal */ m: Cdt | null = null;
@@ -795,14 +800,25 @@ export class CdtSession {
   /** @internal */ seq: Int32Array | null = null;
   /** @internal */ hint = 0;
   /** @internal */ box: [number, number, number, number] = [0, 0, 0, 0];
+  /** @internal After the loop points only: triangulation, point count of that call, the loop
+   * points' insertion sequence with their coordinates, and the walk hint. */
+  mB: Cdt | null = null;
+  /** @internal */ nB = 0;
+  /** @internal */ seqB: Int32Array | null = null;
+  /** @internal */ xB: Float64Array | null = null;
+  /** @internal */ yB: Float64Array | null = null;
+  /** @internal */ hintB = 0;
+  /** @internal */ boxB: [number, number, number, number] = [0, 0, 0, 0];
 }
 
 /**
  * Triangulate the region bounded by loops[0] (outer) minus loops[1..] (holes), using all listed
  * points (loop vertices + interior). Returns triangle index triples into `points`.
- * `session` (optional) lets consecutive calls on a growing point set share the insertion work.
+ * `session` (optional) lets consecutive calls on a growing point set share the insertion work;
+ * with `mode` "boundary" the call instead starts from the session's loop points (see CdtSession)
+ * and leaves the session as it is.
  */
-export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: CdtOut, session?: CdtSession): [number, number, number][] {
+export function constrainedTriangulate(points: P2[], loops: number[][], interior: number[], out?: CdtOut, session?: CdtSession, mode: "extend" | "boundary" = "extend"): [number, number, number][] {
   const n = points.length;
   // Reset ALL out fields: callers reuse one out object across refinement re-runs, and a stale
   // rescue label from a previous run would mis-flag a clean triangulation.
@@ -850,6 +866,7 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     if (insertedPt[pi]) continue;
     insertedPt[pi] = 1; seq[seqLen++] = pi;
   }
+  const nLoopSeq = seqLen;
   for (let i = 0; i < interior.length; i++) {
     const pi = interior[i]!;
     if (insertedPt[pi]) continue;
@@ -858,7 +875,25 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
   // Continue the session's triangulation when this call's insertion sequence extends it.
   let base: Cdt | null = null;
   let from = 0, hint = 0;
-  if (session && session.m && session.n <= n && session.seq!.length <= seqLen
+  if (session && mode === "boundary") {
+    // Start from the loop points' triangulation when this call's loops are the session's.
+    const b = session.boxB;
+    if (session.mB && session.nB <= n && session.seqB!.length === nLoopSeq
+      && b[0] === minx && b[1] === miny && b[2] === maxx && b[3] === maxy) {
+      const pSeq = session.seqB!, pX = session.xB!, pY = session.yB!;
+      let ok = true;
+      for (let i = 0; ok && i < nLoopSeq; i++) { const v = seq[i]!; if (pSeq[i] !== v || pX[i] !== X[v] || pY[i] !== Y[v]) ok = false; }
+      if (ok) {
+        base = session.mB.clone();
+        from = nLoopSeq; hint = session.hintB;
+        const shift = n - session.nB;
+        if (shift > 0) {
+          const tv = base.tv, lim = session.nB;
+          for (let i = 0, e = base.nt * 3; i < e; i++) if (tv[i]! >= lim) tv[i] = tv[i]! + shift;
+        }
+      }
+    }
+  } else if (session && session.m && session.n <= n && session.seq!.length <= seqLen
     && session.box[0] === minx && session.box[1] === miny && session.box[2] === maxx && session.box[3] === maxy) {
     const pSeq = session.seq!, pX = session.X!, pY = session.Y!;
     let ok = true;
@@ -885,11 +920,22 @@ export function constrainedTriangulate(points: P2[], loops: number[][], interior
     startTri: new Int32Array(nP), startStamp: new Uint32Array(nP),
     endTri: new Int32Array(nP), endStamp: new Uint32Array(nP), epoch: 0,
   };
+  if (session && mode === "extend" && from === 0) {
+    // A run from scratch: keep the triangulation of the loop points alone for "boundary" calls.
+    for (let i = 0; i < nLoopSeq; i++) hint = insertPoint(base, X, Y, seq[i]!, hint, scratch);
+    from = nLoopSeq;
+    session.mB = base.clone(); session.nB = n; session.hintB = hint;
+    session.seqB = seq.slice(0, nLoopSeq);
+    const xB = new Float64Array(nLoopSeq), yB = new Float64Array(nLoopSeq);
+    for (let i = 0; i < nLoopSeq; i++) { xB[i] = X[seq[i]!]!; yB[i] = Y[seq[i]!]!; }
+    session.xB = xB; session.yB = yB;
+    session.boxB = [minx, miny, maxx, maxy];
+  }
   for (let i = from; i < seqLen; i++) hint = insertPoint(base, X, Y, seq[i]!, hint, scratch);
   // Everything from here on (constraint flips, cavity repairs) rewrites the triangulation, so a
   // session keeps the pure insertion state and the rest of this call works on a copy.
   let m = base;
-  if (session) {
+  if (session && mode === "extend") {
     session.m = base; session.n = n; session.X = X; session.Y = Y;
     session.seq = seq.subarray(0, seqLen); session.hint = hint;
     session.box = [minx, miny, maxx, maxy];

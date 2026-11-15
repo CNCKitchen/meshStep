@@ -13,18 +13,19 @@ import type { Vec3 } from "../geom/vec.ts";
 import { cross, dot, hypot2, hypot3, lerp, normalize } from "../geom/vec.ts";
 import { ref, refList, list, num, numList } from "../step/entities.ts";
 import type { Param } from "../step/parser.ts";
-import type { BrepModel, BFace, BLoop } from "../brep/build.ts";
+import type { BrepModel, BFace, BLoop, BSolid } from "../brep/build.ts";
 import type { IndexedMesh } from "../io/stl.ts";
 import type { Surface } from "../geom/surfaces.ts";
-import { makeSurface, isSphere, isBSpline, Sphere, type BSplineSurface } from "../geom/surfaces.ts";
+import { makeSurface, isSphere, isBSpline, Sphere, surfaceHistory, restoreSurfaceHistory, type BSplineSurface } from "../geom/surfaces.ts";
 import { sampleEdge } from "../geom/curves.ts";
 import { EdgeSeeder } from "./edge-seed.ts";
+import { SizeField, type SizeFieldData } from "./size-field.ts";
 import { optimizeFace } from "./optimize.ts";
 import { isoCurvature, mappedMesh, matchRailStations, type MappedSide } from "./mapped.ts";
 import { constrainedTriangulate, CdtSession, type CdtOut } from "./cdt2d.ts";
 import { earcut } from "./earcut.ts";
 import { ekey, refineTriangulation } from "./refine.ts";
-import { beginWarnings, takeWarnings, warn, type MeshWarning } from "./diag.ts";
+import { beginWarnings, takeWarnings, parkWarnings, unparkWarnings, warn, type MeshWarning, type WarningState } from "./diag.ts";
 import { buildEdgeTopo, type EdgeTopo } from "./edge-topo.ts";
 import { PointIds, TripleSet } from "./int-hash.ts";
 
@@ -141,7 +142,7 @@ const FULL_FACE_TRI_BUDGET = 2_000_000;
 /** Hard per-solid capacity backstop for every other mesher path: V8 packed-double arrays refuse to
  * grow past ~134M elements (≈14.9M triangles), surfacing as a cryptic "Invalid array length" deep
  * in a push. Checked between faces so the failure is a clear, actionable error instead. */
-const SOLID_VERTS_LIMIT = 120_000_000;
+export const SOLID_VERTS_LIMIT = 120_000_000;
 /** The V8 array ceiling in triangles (~134M elements / 9): a body proven to need more cannot be
  * meshed at all, so it is rejected up front (bodyTriLowerBound) instead of after minutes of work. */
 const BODY_TRI_CEILING = 14_900_000;
@@ -2134,7 +2135,7 @@ function gridCDT(
       for (const t of tris) { referenced[t[0]] = 1; referenced[t[1]] = 1; referenced[t[2]] = 1; }
       const liveInterior = interiorIdx.filter((v) => referenced[v] === 1);
       const prevTris = tris;
-      tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], liveInterior, cdtOut);
+      tris = constrainedTriangulate(cdtPts, [outerIdx, ...holeIdx], liveInterior, cdtOut, cdtSession, "boundary");
       if (cdtOut.missing > prevMissing) {
         if (DBG) console.error(`[grid] fid=${fid} relaxation sweep ${sweep} lost ${cdtOut.missing - prevMissing} constraint(s) — rolled back`);
         for (let i = 0; i < movedIdx.length; i++) { const v = movedIdx[i]!; allP2[v] = oldP2[i]!; allP3[v] = oldP3[i]!; cdtPts[v] = oldC[i]!; }
@@ -6143,7 +6144,119 @@ function isPointLoop(lp: BLoop, sampled: Map<number, Vec3[]>): boolean {
   return p0 !== null;
 }
 
+/**
+ * What a session prepares before the first face is meshed, as plain data: a session on another
+ * thread that is given this (with the same model and options) skips the preparation and meshes
+ * every face exactly as the session it came from.
+ */
+export interface TessPrep {
+  /** The sampled boundary polyline of every edge: edge `edgeIds[k]` has the points
+   * `edgeOff[k] .. edgeOff[k+1]` of `edgeXYZ` (3 numbers each). */
+  edgeIds: Int32Array;
+  edgeOff: Int32Array;
+  edgeXYZ: Float64Array;
+  /** Faces whose trim loops overlap themselves (see overlapFaces). */
+  overlap: number[];
+  /** Isotropic mode: the size field of each body. */
+  fields: [solidId: number, field: SizeFieldData][] | null;
+  /** Per face, what its surface remembers of the preparation (see surfaceHistory). */
+  surfHistory: [faceId: number, history: number[]][];
+}
+
+/** Stitched mesh of one body, in the body's own vertex numbering (`fill*` = micro-hole fills,
+ * appended after the body's own triangles). */
+export interface SolidMesh {
+  positions: Float64Array;
+  indices: ArrayLike<number>;
+  faceOf: ArrayLike<number>;
+  fillIndices: ArrayLike<number>;
+  fillFaceOf: ArrayLike<number>;
+}
+
+/** What meshing one face did besides emitting triangles: recorded where the face is meshed
+ * (a worker thread) and replayed, in face order, on the thread that assembles the result. */
+export interface FaceOutcome {
+  tessellated: boolean;
+  degenerate: boolean;
+  /** Key counted in `stats.skipped` (the surface kind, or "untriangulated"). */
+  skipped: string | null;
+  warnings: MeshWarning[];
+  /** Mesher names reported to `TessOptions.trace`, in order (filled by the recording side). */
+  trace: string[] | null;
+}
+
+/**
+ * One tessellate() call, opened up so its three kinds of work can run on different threads
+ * (pool.ts): creating the session does everything that is shared by all faces (edge sampling,
+ * the isotropic size field, boundary sanity); `meshFace` then meshes any face on its own, in
+ * any order, `stitchSolid` welds one body's faces, and `appendSolid` + `finish` assemble the
+ * result. Sessions built from the same model and options on different threads agree exactly,
+ * so a face meshed on any of them is the face the serial run would have produced.
+ * The session uses module-level state (warning sink, isotropic field): one at a time per thread.
+ */
+export interface TessSession {
+  /** Reject a body that cannot fit the array ceiling, and select its size field. Call before
+   * meshing the body's faces. */
+  beginSolid(solid: BSolid): void;
+  /** Only select the body's size field (a thread that meshes faces of several bodies in turn). */
+  selectSolid(solid: BSolid): void;
+  /** Mesh one face, appending 9 numbers per triangle to `verts` and its face id to `faceIds`. */
+  meshFace(solid: BSolid, face: BFace, verts: number[], faceIds: number[]): void;
+  /** `meshFace` with its bookkeeping captured instead of applied (see `replayFace`); the
+   * progress count still advances. The warning sink must be parked. */
+  recordFace(solid: BSolid, face: BFace, verts: number[], faceIds: number[]): FaceOutcome;
+  /** Apply a recorded outcome as if the face had been meshed here. `vertsBefore` is the number
+   * of values the body's earlier faces produced. */
+  replayFace(face: BFace, o: FaceOutcome, vertsBefore: number): void;
+  /** Weld and repair one body's triangles. */
+  stitchSolid(solid: BSolid, verts: ArrayLike<number>, faceIds: number[]): SolidMesh;
+  /** Add a stitched body to the result. Bodies must be appended in model order. */
+  appendSolid(solid: BSolid, m: SolidMesh): void;
+  /** Sew, and return the result. Ends the session. */
+  finish(): MeshResult;
+  /** The preparation, for sessions on other threads. Take it before meshing any face here. */
+  exportPrep(): TessPrep;
+  /** Rough relative cost of meshing a face (for scheduling only). */
+  faceCost(face: BFace): number;
+  /** Advance the progress count by `units` (a face counts FACE_UNITS, a body's stitch
+   * STITCH_UNITS per face, of which `appendSolid` reports one itself). */
+  tick(units: number): void;
+  /** False once another session was created on this thread: the module-level state the meshers
+   * read is then that session's, and this one may only assemble what is already meshed. */
+  isCurrent(): boolean;
+  /** Take the collected warnings out of the module-level sink (so another import can run on
+   * this thread while this one waits for its workers), and put them back. */
+  parkWarnings(): void;
+  unparkWarnings(): void;
+}
+/** Progress weight of one face and of one face's share of its body's stitch (see `tick`). */
+export const FACE_UNITS = 16, STITCH_UNITS = 4;
+
+export const vertsLimitError = (n: number): Error => new Error(
+  `meshStep: one body already holds ${Math.round(n / 9 / 1e6)}M triangles with faces `
+  + `still to mesh — surfaceDeviation/maxEdge are far too fine for this model's size. `
+  + `Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them.`);
+
+/** Mesh every body of a session on this thread, in model order. */
+export function runSession(s: TessSession, brep: BrepModel): MeshResult {
+  for (const solid of brep.solids) {
+    s.beginSolid(solid);
+    const verts: number[] = [];
+    const faceIds: number[] = [];
+    for (const face of solid.faces) s.meshFace(solid, face, verts, faceIds);
+    s.appendSolid(solid, s.stitchSolid(solid, verts, faceIds));
+  }
+  return s.finish();
+}
+
 export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult {
+  return runSession(createTessSession(brep, opts), brep);
+}
+
+let sessionSeq = 0;
+
+export function createTessSession(brep: BrepModel, opts: TessOptions = {}, prep?: TessPrep): TessSession {
+  const mySeq = ++sessionSeq;
   const chordTol = opts.chordTol ?? 0.01;
   const targetEdge = opts.targetEdge ?? 1.0;
   const normalDev = opts.normalDev ?? (15 * Math.PI / 180);
@@ -6182,339 +6295,370 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     if (parts.length) warn("step-record-repaired", undefined, `malformed STEP data — ${parts.join("; ")}`);
   }
 
-  // Cache each face's surface (used to dispatch tessellation).
+  // Cache each face's surface (used to dispatch tessellation). A session that starts from
+  // another's preparation makes a face's surface when it first meshes the face.
   const faceSurf = new Map<number, Surface | null>();
+  const surfSource = new Map<number, [surfaceId: number, scale: number]>();
   for (const solid of brep.solids) for (const face of solid.faces) {
-    faceSurf.set(face.faceId, makeSurface(brep.table, face.surfaceId, solid.scale ?? brep.scale, brep.units.radPerAngle));
+    if (prep) surfSource.set(face.faceId, [face.surfaceId, solid.scale ?? brep.scale]);
+    else faceSurf.set(face.faceId, makeSurface(brep.table, face.surfaceId, solid.scale ?? brep.scale, brep.units.radPerAngle));
   }
+  const surfHistory = prep ? new Map(prep.surfHistory) : null;
+  const surfaceOf = (fid: number): Surface | null => {
+    let s = faceSurf.get(fid);
+    if (s === undefined && prep && !faceSurf.has(fid)) {
+      const src = surfSource.get(fid);
+      s = src ? makeSurface(brep.table, src[0], src[1], brep.units.radPerAngle) : null;
+      const h = surfHistory!.get(fid);
+      if (s && h) restoreSurfaceHistory(s, h);
+      faceSurf.set(fid, s);
+    }
+    return s ?? null;
+  };
 
   // Progress accounting, weighted by measured cost: face meshing dominates wall time, edge
   // sampling is cheap (edges outnumber faces ~3:1, so an unweighted count leaps to ~80% during
   // sampling and then crawls), and each solid's stitch passes (weld/zip/T-junctions/hole fill)
   // cost roughly a quarter of its faces' meshing. The total is known before any work starts, so
   // the consumer can draw a determinate bar for single parts and assemblies alike.
-  const W_FACE = 16, W_STITCH = 4;
+  const W_FACE = FACE_UNITS, W_STITCH = STITCH_UNITS;
   let pDone = 0;
   let pTotal = brep.edges.size;
   for (const solid of brep.solids) pTotal += (W_FACE + W_STITCH) * solid.faces.length;
   const tick = (units: number): void => { pDone += units; opts.onProgress?.(pDone, pTotal); };
-  // Sample each edge to the FINEST interior target of its adjacent faces — not just its own curve
-  // curvature. A curved face's straight seam / side edges (lines carry no curvature, so they'd be
-  // sampled at targetEdge) otherwise stay far coarser than the fine interior and sliver the seam.
-  // Still one shared sampling per edge, so seams remain watertight; any residual sliver lands on a
-  // flat neighbour (where it's invisible) rather than on the curved face.
-  // (A DIRECTIONAL variant — relaxing edges that run along a face's flat direction — was measured:
-  // it halves the triangle count again but coarsens the pinched-B-spline rims through their
-  // analytic neighbours and opens more of their seams; with the 1-ring flip pass the visual result
-  // is identical, so the conservative isotropic rule stays.)
-  const edgeMaxLen = new Map<number, number>();
-  // Per-face overrides also tighten the edge's OWN curve criteria (chord, turn) to the finest
-  // face it bounds. Only filled when overrides exist, so the default path reads the globals.
-  const edgeTol = new Map<number, { chordTol: number; normalDev: number }>();
-  for (const solid of brep.solids) for (const face of solid.faces) {
-    const surface = faceSurf.get(face.faceId);
-    const ft = tolOf(face.faceId);
-    const t = surface ? faceTarget(surface, ft.targetEdge, ft.chordTol, ft.normalDev, 0, 0, true) : ft.targetEdge;
-    for (const lp of face.loops) for (const oe of lp.edges) {
-      const cur = edgeMaxLen.get(oe.edgeId);
-      if (cur === undefined || t < cur) edgeMaxLen.set(oe.edgeId, t);
-      if (faceTol) {
-        const et = edgeTol.get(oe.edgeId);
-        edgeTol.set(oe.edgeId, et
-          ? { chordTol: Math.min(et.chordTol, ft.chordTol), normalDev: Math.min(et.normalDev, ft.normalDev) }
-          : { chordTol: ft.chordTol, normalDev: ft.normalDev });
-      }
-    }
-  }
-  const edgeChord = (id: number): number => edgeTol.get(id)?.chordTol ?? chordTol;
-  const edgeNdev = (id: number): number => edgeTol.get(id)?.normalDev ?? normalDev;
   const sampled = new Map<number, Vec3[]>();
-  // ISOTROPIC mode seeds the edges from a growth-limited size field instead (edge-seed.ts): even
-  // spacing, graded toward fine neighbours, no stub at an edge end. Still one sampling per edge.
-  const seeder = opts.isotropic
+  const seeder = opts.isotropic && !prep
     ? new EdgeSeeder(brep, faceSurf, tolOf, globalTol, opts.growthRate ?? 1.5, opts.minEdge)
     : null;
-  seeder?.prepare();
-  for (const [id, e] of brep.edges) {
-    const te = edgeMaxLen.get(id) ?? targetEdge;
-    sampled.set(id, seeder
-      ? seeder.seed(id)
-      : sampleEdge(brep.table, e, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
-    tick(1);
-  }
-  // MAPPED faces (mapped.ts) need their two cross sides seeded alike: the same node count, and
-  // uniformly, so that node i of one side faces node i of the other and the rulings between
-  // them run straight along the fillet. The field would seed each on its own (graded toward
-  // whatever is fine near either end). Take the larger of the two counts for both, re-seed, and
-  // repeat: an arc is shared by the next fillet along a chain, so a raise can propagate.
-  if (seeder && ISO?.mapped) {
-    // The mappable faces, found once: a face that is not mappable with the field's own seeding
-    // does not become so by seeding other faces' sides alike. `seen` holds the boundary
-    // samplings a face was last looked at with, so a round only revisits faces that changed.
-    const cand: MappedCand[] = [];
+  if (!prep) {
+    // Sample each edge to the FINEST interior target of its adjacent faces — not just its own curve
+    // curvature. A curved face's straight seam / side edges (lines carry no curvature, so they'd be
+    // sampled at targetEdge) otherwise stay far coarser than the fine interior and sliver the seam.
+    // Still one shared sampling per edge, so seams remain watertight; any residual sliver lands on a
+    // flat neighbour (where it's invisible) rather than on the curved face.
+    // (A DIRECTIONAL variant — relaxing edges that run along a face's flat direction — was measured:
+    // it halves the triangle count again but coarsens the pinched-B-spline rims through their
+    // analytic neighbours and opens more of their seams; with the 1-ring flip pass the visual result
+    // is identical, so the conservative isotropic rule stays.)
+    const edgeMaxLen = new Map<number, number>();
+    // Per-face overrides also tighten the edge's OWN curve criteria (chord, turn) to the finest
+    // face it bounds. Only filled when overrides exist, so the default path reads the globals.
+    const edgeTol = new Map<number, { chordTol: number; normalDev: number }>();
     for (const solid of brep.solids) for (const face of solid.faces) {
       const surface = faceSurf.get(face.faceId);
-      if (!surface || face.loops.length !== 1) continue;
-      if (mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId))) cand.push({ face, surface, seen: null });
+      const ft = tolOf(face.faceId);
+      const t = surface ? faceTarget(surface, ft.targetEdge, ft.chordTol, ft.normalDev, 0, 0, true) : ft.targetEdge;
+      for (const lp of face.loops) for (const oe of lp.edges) {
+        const cur = edgeMaxLen.get(oe.edgeId);
+        if (cur === undefined || t < cur) edgeMaxLen.set(oe.edgeId, t);
+        if (faceTol) {
+          const et = edgeTol.get(oe.edgeId);
+          edgeTol.set(oe.edgeId, et
+            ? { chordTol: Math.min(et.chordTol, ft.chordTol), normalDev: Math.min(et.normalDev, ft.normalDev) }
+            : { chordTol: ft.chordTol, normalDev: ft.normalDev });
+        }
+      }
     }
-    const settle = (): void => {
-      for (const c of cand) c.seen = null;
-      for (let round = 0; round < 10; round++) {
-        let changed = false;
-        for (const c of cand) {
-          const { face, surface } = c;
-          const cur = face.loops[0]!.edges.map((oe) => sampled.get(oe.edgeId));
-          if (c.seen && cur.every((x, k) => x === c.seen![k])) continue;
-          c.seen = cur;
+    const edgeChord = (id: number): number => edgeTol.get(id)?.chordTol ?? chordTol;
+    const edgeNdev = (id: number): number => edgeTol.get(id)?.normalDev ?? normalDev;
+    // ISOTROPIC mode seeds the edges from a growth-limited size field instead (edge-seed.ts): even
+    // spacing, graded toward fine neighbours, no stub at an edge end. Still one sampling per edge.
+    seeder?.prepare();
+    for (const [id, e] of brep.edges) {
+      const te = edgeMaxLen.get(id) ?? targetEdge;
+      sampled.set(id, seeder
+        ? seeder.seed(id)
+        : sampleEdge(brep.table, e, e.scale ?? brep.scale, edgeChord(id), te, brep.units.radPerAngle, edgeNdev(id)));
+      tick(1);
+    }
+    // MAPPED faces (mapped.ts) need their two cross sides seeded alike: the same node count, and
+    // uniformly, so that node i of one side faces node i of the other and the rulings between
+    // them run straight along the fillet. The field would seed each on its own (graded toward
+    // whatever is fine near either end). Take the larger of the two counts for both, re-seed, and
+    // repeat: an arc is shared by the next fillet along a chain, so a raise can propagate.
+    if (seeder && ISO?.mapped) {
+      // The mappable faces, found once: a face that is not mappable with the field's own seeding
+      // does not become so by seeding other faces' sides alike. `seen` holds the boundary
+      // samplings a face was last looked at with, so a round only revisits faces that changed.
+      const cand: MappedCand[] = [];
+      for (const solid of brep.solids) for (const face of solid.faces) {
+        const surface = faceSurf.get(face.faceId);
+        if (!surface || face.loops.length !== 1) continue;
+        if (mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId))) cand.push({ face, surface, seen: null });
+      }
+      const settle = (): void => {
+        for (const c of cand) c.seen = null;
+        for (let round = 0; round < 10; round++) {
+          let changed = false;
+          for (const c of cand) {
+            const { face, surface } = c;
+            const cur = face.loops[0]!.edges.map((oe) => sampled.get(oe.edgeId));
+            if (c.seen && cur.every((x, k) => x === c.seen![k])) continue;
+            c.seen = cur;
+            const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
+            if (!plan) continue;
+            let n = Math.max(plan.crossA.p2.length - 1, plan.crossB.p2.length - 1);
+            // SQUARE CELLS. With the rails seeded alike (matchMappedRails) the face becomes a grid
+            // of N strips by M cells, and each cell should be close to a square: strips no wider
+            // than MAPPED_ASPECT cell lengths (more strips otherwise), cells no longer than
+            // MAPPED_ASPECT strip widths (the rails are capped at that size otherwise).
+            const crossLen = (polyLen(plan.crossA.p3) + polyLen(plan.crossB.p3)) / 2;
+            const M0 = plan.rail0.p2.length - 1, M1 = plan.rail1.p2.length - 1;
+            // The cell length that counts is the rails' usual one (the median): a rail graded
+            // toward one fine corner must not thin every strip of the face.
+            const cells: number[] = [];
+            for (const r of [plan.rail0, plan.rail1]) for (let k = 1; k < r.p3.length; k++) cells.push(segLen(r.p3, k - 1));
+            cells.sort((x, y) => x - y);
+            n = Math.min(4096, Math.max(n, Math.ceil(crossLen / (MAPPED_ASPECT * cells[cells.length >> 1]!) - 1e-6)));
+            for (const e of [...plan.edges0, ...plan.edges1]) if (seeder.limitSize(e.id, (MAPPED_ASPECT * crossLen) / n)) changed = true;
+            // Two rails that are both cross sides of other mapped faces (uniform, one edge each)
+            // can only agree by count.
+            if (plan.edges0.length === 1 && plan.edges1.length === 1 && M0 !== M1 && seeder.isUniform(plan.edges0[0]!.id) && seeder.isUniform(plan.edges1[0]!.id)) {
+              for (const e of [plan.edges0[0]!, plan.edges1[0]!]) if (seeder.requireUniform(e.id, Math.max(M0, M1))) changed = true;
+            }
+            // A cross side of one edge is seeded uniformly with that count. One made of several
+            // edges keeps the field's seeding here and is pinned to the other side's stations below.
+            for (const ids of [plan.edgesA, plan.edgesB]) if (ids.length === 1 && seeder.requireUniform(ids[0]!, n)) changed = true;
+          }
+          if (!changed) break;
+          for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+        }
+        // Same COUNT is not yet same POSITIONS: node i of the two cross sides must sit at the same
+        // value of the curved parameter, or the "rulings" between them run askew and the strips
+        // twist. Even spacing in arc length only guarantees that when both sides have the same
+        // shape (two circular arcs); a fillet that runs into a slanted face ends in an ellipse arc.
+        // So one side keeps its uniform nodes and the other is pinned to the same parameter values,
+        // read off a dense trace of its curve. A side already fixed by the neighbouring fillet is
+        // the reference; if both are, the face keeps what it has.
+        let anyPin = false;
+        for (const { face, surface } of cand) {
           const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
           if (!plan) continue;
-          let n = Math.max(plan.crossA.p2.length - 1, plan.crossB.p2.length - 1);
-          // SQUARE CELLS. With the rails seeded alike (matchMappedRails) the face becomes a grid
-          // of N strips by M cells, and each cell should be close to a square: strips no wider
-          // than MAPPED_ASPECT cell lengths (more strips otherwise), cells no longer than
-          // MAPPED_ASPECT strip widths (the rails are capped at that size otherwise).
-          const crossLen = (polyLen(plan.crossA.p3) + polyLen(plan.crossB.p3)) / 2;
-          const M0 = plan.rail0.p2.length - 1, M1 = plan.rail1.p2.length - 1;
-          // The cell length that counts is the rails' usual one (the median): a rail graded
-          // toward one fine corner must not thin every strip of the face.
-          const cells: number[] = [];
-          for (const r of [plan.rail0, plan.rail1]) for (let k = 1; k < r.p3.length; k++) cells.push(segLen(r.p3, k - 1));
-          cells.sort((x, y) => x - y);
-          n = Math.min(4096, Math.max(n, Math.ceil(crossLen / (MAPPED_ASPECT * cells[cells.length >> 1]!) - 1e-6)));
-          for (const e of [...plan.edges0, ...plan.edges1]) if (seeder.limitSize(e.id, (MAPPED_ASPECT * crossLen) / n)) changed = true;
-          // Two rails that are both cross sides of other mapped faces (uniform, one edge each)
-          // can only agree by count.
-          if (plan.edges0.length === 1 && plan.edges1.length === 1 && M0 !== M1 && seeder.isUniform(plan.edges0[0]!.id) && seeder.isUniform(plan.edges1[0]!.id)) {
-            for (const e of [plan.edges0[0]!, plan.edges1[0]!]) if (seeder.requireUniform(e.id, Math.max(M0, M1))) changed = true;
+          if (plan.edgesA.length !== 1 || plan.edgesB.length !== 1) {
+            // A cross side made of SEVERAL edges: its B-rep vertices cannot move, so the two
+            // sides get common stations the way rails do (matchRailStations), in the curved
+            // parameter. A one-edge side is the uniform reference and the other side takes its
+            // stations, each vertex at the nearest; two many-edge sides are merged.
+            const xa = sidePositions(plan.crossA, plan.C), xb = sidePositions(plan.crossB, plan.C);
+            if (!xa || !xb) continue;
+            // Not to be changed: a one-edge side (the uniform reference) and any edge whose nodes
+            // another mapped face has already fixed.
+            const lockedOf = (es: RailEdge[]) => (e: RailEdge): boolean => es.length === 1 || seeder.isPinned(e.id);
+            const la = lockedOf(plan.crossEdgesA), lb = lockedOf(plan.crossEdgesB);
+            const m = matchRailStations(xa, sideJoints(plan.crossEdgesA), xb, sideJoints(plan.crossEdgesB), sideLocks(plan.crossEdgesA, la), sideLocks(plan.crossEdgesB, lb));
+            if (!m) continue;
+            for (const [x, st, es, lk] of [[xa, m.sa, plan.crossEdgesA, la], [xb, m.sb, plan.crossEdgesB, lb]] as const) {
+              if (pinSide(surface, plan.C, x, st, es, seeder, sampled, lk)?.length) anyPin = true;
+              for (const e of es) seeder.lock(e.id);
+            }
+            continue;
           }
-          // A cross side of one edge is seeded uniformly with that count. One made of several
-          // edges keeps the field's seeding here and is pinned to the other side's stations below.
-          for (const ids of [plan.edgesA, plan.edgesB]) if (ids.length === 1 && seeder.requireUniform(ids[0]!, n)) changed = true;
+          const N = plan.crossA.p2.length - 1;
+          if (N < 2 || plan.crossB.p2.length - 1 !== N) continue;
+          const aFixed = seeder.isPinned(plan.edgesA[0]!), bFixed = seeder.isPinned(plan.edgesB[0]!);
+          if (aFixed && bFixed) continue;
+          const [ref, dep, depId] = bFixed ? [plan.crossB, plan.crossA, plan.edgesA[0]!] : [plan.crossA, plan.crossB, plan.edgesB[0]!];
+          seeder.lock(bFixed ? plan.edgesB[0]! : plan.edgesA[0]!);
+          const C = plan.C;
+          const tr = seeder.trace(depId);
+          if (!tr || tr.G.length < 2) continue;
+          // Trace of the dependent side in the side's own direction, projected to the face.
+          const along = Math.hypot(tr.G[0]![0] - dep.p3[0]![0], tr.G[0]![1] - dep.p3[0]![1], tr.G[0]![2] - dep.p3[0]![2])
+            <= Math.hypot(tr.G[tr.G.length - 1]![0] - dep.p3[0]![0], tr.G[tr.G.length - 1]![1] - dep.p3[0]![1], tr.G[tr.G.length - 1]![2] - dep.p3[0]![2]);
+          const G = along ? tr.G : tr.G.slice().reverse();
+          const L = tr.S[tr.S.length - 1]!;
+          const sOf = (j: number): number => (along ? tr.S[j]! : L - tr.S[tr.S.length - 1 - j]!);
+          const cs = edgePcurve(surface, G).p2.map((q) => q[C]);
+          const c0 = cs[0]!, c1 = cs[cs.length - 1]!, r0 = ref.p2[0]![C], r1 = ref.p2[N]![C];
+          if (!(Math.abs(c1 - c0) > 0) || !(Math.abs(r1 - r0) > 0)) continue;
+          const fr: number[] = [];
+          let j = 1, ok = true;
+          for (let i = 1; i < N && ok; i++) {
+            const target = c0 + ((ref.p2[i]![C] - r0) / (r1 - r0)) * (c1 - c0);
+            while (j < cs.length - 1 && (cs[j]! - target) * (c1 - c0) < 0) j++;
+            const d = cs[j]! - cs[j - 1]!;
+            const w = Math.abs(d) > 0 ? (target - cs[j - 1]!) / d : 0;
+            if (!(w >= -1e-6 && w <= 1 + 1e-6)) { ok = false; break; } // the trace is not monotone here
+            const f = (sOf(j - 1) + (sOf(j) - sOf(j - 1)) * Math.min(1, Math.max(0, w))) / L;
+            if (fr.length && f <= fr[fr.length - 1]!) { ok = false; break; }
+            fr.push(f);
+          }
+          if (!ok || fr.length !== N - 1 || fr[0]! <= 0 || fr[fr.length - 1]! >= 1) continue;
+          // Fractions are in the side's direction; the seeder wants them v0 -> v1.
+          seeder.pin(depId, along ? fr : fr.map((x) => 1 - x).reverse());
+          anyPin = true;
         }
-        if (!changed) break;
+        if (anyPin) for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+        matchMappedRails(cand, tolOf, seeder, sampled);
+      };
+      // Seeding the sides alike can itself make a face unmappable: a neighbour's demand raises
+      // its strip count until the strips are far thinner than its curvature asks (the gate in
+      // mappedPlan), its cross sides cannot be brought to the same stations after all, or a
+      // side seeded evenly is far too coarse for a fine spot it passes. Such a face must be
+      // meshed freely, and for that its sides should be seeded
+      // by the field again, not uniformly. So it leaves the candidates, every demand made so
+      // far is withdrawn, and the rest settle anew.
+      for (let again = 0; cand.length; again++) {
+        settle();
+        const keep = again < 4 ? cand.filter((c) => {
+          const plan = mappedPlan(c.surface, c.face.loops[0]!, sampled, tolOf(c.face.faceId));
+          if (!plan || plan.crossA.p2.length !== plan.crossB.p2.length) return false; // unequal cross sides cannot be mapped either
+          // Nor a face whose cross side, evenly divided, strides over something the size field
+          // wants meshed several times finer (a sliver edge at its end): the faces around that
+          // spot need the side graded down to it.
+          return ![...plan.edgesA, ...plan.edgesB].some((id) => seeder.coarseness(id) > 3);
+        }) : cand;
+        if (keep.length === cand.length) break;
+        cand.length = 0; cand.push(...keep);
+        seeder.resetMapped();
         for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
       }
-      // Same COUNT is not yet same POSITIONS: node i of the two cross sides must sit at the same
-      // value of the curved parameter, or the "rulings" between them run askew and the strips
-      // twist. Even spacing in arc length only guarantees that when both sides have the same
-      // shape (two circular arcs); a fillet that runs into a slanted face ends in an ellipse arc.
-      // So one side keeps its uniform nodes and the other is pinned to the same parameter values,
-      // read off a dense trace of its curve. A side already fixed by the neighbouring fillet is
-      // the reference; if both are, the face keeps what it has.
-      let anyPin = false;
-      for (const { face, surface } of cand) {
-        const plan = mappedPlan(surface, face.loops[0]!, sampled, tolOf(face.faceId));
-        if (!plan) continue;
-        if (plan.edgesA.length !== 1 || plan.edgesB.length !== 1) {
-          // A cross side made of SEVERAL edges: its B-rep vertices cannot move, so the two
-          // sides get common stations the way rails do (matchRailStations), in the curved
-          // parameter. A one-edge side is the uniform reference and the other side takes its
-          // stations, each vertex at the nearest; two many-edge sides are merged.
-          const xa = sidePositions(plan.crossA, plan.C), xb = sidePositions(plan.crossB, plan.C);
-          if (!xa || !xb) continue;
-          // Not to be changed: a one-edge side (the uniform reference) and any edge whose nodes
-          // another mapped face has already fixed.
-          const lockedOf = (es: RailEdge[]) => (e: RailEdge): boolean => es.length === 1 || seeder.isPinned(e.id);
-          const la = lockedOf(plan.crossEdgesA), lb = lockedOf(plan.crossEdgesB);
-          const m = matchRailStations(xa, sideJoints(plan.crossEdgesA), xb, sideJoints(plan.crossEdgesB), sideLocks(plan.crossEdgesA, la), sideLocks(plan.crossEdgesB, lb));
-          if (!m) continue;
-          for (const [x, st, es, lk] of [[xa, m.sa, plan.crossEdgesA, la], [xb, m.sb, plan.crossEdgesB, lb]] as const) {
-            if (pinSide(surface, plan.C, x, st, es, seeder, sampled, lk)?.length) anyPin = true;
-            for (const e of es) seeder.lock(e.id);
-          }
-          continue;
-        }
-        const N = plan.crossA.p2.length - 1;
-        if (N < 2 || plan.crossB.p2.length - 1 !== N) continue;
-        const aFixed = seeder.isPinned(plan.edgesA[0]!), bFixed = seeder.isPinned(plan.edgesB[0]!);
-        if (aFixed && bFixed) continue;
-        const [ref, dep, depId] = bFixed ? [plan.crossB, plan.crossA, plan.edgesA[0]!] : [plan.crossA, plan.crossB, plan.edgesB[0]!];
-        seeder.lock(bFixed ? plan.edgesB[0]! : plan.edgesA[0]!);
-        const C = plan.C;
-        const tr = seeder.trace(depId);
-        if (!tr || tr.G.length < 2) continue;
-        // Trace of the dependent side in the side's own direction, projected to the face.
-        const along = Math.hypot(tr.G[0]![0] - dep.p3[0]![0], tr.G[0]![1] - dep.p3[0]![1], tr.G[0]![2] - dep.p3[0]![2])
-          <= Math.hypot(tr.G[tr.G.length - 1]![0] - dep.p3[0]![0], tr.G[tr.G.length - 1]![1] - dep.p3[0]![1], tr.G[tr.G.length - 1]![2] - dep.p3[0]![2]);
-        const G = along ? tr.G : tr.G.slice().reverse();
-        const L = tr.S[tr.S.length - 1]!;
-        const sOf = (j: number): number => (along ? tr.S[j]! : L - tr.S[tr.S.length - 1 - j]!);
-        const cs = edgePcurve(surface, G).p2.map((q) => q[C]);
-        const c0 = cs[0]!, c1 = cs[cs.length - 1]!, r0 = ref.p2[0]![C], r1 = ref.p2[N]![C];
-        if (!(Math.abs(c1 - c0) > 0) || !(Math.abs(r1 - r0) > 0)) continue;
-        const fr: number[] = [];
-        let j = 1, ok = true;
-        for (let i = 1; i < N && ok; i++) {
-          const target = c0 + ((ref.p2[i]![C] - r0) / (r1 - r0)) * (c1 - c0);
-          while (j < cs.length - 1 && (cs[j]! - target) * (c1 - c0) < 0) j++;
-          const d = cs[j]! - cs[j - 1]!;
-          const w = Math.abs(d) > 0 ? (target - cs[j - 1]!) / d : 0;
-          if (!(w >= -1e-6 && w <= 1 + 1e-6)) { ok = false; break; } // the trace is not monotone here
-          const f = (sOf(j - 1) + (sOf(j) - sOf(j - 1)) * Math.min(1, Math.max(0, w))) / L;
-          if (fr.length && f <= fr[fr.length - 1]!) { ok = false; break; }
-          fr.push(f);
-        }
-        if (!ok || fr.length !== N - 1 || fr[0]! <= 0 || fr[fr.length - 1]! >= 1) continue;
-        // Fractions are in the side's direction; the seeder wants them v0 -> v1.
-        seeder.pin(depId, along ? fr : fr.map((x) => 1 - x).reverse());
-        anyPin = true;
+      // The mapped faces have refined some edges beyond what the size field knew when every edge
+      // was seeded. Let the field take that in, seed again and settle again (twice at most: the
+      // second pass changes little, and whatever it still refines is refined by a small step).
+      for (let pass = 0; pass < 2 && cand.length && seeder.absorb(); pass++) {
+        for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
+        settle();
       }
-      if (anyPin) for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
-      matchMappedRails(cand, tolOf, seeder, sampled);
-    };
-    // Seeding the sides alike can itself make a face unmappable: a neighbour's demand raises
-    // its strip count until the strips are far thinner than its curvature asks (the gate in
-    // mappedPlan), its cross sides cannot be brought to the same stations after all, or a
-    // side seeded evenly is far too coarse for a fine spot it passes. Such a face must be
-    // meshed freely, and for that its sides should be seeded
-    // by the field again, not uniformly. So it leaves the candidates, every demand made so
-    // far is withdrawn, and the rest settle anew.
-    for (let again = 0; cand.length; again++) {
-      settle();
-      const keep = again < 4 ? cand.filter((c) => {
-        const plan = mappedPlan(c.surface, c.face.loops[0]!, sampled, tolOf(c.face.faceId));
-        if (!plan || plan.crossA.p2.length !== plan.crossB.p2.length) return false; // unequal cross sides cannot be mapped either
-        // Nor a face whose cross side, evenly divided, strides over something the size field
-        // wants meshed several times finer (a sliver edge at its end): the faces around that
-        // spot need the side graded down to it.
-        return ![...plan.edgesA, ...plan.edgesB].some((id) => seeder.coarseness(id) > 3);
-      }) : cand;
-      if (keep.length === cand.length) break;
-      cand.length = 0; cand.push(...keep);
-      seeder.resetMapped();
-      for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
     }
-    // The mapped faces have refined some edges beyond what the size field knew when every edge
-    // was seeded. Let the field take that in, seed again and settle again (twice at most: the
-    // second pass changes little, and whatever it still refines is refined by a small step).
-    for (let pass = 0; pass < 2 && cand.length && seeder.absorb(); pass++) {
-      for (const [id] of brep.edges) sampled.set(id, seeder.seed(id));
-      settle();
-    }
-  }
-  // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
-  // run-out at 0.7mm chord tolerance) samples its edges with so few points that the boundary
-  // polygon SELF-INTERSECTS in (u,v) — chords of adjacent edges swing across each other. The CDT
-  // then classifies most of the polygon away (parity flips at every crossing) and the face's whole
-  // rim opens against its neighbours (wallganizer's screw: 16-pt run-out plane -> 4 triangles ->
-  // the cone rim it borders is fully open, ×213 instances). For such a face, TRIAL-sample its
-  // edges at increasingly fine tolerances and commit the first level whose polygon is simple.
-  // Outcome-verified on purpose: a polygon that stays self-intersecting at every level crosses
-  // from genuine trim overlap (tangent letter engravings), where densification cannot help — it
-  // only perturbs every neighbour sharing those edges (Ontos +523 open edges under a blind
-  // version of this pass). This runs as a PRE-PASS before any face is meshed, so a densified edge
-  // remains the SINGLE shared sampling and seams stay watertight; per edge the FINEST committed
-  // level wins. Only small boundaries are checked (the crossing test is O(n²)-ish, and large
-  // self-intersecting polygons are always the genuine-overlap class).
-  {
-    const level = new Map<number, number>(); // edgeId -> finest committed refinement factor
-    const resample = (id: number, f: number): Vec3[] => {
-      if (seeder) return seeder.seed(id, f); // isotropic mode: the same seeding at f times the density
-      const e = brep.edges.get(id)!;
-      const te = Math.max((edgeMaxLen.get(id) ?? targetEdge) / f, edgeChord(id));
-      return sampleEdge(brep.table, e, e.scale ?? brep.scale, edgeChord(id) / f, te, brep.units.radPerAngle, edgeNdev(id));
-    };
-    for (const solid of brep.solids) for (const face of solid.faces) {
-      const surface = faceSurf.get(face.faceId);
-      if (!surface) continue;
-      let nPts = 0;
-      let lo0 = Infinity, lo1 = Infinity, lo2 = Infinity, hi0 = -Infinity, hi1 = -Infinity, hi2 = -Infinity;
-      for (const lp of face.loops) for (const oe of lp.edges) {
-        const s = sampled.get(oe.edgeId); if (!s) continue;
-        nPts += s.length;
-        for (const p of s) {
-          if (p[0] < lo0) lo0 = p[0]; if (p[0] > hi0) hi0 = p[0];
-          if (p[1] < lo1) lo1 = p[1]; if (p[1] > hi1) hi1 = p[1];
-          if (p[2] < lo2) lo2 = p[2]; if (p[2] > hi2) hi2 = p[2];
-        }
-      }
-      // A COLLAPSED loop — fewer than 3 weld-distinct sampled points — cannot form a polygon at
-      // all: a sub-tolerance face's boundary can legally lose every interior sample to the
-      // merge/DP floors (a 0.4 mm lens face on a 1.4 m assembly at 0.7 mm chordTol — ABC
-      // 00018177's ×10 fillet slivers), and the face is then unmeshable by anything. Densifying
-      // is provably safe there: the loop currently contributes no geometry whatsoever.
-      const distinct3 = (lp: BLoop, s: Map<number, Vec3[]>): number => {
-        const seen = new Set<string>();
-        for (const oe of lp.edges) for (const p of s.get(oe.edgeId) ?? []) {
-          seen.add(`${Math.round(p[0] / 1e-6)},${Math.round(p[1] / 1e-6)},${Math.round(p[2] / 1e-6)}`);
-        }
-        return seen.size;
+    // Micro-face boundary sanity: a face far smaller than the tolerance budget (a 1.3mm thread
+    // run-out at 0.7mm chord tolerance) samples its edges with so few points that the boundary
+    // polygon SELF-INTERSECTS in (u,v) — chords of adjacent edges swing across each other. The CDT
+    // then classifies most of the polygon away (parity flips at every crossing) and the face's whole
+    // rim opens against its neighbours (wallganizer's screw: 16-pt run-out plane -> 4 triangles ->
+    // the cone rim it borders is fully open, ×213 instances). For such a face, TRIAL-sample its
+    // edges at increasingly fine tolerances and commit the first level whose polygon is simple.
+    // Outcome-verified on purpose: a polygon that stays self-intersecting at every level crosses
+    // from genuine trim overlap (tangent letter engravings), where densification cannot help — it
+    // only perturbs every neighbour sharing those edges (Ontos +523 open edges under a blind
+    // version of this pass). This runs as a PRE-PASS before any face is meshed, so a densified edge
+    // remains the SINGLE shared sampling and seams stay watertight; per edge the FINEST committed
+    // level wins. Only small boundaries are checked (the crossing test is O(n²)-ish, and large
+    // self-intersecting polygons are always the genuine-overlap class).
+    {
+      const level = new Map<number, number>(); // edgeId -> finest committed refinement factor
+      const resample = (id: number, f: number): Vec3[] => {
+        if (seeder) return seeder.seed(id, f); // isotropic mode: the same seeding at f times the density
+        const e = brep.edges.get(id)!;
+        const te = Math.max((edgeMaxLen.get(id) ?? targetEdge) / f, edgeChord(id));
+        return sampleEdge(brep.table, e, e.scale ?? brep.scale, edgeChord(id) / f, te, brep.units.radPerAngle, edgeNdev(id));
       };
-      // Per-loop rescue for collapsed loops, run only where the joint pass below gives up (too
-      // many points, a non-local crossing, or another loop still tangled at 64x). A collapsed
-      // window hole on an otherwise-tangled face stays a zero-area slit otherwise, and the face
-      // paves straight over it: ABC 00020365's D-shaped vent (a 0.8 mm-sagitta arc + its chord
-      // on a 6.8 m assembly, 3.4 mm chordTol) on a cylinder whose full-turn rims always read as
-      // tangled — the arc's neighbour faces then share a chord the cylinder also covers (nm).
-      // Densifying only the collapsed loop's own edges cannot disturb any other loop.
-      const rescueCollapsed = (): void => {
-        for (const lp of face.loops) {
-          if (lp.edges.length === 0 || distinct3(lp, sampled) >= 3) continue;
-          for (const f of [4, 16, 64]) {
-            const probe = new Map(sampled);
-            for (const oe of lp.edges) probe.set(oe.edgeId, resample(oe.edgeId, f));
-            if (distinct3(lp, probe) < 3) continue;
+      for (const solid of brep.solids) for (const face of solid.faces) {
+        const surface = faceSurf.get(face.faceId);
+        if (!surface) continue;
+        let nPts = 0;
+        let lo0 = Infinity, lo1 = Infinity, lo2 = Infinity, hi0 = -Infinity, hi1 = -Infinity, hi2 = -Infinity;
+        for (const lp of face.loops) for (const oe of lp.edges) {
+          const s = sampled.get(oe.edgeId); if (!s) continue;
+          nPts += s.length;
+          for (const p of s) {
+            if (p[0] < lo0) lo0 = p[0]; if (p[0] > hi0) hi0 = p[0];
+            if (p[1] < lo1) lo1 = p[1]; if (p[1] > hi1) hi1 = p[1];
+            if (p[2] < lo2) lo2 = p[2]; if (p[2] > hi2) hi2 = p[2];
+          }
+        }
+        // A COLLAPSED loop — fewer than 3 weld-distinct sampled points — cannot form a polygon at
+        // all: a sub-tolerance face's boundary can legally lose every interior sample to the
+        // merge/DP floors (a 0.4 mm lens face on a 1.4 m assembly at 0.7 mm chordTol — ABC
+        // 00018177's ×10 fillet slivers), and the face is then unmeshable by anything. Densifying
+        // is provably safe there: the loop currently contributes no geometry whatsoever.
+        const distinct3 = (lp: BLoop, s: Map<number, Vec3[]>): number => {
+          const seen = new Set<string>();
+          for (const oe of lp.edges) for (const p of s.get(oe.edgeId) ?? []) {
+            seen.add(`${Math.round(p[0] / 1e-6)},${Math.round(p[1] / 1e-6)},${Math.round(p[2] / 1e-6)}`);
+          }
+          return seen.size;
+        };
+        // Per-loop rescue for collapsed loops, run only where the joint pass below gives up (too
+        // many points, a non-local crossing, or another loop still tangled at 64x). A collapsed
+        // window hole on an otherwise-tangled face stays a zero-area slit otherwise, and the face
+        // paves straight over it: ABC 00020365's D-shaped vent (a 0.8 mm-sagitta arc + its chord
+        // on a 6.8 m assembly, 3.4 mm chordTol) on a cylinder whose full-turn rims always read as
+        // tangled — the arc's neighbour faces then share a chord the cylinder also covers (nm).
+        // Densifying only the collapsed loop's own edges cannot disturb any other loop.
+        const rescueCollapsed = (): void => {
+          for (const lp of face.loops) {
+            if (lp.edges.length === 0 || distinct3(lp, sampled) >= 3) continue;
+            for (const f of [4, 16, 64]) {
+              const probe = new Map(sampled);
+              for (const oe of lp.edges) probe.set(oe.edgeId, resample(oe.edgeId, f));
+              if (distinct3(lp, probe) < 3) continue;
+              const p2 = loopParam(surface, lp, probe).p2;
+              if (p2.length >= 4 && countSelfIntersections(p2, 1) > 0) continue;
+              if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} collapsed loop rescued at tol/${f} (${lp.edges.length} edges)`);
+              for (const oe of lp.edges) level.set(oe.edgeId, Math.max(level.get(oe.edgeId) ?? 0, f));
+              break;
+            }
+          }
+        };
+        if (nPts > 512) { rescueCollapsed(); continue; }
+        // Two admission paths. SMALL faces (a few chord-lengths across, the original criterion):
+        // any crossing pattern qualifies — coarse chords can only swing across each other when the
+        // whole face is comparable to the tolerance budget. LARGER faces qualify only when EVERY
+        // crossing is LOCAL (near-adjacent segments of the loop): that is one tightly-curved edge
+        // run zigzagging under coarse sampling (skirt-corner fillets, z_endstop's rounded strip
+        // ends), which densification provably cures. Distant-pair crossings on a large face are
+        // the pinch/genuine-overlap class where densifying perturbs the neighbours' pinch handling
+        // for nothing (OpenVessel's 6mm counterbore rims at 0.002mm tolerance went watertight ->
+        // 12 open under a blind version; Ontos' tangent letter engravings never become simple).
+        const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * tolOf(face.faceId).chordTol;
+        let nonLocal = false;
+        const tangledLoops = face.loops.filter((lp) => {
+          if (lp.edges.length > 0 && distinct3(lp, sampled) < 3) return true;
+          const p2 = loopParam(surface, lp, sampled).p2;
+          if (p2.length < 4) return false;
+          const pairs: [number, number][] = [];
+          if (countSelfIntersections(p2, 64, pairs) === 0) return false;
+          if (!small) {
+            const n = p2.length;
+            for (const [i, j] of pairs) {
+              if (Math.min((j - i + n) % n, (i - j + n) % n) > 8) { nonLocal = true; break; }
+            }
+          }
+          return true;
+        });
+        if (tangledLoops.length === 0) continue;
+        if (nonLocal) { rescueCollapsed(); continue; }
+        for (const f of [4, 16, 64]) {
+          const probe = new Map(sampled);
+          const ids = new Set<number>();
+          for (const lp of tangledLoops) for (const oe of lp.edges) ids.add(oe.edgeId);
+          for (const id of ids) probe.set(id, resample(id, f));
+          const stillBad = tangledLoops.some((lp) => {
+            if (lp.edges.length > 0 && distinct3(lp, probe) < 3) return true; // still collapsed
             const p2 = loopParam(surface, lp, probe).p2;
-            if (p2.length >= 4 && countSelfIntersections(p2, 1) > 0) continue;
-            if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} collapsed loop rescued at tol/${f} (${lp.edges.length} edges)`);
-            for (const oe of lp.edges) level.set(oe.edgeId, Math.max(level.get(oe.edgeId) ?? 0, f));
+            return p2.length >= 4 && countSelfIntersections(p2, 1) > 0;
+          });
+          if (!stillBad) {
+            if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} simple at tol/${f} (${ids.size} edges)`);
+            for (const id of ids) level.set(id, Math.max(level.get(id) ?? 0, f));
             break;
           }
-        }
-      };
-      if (nPts > 512) { rescueCollapsed(); continue; }
-      // Two admission paths. SMALL faces (a few chord-lengths across, the original criterion):
-      // any crossing pattern qualifies — coarse chords can only swing across each other when the
-      // whole face is comparable to the tolerance budget. LARGER faces qualify only when EVERY
-      // crossing is LOCAL (near-adjacent segments of the loop): that is one tightly-curved edge
-      // run zigzagging under coarse sampling (skirt-corner fillets, z_endstop's rounded strip
-      // ends), which densification provably cures. Distant-pair crossings on a large face are
-      // the pinch/genuine-overlap class where densifying perturbs the neighbours' pinch handling
-      // for nothing (OpenVessel's 6mm counterbore rims at 0.002mm tolerance went watertight ->
-      // 12 open under a blind version; Ontos' tangent letter engravings never become simple).
-      const small = nPts <= 128 && Math.hypot(hi0 - lo0, hi1 - lo1, hi2 - lo2) <= 16 * tolOf(face.faceId).chordTol;
-      let nonLocal = false;
-      const tangledLoops = face.loops.filter((lp) => {
-        if (lp.edges.length > 0 && distinct3(lp, sampled) < 3) return true;
-        const p2 = loopParam(surface, lp, sampled).p2;
-        if (p2.length < 4) return false;
-        const pairs: [number, number][] = [];
-        if (countSelfIntersections(p2, 64, pairs) === 0) return false;
-        if (!small) {
-          const n = p2.length;
-          for (const [i, j] of pairs) {
-            if (Math.min((j - i + n) % n, (i - j + n) % n) > 8) { nonLocal = true; break; }
+          if (f === 64) {
+            warn("boundary-self-intersects", face.faceId, "trim loops still self-intersect at 64× sampling density — genuine overlap in the CAD file, meshed as-is");
+            overlapFaces.add(face.faceId);
+            if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} still self-intersecting at tol/64 — left as-is (genuine overlap)`);
+            rescueCollapsed();
           }
         }
-        return true;
-      });
-      if (tangledLoops.length === 0) continue;
-      if (nonLocal) { rescueCollapsed(); continue; }
-      for (const f of [4, 16, 64]) {
-        const probe = new Map(sampled);
-        const ids = new Set<number>();
-        for (const lp of tangledLoops) for (const oe of lp.edges) ids.add(oe.edgeId);
-        for (const id of ids) probe.set(id, resample(id, f));
-        const stillBad = tangledLoops.some((lp) => {
-          if (lp.edges.length > 0 && distinct3(lp, probe) < 3) return true; // still collapsed
-          const p2 = loopParam(surface, lp, probe).p2;
-          return p2.length >= 4 && countSelfIntersections(p2, 1) > 0;
-        });
-        if (!stillBad) {
-          if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} simple at tol/${f} (${ids.size} edges)`);
-          for (const id of ids) level.set(id, Math.max(level.get(id) ?? 0, f));
-          break;
-        }
-        if (f === 64) {
-          warn("boundary-self-intersects", face.faceId, "trim loops still self-intersect at 64× sampling density — genuine overlap in the CAD file, meshed as-is");
-          overlapFaces.add(face.faceId);
-          if (DBG) console.error(`[tess] micro-face densify: fid=${face.faceId} still self-intersecting at tol/64 — left as-is (genuine overlap)`);
-          rescueCollapsed();
-        }
       }
+      for (const [id, f] of level) sampled.set(id, resample(id, f));
     }
-    for (const [id, f] of level) sampled.set(id, resample(id, f));
+  } else {
+    // The preparation was done by another session (on another thread): take its results.
+    for (let k = 0; k < prep.edgeIds.length; k++) {
+      const pts: Vec3[] = [];
+      for (let o = prep.edgeOff[k]! * 3, e = prep.edgeOff[k + 1]! * 3; o < e; o += 3) pts.push([prep.edgeXYZ[o]!, prep.edgeXYZ[o + 1]!, prep.edgeXYZ[o + 2]!]);
+      sampled.set(prep.edgeIds[k]!, pts);
+    }
+    for (const fid of prep.overlap) overlapFaces.add(fid);
   }
+  /** Size field per body (isotropic mode). */
+  const fields: Map<number, SizeField> | null = seeder ? seeder.fields
+    : prep?.fields ? new Map(prep.fields.map(([id, d]) => [id, SizeField.fromData(d)])) : null;
+  // What the surfaces remember of the preparation (see surfaceHistory), for exportPrep.
+  const historyAtStart: [number, number[]][] = [];
+  if (!prep) for (const [fid, s] of faceSurf) { const h = s ? surfaceHistory(s) : []; if (h.length > 0) historyAtStart.push([fid, h]); }
 
   // Weld each body independently so touching bodies don't merge into non-manifold edges.
   const positions: number[] = [];
@@ -6523,7 +6667,7 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
   const solidOfTri: number[] = [];
   let voff = 0;
 
-  for (const solid of brep.solids) {
+  const beginSolid = (solid: BSolid): void => {
     const need = bodyTriLowerBound(solid.faces, sampled, (fid) => tolOf(fid).targetEdge);
     if (need > BODY_TRI_CEILING) {
       throw new Error(
@@ -6531,273 +6675,272 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
         + `one body can hold — surfaceDeviation/maxEdge are far too fine for this model's size. `
         + `Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them.`);
     }
-    const verts: number[] = [];
-    const faceIds: number[] = [];
-    if (ISO) { const field = seeder?.fields.get(solid.id); ISO.sizeAt = field ? (x, y, z) => field.at(x, y, z) : null; }
-    for (const face of solid.faces) {
-      facesTotal++;
-      tick(W_FACE);
-      if (verts.length > SOLID_VERTS_LIMIT) {
-        throw new Error(
-          `meshStep: one body already holds ${Math.round(verts.length / 9 / 1e6)}M triangles with faces `
-          + `still to mesh — surfaceDeviation/maxEdge are far too fine for this model's size. `
-          + `Derive them from the model scale (estimateStepSize/autoTessellation) or coarsen them.`);
-      }
-      const surface = faceSurf.get(face.faceId) ?? null;
-      if (!surface) {
-        bump(skipped, face.surfaceKind);
-        warn("face-unsupported-surface", face.faceId, `surface kind ${face.surfaceKind} not supported — face skipped, geometry missing`);
-        continue;
-      }
-      const sign = face.sameSense ? 1 : -1;
-      // This face's tolerances: its override, or the globals (the same numbers when none is set,
-      // so the dispatch below is untouched by default). Shadows the function-level values for the
-      // meshers only; the per-solid stitch passes after this loop keep the globals.
-      const { chordTol, targetEdge, normalDev } = tolOf(face.faceId);
+    selectSolid(solid);
+  };
+  const selectSolid = (solid: BSolid): void => {
+    if (ISO) { const field = fields?.get(solid.id); ISO.sizeAt = field ? (x, y, z) => field.at(x, y, z) : null; }
+  };
 
-      let ok = false;
-      const outer = face.loops.find((l) => l.outer) ?? face.loops[0];
-      if (outer && face.loops.length === 1 && solid.faces.length > 1
-        && (mark(face.faceId, "thinFace", tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005))
-          || mark(face.faceId, "thinStrip", tessellateThinStrip(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.03)))) {
-        ok = true; // degenerate sub-resolution sliver/crack ribbon-stitched (returns false if not thin)
-      } else if (ISO?.mapped && outer && face.loops.length === 1
-        && mark(face.faceId, "mapped", tessellateMapped(surface, outer, sampled, face.faceId, verts, faceIds, sign, { chordTol, targetEdge, normalDev }))) {
-        ok = true; // isotropic mode: single-curved four-sided face (a fillet) meshed as ruled strips
-      } else if (face.loops.length === 2 && solid.faces.length > 1
-        // 0.015mm absolute floor; on large parts the knife-edge class scales with the part (a 53µm
-        // digon annulus on a 15m assembly), so admit up to half a chord tolerance — a ribbon across
-        // that width deviates less than the sampling itself.
-        && mark(face.faceId, "thinRing", tessellateThinRing(surface, face.loops, sampled, face.faceId, verts, faceIds, sign, Math.max(0.015, 0.5 * chordTol)))) {
-        ok = true; // sub-tolerance annular sliver (two near-coincident rims) ribbon-stitched
-      } else if (face.loops.length === 0 && !(isSphere(surface) && solid.faces.length === 1)) {
-        // Bare untrimmed face — no loops at all, so no boundary-driven mesher can run. A full
-        // sphere inside a multi-face solid (ball seat), a bare torus (chain links / springs), a
-        // closed-profile surface of revolution. Sole-face full spheres keep their branch below.
-        ok = (isSphere(surface) && mark(face.faceId, "sphereFull", (tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds), true)))
-          || (isBSpline(surface) && (surface.closedU || surface.closedV)
-            && mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)))
-          || mark(face.faceId, "fullPeriodic", tessellateFullPeriodic(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds, brep, sampled));
-      } else if (isSphere(surface)) {
-        // A full sphere is its solid's only face (degenerate seam loop); trimmed spheres
-        // (e.g. roundedCube corners) are one of many faces -> param grid.
-        if (solid.faces.length === 1) {
-          tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds);
-          ok = mark(face.faceId, "sphereFull", true);
-        } else if (outer) {
-          // A POLE DART (the same meridian edge out-and-back to a pole) proves the pole is
-          // INTERIOR to the face: strip it and mesh the once-winding rim with the REGION mesher
-          // FIRST — the grid would otherwise CDT the dart-stripped loop's residual signed area,
-          // which is the complement lune, not the face (Midea umbrella-valve dome).
-          const stripPoleDarts = stripSpherePoleDarts(surface, face.loops, sampled);
-          const stripped = stripPoleDarts !== null;
-          const loops = stripPoleDarts ?? face.loops;
-          const louter = stripped ? (loops.find((l) => l.outer) ?? loops[0]!) : outer;
-          // A cap closing to a pole (sole full-longitude parallel rim) fans to the pole; any other
-          // spherical patch returns false from the cap mesher and uses the param grid — with the
-          // sphere REPARAMETRISED so pole and seam sit away from the patch (a corner blend often
-          // runs straight through the default pole, which degenerates the projected loop).
-          // The cap is ONLY offered a single-loop face: handed just the outer rim of a HOLED face
-          // (a screw head's dome pierced by its hex socket, Ontos) it happily fans over the hole —
-          // or fans from the hole's rim and leaves the real shared rim fully open. A multi-loop
-          // sphere zone is a revolution band like any other: band -> unroll -> param grid.
-          const single = loops.length === 1;
-          ok = (single && mark(face.faceId, "sphereCap", tessellateSphereCap(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-            || (stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (!single && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            // A TILTED near-great-circle rim (not a parallel the cap mesher above takes, too large for
-            // reorientSphere): the grid meshes it as a flattened dome — re-aim the pole first.
-            || (single && sphereTiltedGreatRim(surface, louter, sampled)
-              && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-            || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)))
-            || (single && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-            // A BOUNDARY THROUGH A POLE (last resort — only reached when every mesher above
-            // declined). A perforated hemisphere whose great-circle rim runs over both default
-            // poles (ABC 00044535/00044791/00054689, 49 holes), a single loop climbing over a pole
-            // (00051856, 00048552), holes beside one (00048478, 00054220): pole samples project to
-            // arbitrary longitudes, the region band self-intersects and the grid drops constraints.
-            // Re-aim the sphere and retry region, then grid, per frame: the outer rim's plane
-            // normal (the rim becomes a parallel), the grid's patch-centred frame, and the axis
-            // whose poles clear every boundary sample the most.
-            || (() => {
-              const frames: Sphere[] = [];
-              const o = surface.f.o;
-              const frameOf = (z: Vec3): Sphere => {
-                const x = normalize(cross(z, Math.abs(z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
-                return new Sphere({ o: [o[0], o[1], o[2]], x, y: cross(z, x), z }, surface.r);
-              };
-              const z = loopNormal(louter, sampled);
-              if (!single && z && Math.abs(dot(z, surface.f.z)) < 0.999) frames.push(frameOf(z));
-              const re = reorientSphere(surface, loops, sampled);
-              if (!single && re !== surface) frames.push(re);
-              const zc = sphereClearAxis(surface, loops, sampled);
-              if (zc) frames.push(frameOf(zc));
-              for (const fr of frames) {
-                if (DBG) console.error(`[tess] fid=${face.faceId} region/grid retried on a re-aimed sphere frame`);
-                if (mark(face.faceId, "region", tessellatePeriodicRegion(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
-                if (mark(face.faceId, "grid", tessellateParamGrid(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
-              }
-              return false;
-            })();
-        }
-      } else if (surface.kind === "CONICAL_SURFACE" && outer
-        && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))
-          || mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign))
-          || (face.loops.length === 1 && mark(face.faceId, "coneCap", tessellateConeCap(surface, outer, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))))) {
-        ok = true; // genuine apex cone, apex wedge slice, or arbitrary once-winding rim cap; frustums/trimmed cones use the param grid
-      } else if (isBSpline(surface)) {
-        // A standalone closed B-spline body (its solid's only face) has no usable trimming loop ->
-        // full-patch grid. A patch that is one of many faces must use the param grid so its boundary
-        // uses the SHARED edge samples (independent grids would crack against their neighbours).
-        // A CLOSED-direction band bounded by bare full-period rim loops (StingStopp_4000 dome body:
-        // two iso-u rim circles enclosing zero param-space area, so the param grid has no outer
-        // loop) unrolls exactly like an analytic revolution surface — tried after the param grid so
-        // ordinary trimmed patches are untouched, and before the rail ribbon, whose straight loft
-        // cut that dome's bulge 4.5mm deep.
-        const per = !!(surface.periodicU || surface.periodicV);
-        // VERTEX-LOOP apexes: a loop whose whole sampled polyline is one weld-equal point (a
-        // closed surface pinching shut at a pole exports a zero-length edge). The point imposes
-        // no boundary constraint the weld doesn't already enforce, but its LOOP COUNT hides the
-        // face from every single-loop mesher — a rim + apex dome reads as loops=2, so capDome
-        // (the mesher built for exactly that shape) never runs and the face drops
-        // (ABC 00014671-74: 18 dome faces each). Strip point loops for dispatch; pole-fanning
-        // meshers reach the same point through the surface's own collapsed stack end, and if
-        // EVERY loop is a point the face is a full closed surface. Only when something was
-        // stripped does the dispatch below diverge from the untouched chain.
-        const bLoops = per ? face.loops.filter((lp) => !isPointLoop(lp, sampled)) : face.loops;
-        const bOuter = bLoops.length === face.loops.length ? outer : (bLoops.find((l) => l.outer) ?? bLoops[0]);
-        ok = (solid.faces.length === 1 && (surface.closedU || surface.closedV))
-          ? mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds))
-          : bLoops.length === 0 && face.loops.length > 0
-            ? ((surface.closedU || surface.closedV)
-              && mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)))
-              || mark(face.faceId, "fullPeriodic", tessellateFullPeriodic(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds, brep, sampled))
-            : (!!bOuter && (mark(face.faceId, "grid", tessellateParamGrid(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-              || (per && mark(face.faceId, "band", tessellateRevolutionBand(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-              || (per && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-              || (per && bLoops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, bOuter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-              || mark(face.faceId, "ribbon", tessellateRibbon(surface, bLoops, sampled, face.faceId, verts, faceIds, sign))
-              || (per && mark(face.faceId, "region", tessellatePeriodicRegion(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-              || (bLoops.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, bOuter, sampled, face.faceId, verts, faceIds, sign, chordTol)))));
+  const meshFace = (solid: BSolid, face: BFace, verts: number[], faceIds: number[]): void => {
+    facesTotal++;
+    tick(W_FACE);
+    if (verts.length > SOLID_VERTS_LIMIT) throw vertsLimitError(verts.length);
+    const surface = surfaceOf(face.faceId);
+    if (!surface) {
+      bump(skipped, face.surfaceKind);
+      warn("face-unsupported-surface", face.faceId, `surface kind ${face.surfaceKind} not supported — face skipped, geometry missing`);
+      return;
+    }
+    const sign = face.sameSense ? 1 : -1;
+    // This face's tolerances: its override, or the globals (the same numbers when none is set,
+    // so the dispatch below is untouched by default). Shadows the function-level values for the
+    // meshers only; the per-solid stitch passes after this loop keep the globals.
+    const { chordTol, targetEdge, normalDev } = tolOf(face.faceId);
+
+    let ok = false;
+    const outer = face.loops.find((l) => l.outer) ?? face.loops[0];
+    if (outer && face.loops.length === 1 && solid.faces.length > 1
+      && (mark(face.faceId, "thinFace", tessellateThinFace(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.005))
+        || mark(face.faceId, "thinStrip", tessellateThinStrip(surface, outer, sampled, face.faceId, verts, faceIds, sign, 0.03)))) {
+      ok = true; // degenerate sub-resolution sliver/crack ribbon-stitched (returns false if not thin)
+    } else if (ISO?.mapped && outer && face.loops.length === 1
+      && mark(face.faceId, "mapped", tessellateMapped(surface, outer, sampled, face.faceId, verts, faceIds, sign, { chordTol, targetEdge, normalDev }))) {
+      ok = true; // isotropic mode: single-curved four-sided face (a fillet) meshed as ruled strips
+    } else if (face.loops.length === 2 && solid.faces.length > 1
+      // 0.015mm absolute floor; on large parts the knife-edge class scales with the part (a 53µm
+      // digon annulus on a 15m assembly), so admit up to half a chord tolerance — a ribbon across
+      // that width deviates less than the sampling itself.
+      && mark(face.faceId, "thinRing", tessellateThinRing(surface, face.loops, sampled, face.faceId, verts, faceIds, sign, Math.max(0.015, 0.5 * chordTol)))) {
+      ok = true; // sub-tolerance annular sliver (two near-coincident rims) ribbon-stitched
+    } else if (face.loops.length === 0 && !(isSphere(surface) && solid.faces.length === 1)) {
+      // Bare untrimmed face — no loops at all, so no boundary-driven mesher can run. A full
+      // sphere inside a multi-face solid (ball seat), a bare torus (chain links / springs), a
+      // closed-profile surface of revolution. Sole-face full spheres keep their branch below.
+      ok = (isSphere(surface) && mark(face.faceId, "sphereFull", (tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds), true)))
+        || (isBSpline(surface) && (surface.closedU || surface.closedV)
+          && mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)))
+        || mark(face.faceId, "fullPeriodic", tessellateFullPeriodic(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds, brep, sampled));
+    } else if (isSphere(surface)) {
+      // A full sphere is its solid's only face (degenerate seam loop); trimmed spheres
+      // (e.g. roundedCube corners) are one of many faces -> param grid.
+      if (solid.faces.length === 1) {
+        tessellateSphere(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds);
+        ok = mark(face.faceId, "sphereFull", true);
       } else if (outer) {
-        // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
-        //  1. band: rims are bare full-period circles (no seam edges, e.g. Onshape) with NO other
-        //     loops -> ribbon-stitch the rims directly. Bails on anything else.
-        //  2. unroll: bare full-period rims PLUS window holes -> seam-split into a rectangular (u,v)
-        //     domain and CDT with the windows as holes. Bails unless there are exactly two rims.
-        //  3. param grid: everything with a proper seam-bounded outer loop (the common case).
-        const periodic = surface.periodicU || surface.periodicV;
-        // ISOTROPIC mode without mapped fillets prefers the unroll for a plain band too: it meshes
-        // the band through the CDT + optimiser (equilateral triangles) where the band mesher lays
-        // structured rings of right triangles. With mapped fillets on, those structured rings are
-        // exactly what a plain cylinder, cone or torus band should get (they are its mapped
-        // mesh), so the band mesher keeps its place in front.
-        ok = (periodic && !!ISO && !ISO.mapped && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || (periodic && (!ISO || ISO.mapped) && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-          || (periodic && face.loops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-          || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign))
-          || (periodic && mark(face.faceId, "region", tessellatePeriodicRegion(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || (face.loops.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, outer, sampled, face.faceId, verts, faceIds, sign, chordTol)));
+        // A POLE DART (the same meridian edge out-and-back to a pole) proves the pole is
+        // INTERIOR to the face: strip it and mesh the once-winding rim with the REGION mesher
+        // FIRST — the grid would otherwise CDT the dart-stripped loop's residual signed area,
+        // which is the complement lune, not the face (Midea umbrella-valve dome).
+        const stripPoleDarts = stripSpherePoleDarts(surface, face.loops, sampled);
+        const stripped = stripPoleDarts !== null;
+        const loops = stripPoleDarts ?? face.loops;
+        const louter = stripped ? (loops.find((l) => l.outer) ?? loops[0]!) : outer;
+        // A cap closing to a pole (sole full-longitude parallel rim) fans to the pole; any other
+        // spherical patch returns false from the cap mesher and uses the param grid — with the
+        // sphere REPARAMETRISED so pole and seam sit away from the patch (a corner blend often
+        // runs straight through the default pole, which degenerates the projected loop).
+        // The cap is ONLY offered a single-loop face: handed just the outer rim of a HOLED face
+        // (a screw head's dome pierced by its hex socket, Ontos) it happily fans over the hole —
+        // or fans from the hole's rim and leaves the real shared rim fully open. A multi-loop
+        // sphere zone is a revolution band like any other: band -> unroll -> param grid.
+        const single = loops.length === 1;
+        ok = (single && mark(face.faceId, "sphereCap", tessellateSphereCap(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+          || (stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (!single && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          // A TILTED near-great-circle rim (not a parallel the cap mesher above takes, too large for
+          // reorientSphere): the grid meshes it as a flattened dome — re-aim the pole first.
+          || (single && sphereTiltedGreatRim(surface, louter, sampled)
+            && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+          || mark(face.faceId, "grid", tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)))
+          || (single && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+          // A BOUNDARY THROUGH A POLE (last resort — only reached when every mesher above
+          // declined). A perforated hemisphere whose great-circle rim runs over both default
+          // poles (ABC 00044535/00044791/00054689, 49 holes), a single loop climbing over a pole
+          // (00051856, 00048552), holes beside one (00048478, 00054220): pole samples project to
+          // arbitrary longitudes, the region band self-intersects and the grid drops constraints.
+          // Re-aim the sphere and retry region, then grid, per frame: the outer rim's plane
+          // normal (the rim becomes a parallel), the grid's patch-centred frame, and the axis
+          // whose poles clear every boundary sample the most.
+          || (() => {
+            const frames: Sphere[] = [];
+            const o = surface.f.o;
+            const frameOf = (z: Vec3): Sphere => {
+              const x = normalize(cross(z, Math.abs(z[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0]));
+              return new Sphere({ o: [o[0], o[1], o[2]], x, y: cross(z, x), z }, surface.r);
+            };
+            const z = loopNormal(louter, sampled);
+            if (!single && z && Math.abs(dot(z, surface.f.z)) < 0.999) frames.push(frameOf(z));
+            const re = reorientSphere(surface, loops, sampled);
+            if (!single && re !== surface) frames.push(re);
+            const zc = sphereClearAxis(surface, loops, sampled);
+            if (zc) frames.push(frameOf(zc));
+            for (const fr of frames) {
+              if (DBG) console.error(`[tess] fid=${face.faceId} region/grid retried on a re-aimed sphere frame`);
+              if (mark(face.faceId, "region", tessellatePeriodicRegion(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
+              if (mark(face.faceId, "grid", tessellateParamGrid(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
+            }
+            return false;
+          })();
       }
-      // POINT-LOOP RETRY (every mesher above declined): a loop whose whole sampled polyline is one
-      // weld-equal point — a micro B-spline edge from a vertex back to itself, an exporter's
-      // VERTEX_LOOP written as an edge — constrains nothing, but flagged FACE_OUTER_BOUND it is
-      // taken as THE outer boundary and the face "projects to 1 pt" (ABC 00028650: 4 planes each
-      // carrying a 25 um point loop beside their real 5-edge outer). Strip such loops like
-      // VERTEX_LOOPs and run the generic chain once more. Only reached on failure, so every face
-      // that meshes today keeps its result.
-      if (!ok && outer && face.loops.length > 1) {
-        const real = face.loops.filter((lp) => !isPointLoop(lp, sampled));
-        if (real.length > 0 && real.length < face.loops.length) {
-          const rOuter = real.find((l) => l.outer) ?? real[0]!;
-          const periodic = !!(surface.periodicU || (surface as Surface).periodicV);
-          ok = mark(face.faceId, "grid", tessellateParamGrid(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            || (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (periodic && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-            || (real.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, rOuter, sampled, face.faceId, verts, faceIds, sign, chordTol)));
-        }
-      }
-      // Multi-arc apex WEDGE (last resort, so every cone that meshes today keeps its result): a
-      // half-cone whose rim arrives as several arc edges is otherwise declined everywhere — its
-      // apex projects to an arbitrary angle and the param grid loses a constraint.
-      if (!ok && surface.kind === "CONICAL_SURFACE" && outer && face.loops.length === 1) {
-        ok = mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign, true));
-      }
-      const kept = declinedGrid.get(face.faceId);
-      if (kept) {
-        declinedGrid.delete(face.faceId);
-        if (!ok) {
-          for (const x of kept.verts) verts.push(x);
-          for (const x of kept.faceIds) faceIds.push(x);
-          ok = mark(face.faceId, "grid", true);
-          if (DBG) console.error(`[tess] fid=${face.faceId} no mesher took the declined winding-outer face — grid result restored`);
-        }
-      }
-      // DEGENERATE face: its whole boundary samples to fewer than three weld-distinct points (a
-      // face bounded only by a zero-length edge; a lens whose two arcs sag below chordTol and
-      // sample to the same chord). It has no area at the requested precision — the neighbours'
-      // shared samples already close the shell — so nothing is missing: count it as meshed with
-      // no triangles (stats.degenerate), not as a skipped face with missing geometry.
-      if (!ok && face.loops.length > 0) {
-        const seenPts = new Set<string>();
-        for (const lp of face.loops) for (const oe of lp.edges) for (const p of sampled.get(oe.edgeId) ?? []) {
-          seenPts.add(`${Math.round(p[0] / 1e-6)},${Math.round(p[1] / 1e-6)},${Math.round(p[2] / 1e-6)}`);
-          if (seenPts.size >= 3) break;
-        }
-        if (seenPts.size < 3) {
-          trace?.(face.faceId, "degenerate");
-          if (DBG) console.error(`[tess] DEGENERATE fid=${face.faceId} kind=${face.surfaceKind}: boundary samples to ${seenPts.size} distinct point(s)`);
-          facesDegenerate++;
-          facesTessellated++;
-          continue;
-        }
-      }
-      // ZERO-HEIGHT BAND: a singly periodic surface whose every boundary sample lies on one ring,
-      // so the band between them is thinner than chordTol (ABC 00054277: 18 cylinder faces each
-      // bounded by a single circle, i.e. zero-height bosses; 00055415: revolution faces whose two
-      // rims coincide). An open stack bounds no other region, so this is no area at the requested
-      // precision, like the case above. On a cylinder or extrusion one loop qualifies; elsewhere
-      // (cone, revolution) one rim can bound a real cap to an apex or pole, so two or more loops
-      // are required. Doubly periodic surfaces are excluded: two coincident rims on a torus can
-      // bound the whole complementary band.
-      const ruledStack = surface?.kind === "CYLINDRICAL_SURFACE" || surface?.kind === "SURFACE_OF_LINEAR_EXTRUSION";
-      if (!ok && surface && face.loops.length >= (ruledStack ? 1 : 2)
-        && !!surface.periodicU !== !!(surface as Surface).periodicV) {
-        const S = surface.periodicU ? 1 : 0;
-        let sLo = Infinity, sHi = -Infinity, u0 = NaN, n = 0;
-        let hu: number | undefined, hv: number | undefined;
-        for (const lp of face.loops) for (const oe of lp.edges) for (const p of sampled.get(oe.edgeId) ?? []) {
-          const q = surface.project(p, hu, hv); hu = q[0]; hv = q[1];
-          if (Number.isNaN(u0)) u0 = q[1 - S]!;
-          if (q[S]! < sLo) sLo = q[S]!; if (q[S]! > sHi) sHi = q[S]!; n++;
-        }
-        if (n >= 3 && sHi >= sLo) {
-          const a = S === 1 ? surface.evaluate(u0, sLo) : surface.evaluate(sLo, u0);
-          const b = S === 1 ? surface.evaluate(u0, sHi) : surface.evaluate(sHi, u0);
-          const h = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
-          if (h < chordTol) {
-            trace?.(face.faceId, "degenerate");
-            if (DBG) console.error(`[tess] DEGENERATE fid=${face.faceId} kind=${face.surfaceKind}: zero-height band (${h.toExponential(2)} < chordTol)`);
-            facesDegenerate++;
-            facesTessellated++;
-            continue;
-          }
-        }
-      }
-      if (ok) facesTessellated++;
-      else {
-        trace?.(face.faceId, "untriangulated");
-        if (DBG) console.error(`[tess] UNTRIANGULATED fid=${face.faceId} kind=${face.surfaceKind} loops=${face.loops.map((l) => l.edges.length).join("/")}`);
-        bump(skipped, "untriangulated");
-        warn("face-untriangulated", face.faceId, `every mesher failed on this ${face.surfaceKind} face — face skipped, geometry missing`);
+    } else if (surface.kind === "CONICAL_SURFACE" && outer
+      && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))
+        || mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign))
+        || (face.loops.length === 1 && mark(face.faceId, "coneCap", tessellateConeCap(surface, outer, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))))) {
+      ok = true; // genuine apex cone, apex wedge slice, or arbitrary once-winding rim cap; frustums/trimmed cones use the param grid
+    } else if (isBSpline(surface)) {
+      // A standalone closed B-spline body (its solid's only face) has no usable trimming loop ->
+      // full-patch grid. A patch that is one of many faces must use the param grid so its boundary
+      // uses the SHARED edge samples (independent grids would crack against their neighbours).
+      // A CLOSED-direction band bounded by bare full-period rim loops (StingStopp_4000 dome body:
+      // two iso-u rim circles enclosing zero param-space area, so the param grid has no outer
+      // loop) unrolls exactly like an analytic revolution surface — tried after the param grid so
+      // ordinary trimmed patches are untouched, and before the rail ribbon, whose straight loft
+      // cut that dome's bulge 4.5mm deep.
+      const per = !!(surface.periodicU || surface.periodicV);
+      // VERTEX-LOOP apexes: a loop whose whole sampled polyline is one weld-equal point (a
+      // closed surface pinching shut at a pole exports a zero-length edge). The point imposes
+      // no boundary constraint the weld doesn't already enforce, but its LOOP COUNT hides the
+      // face from every single-loop mesher — a rim + apex dome reads as loops=2, so capDome
+      // (the mesher built for exactly that shape) never runs and the face drops
+      // (ABC 00014671-74: 18 dome faces each). Strip point loops for dispatch; pole-fanning
+      // meshers reach the same point through the surface's own collapsed stack end, and if
+      // EVERY loop is a point the face is a full closed surface. Only when something was
+      // stripped does the dispatch below diverge from the untouched chain.
+      const bLoops = per ? face.loops.filter((lp) => !isPointLoop(lp, sampled)) : face.loops;
+      const bOuter = bLoops.length === face.loops.length ? outer : (bLoops.find((l) => l.outer) ?? bLoops[0]);
+      ok = (solid.faces.length === 1 && (surface.closedU || surface.closedV))
+        ? mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds))
+        : bLoops.length === 0 && face.loops.length > 0
+          ? ((surface.closedU || surface.closedV)
+            && mark(face.faceId, "bsplineFull", tessellateBSplineFull(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds)))
+            || mark(face.faceId, "fullPeriodic", tessellateFullPeriodic(surface, face.faceId, chordTol, targetEdge, normalDev, sign, verts, faceIds, brep, sampled))
+          : (!!bOuter && (mark(face.faceId, "grid", tessellateParamGrid(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            || (per && mark(face.faceId, "band", tessellateRevolutionBand(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (per && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (per && bLoops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, bOuter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+            || mark(face.faceId, "ribbon", tessellateRibbon(surface, bLoops, sampled, face.faceId, verts, faceIds, sign))
+            || (per && mark(face.faceId, "region", tessellatePeriodicRegion(surface, bLoops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+            || (bLoops.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, bOuter, sampled, face.faceId, verts, faceIds, sign, chordTol)))));
+    } else if (outer) {
+      // Cylinders, cone frustums, tori, etc. Three meshers, tried in order:
+      //  1. band: rims are bare full-period circles (no seam edges, e.g. Onshape) with NO other
+      //     loops -> ribbon-stitch the rims directly. Bails on anything else.
+      //  2. unroll: bare full-period rims PLUS window holes -> seam-split into a rectangular (u,v)
+      //     domain and CDT with the windows as holes. Bails unless there are exactly two rims.
+      //  3. param grid: everything with a proper seam-bounded outer loop (the common case).
+      const periodic = surface.periodicU || surface.periodicV;
+      // ISOTROPIC mode without mapped fillets prefers the unroll for a plain band too: it meshes
+      // the band through the CDT + optimiser (equilateral triangles) where the band mesher lays
+      // structured rings of right triangles. With mapped fillets on, those structured rings are
+      // exactly what a plain cylinder, cone or torus band should get (they are its mapped
+      // mesh), so the band mesher keeps its place in front.
+      ok = (periodic && !!ISO && !ISO.mapped && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+        || (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+        || (periodic && (!ISO || ISO.mapped) && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+        || mark(face.faceId, "grid", tessellateParamGrid(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+        || (periodic && face.loops.length === 1 && mark(face.faceId, "capDome", tessellateCapDome(surface, outer, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+        || mark(face.faceId, "ribbon", tessellateRibbon(surface, face.loops, sampled, face.faceId, verts, faceIds, sign))
+        || (periodic && mark(face.faceId, "region", tessellatePeriodicRegion(surface, face.loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+        || (face.loops.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, outer, sampled, face.faceId, verts, faceIds, sign, chordTol)));
+    }
+    // POINT-LOOP RETRY (every mesher above declined): a loop whose whole sampled polyline is one
+    // weld-equal point — a micro B-spline edge from a vertex back to itself, an exporter's
+    // VERTEX_LOOP written as an edge — constrains nothing, but flagged FACE_OUTER_BOUND it is
+    // taken as THE outer boundary and the face "projects to 1 pt" (ABC 00028650: 4 planes each
+    // carrying a 25 um point loop beside their real 5-edge outer). Strip such loops like
+    // VERTEX_LOOPs and run the generic chain once more. Only reached on failure, so every face
+    // that meshes today keeps its result.
+    if (!ok && outer && face.loops.length > 1) {
+      const real = face.loops.filter((lp) => !isPointLoop(lp, sampled));
+      if (real.length > 0 && real.length < face.loops.length) {
+        const rOuter = real.find((l) => l.outer) ?? real[0]!;
+        const periodic = !!(surface.periodicU || (surface as Surface).periodicV);
+        ok = mark(face.faceId, "grid", tessellateParamGrid(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+          || (periodic && mark(face.faceId, "band", tessellateRevolutionBand(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (periodic && mark(face.faceId, "unroll", tessellatePeriodicUnroll(surface, real, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
+          || (real.length === 1 && mark(face.faceId, "sliver", tessellateSliverLoop(surface, rOuter, sampled, face.faceId, verts, faceIds, sign, chordTol)));
       }
     }
+    // Multi-arc apex WEDGE (last resort, so every cone that meshes today keeps its result): a
+    // half-cone whose rim arrives as several arc edges is otherwise declined everywhere — its
+    // apex projects to an arbitrary angle and the param grid loses a constraint.
+    if (!ok && surface.kind === "CONICAL_SURFACE" && outer && face.loops.length === 1) {
+      ok = mark(face.faceId, "coneSlice", tessellateConeSlice(surface, outer, sampled, brep, face.faceId, verts, faceIds, sign, true));
+    }
+    const kept = declinedGrid.get(face.faceId);
+    if (kept) {
+      declinedGrid.delete(face.faceId);
+      if (!ok) {
+        for (const x of kept.verts) verts.push(x);
+        for (const x of kept.faceIds) faceIds.push(x);
+        ok = mark(face.faceId, "grid", true);
+        if (DBG) console.error(`[tess] fid=${face.faceId} no mesher took the declined winding-outer face — grid result restored`);
+      }
+    }
+    // DEGENERATE face: its whole boundary samples to fewer than three weld-distinct points (a
+    // face bounded only by a zero-length edge; a lens whose two arcs sag below chordTol and
+    // sample to the same chord). It has no area at the requested precision — the neighbours'
+    // shared samples already close the shell — so nothing is missing: count it as meshed with
+    // no triangles (stats.degenerate), not as a skipped face with missing geometry.
+    if (!ok && face.loops.length > 0) {
+      const seenPts = new Set<string>();
+      for (const lp of face.loops) for (const oe of lp.edges) for (const p of sampled.get(oe.edgeId) ?? []) {
+        seenPts.add(`${Math.round(p[0] / 1e-6)},${Math.round(p[1] / 1e-6)},${Math.round(p[2] / 1e-6)}`);
+        if (seenPts.size >= 3) break;
+      }
+      if (seenPts.size < 3) {
+        trace?.(face.faceId, "degenerate");
+        if (DBG) console.error(`[tess] DEGENERATE fid=${face.faceId} kind=${face.surfaceKind}: boundary samples to ${seenPts.size} distinct point(s)`);
+        facesDegenerate++;
+        facesTessellated++;
+        return;
+      }
+    }
+    // ZERO-HEIGHT BAND: a singly periodic surface whose every boundary sample lies on one ring,
+    // so the band between them is thinner than chordTol (ABC 00054277: 18 cylinder faces each
+    // bounded by a single circle, i.e. zero-height bosses; 00055415: revolution faces whose two
+    // rims coincide). An open stack bounds no other region, so this is no area at the requested
+    // precision, like the case above. On a cylinder or extrusion one loop qualifies; elsewhere
+    // (cone, revolution) one rim can bound a real cap to an apex or pole, so two or more loops
+    // are required. Doubly periodic surfaces are excluded: two coincident rims on a torus can
+    // bound the whole complementary band.
+    const ruledStack = surface?.kind === "CYLINDRICAL_SURFACE" || surface?.kind === "SURFACE_OF_LINEAR_EXTRUSION";
+    if (!ok && surface && face.loops.length >= (ruledStack ? 1 : 2)
+      && !!surface.periodicU !== !!(surface as Surface).periodicV) {
+      const S = surface.periodicU ? 1 : 0;
+      let sLo = Infinity, sHi = -Infinity, u0 = NaN, n = 0;
+      let hu: number | undefined, hv: number | undefined;
+      for (const lp of face.loops) for (const oe of lp.edges) for (const p of sampled.get(oe.edgeId) ?? []) {
+        const q = surface.project(p, hu, hv); hu = q[0]; hv = q[1];
+        if (Number.isNaN(u0)) u0 = q[1 - S]!;
+        if (q[S]! < sLo) sLo = q[S]!; if (q[S]! > sHi) sHi = q[S]!; n++;
+      }
+      if (n >= 3 && sHi >= sLo) {
+        const a = S === 1 ? surface.evaluate(u0, sLo) : surface.evaluate(sLo, u0);
+        const b = S === 1 ? surface.evaluate(u0, sHi) : surface.evaluate(sHi, u0);
+        const h = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
+        if (h < chordTol) {
+          trace?.(face.faceId, "degenerate");
+          if (DBG) console.error(`[tess] DEGENERATE fid=${face.faceId} kind=${face.surfaceKind}: zero-height band (${h.toExponential(2)} < chordTol)`);
+          facesDegenerate++;
+          facesTessellated++;
+          return;
+        }
+      }
+    }
+    if (ok) facesTessellated++;
+    else {
+      trace?.(face.faceId, "untriangulated");
+      if (DBG) console.error(`[tess] UNTRIANGULATED fid=${face.faceId} kind=${face.surfaceKind} loops=${face.loops.map((l) => l.edges.length).join("/")}`);
+      bump(skipped, "untriangulated");
+      warn("face-untriangulated", face.faceId, `every mesher failed on this ${face.surfaceKind} face — face skipped, geometry missing`);
+    }
+  };
 
+  const stitchSolid = (solid: BSolid, verts: ArrayLike<number>, faceIds: number[]): SolidMesh => {
     // One stitch-progress quarter (of the solid's W_STITCH share) per pass, so a big single
     // solid's bar keeps moving through the multi-second weld/zip/fill tail instead of stalling.
     const stitchQ = solid.faces.length;
@@ -6820,77 +6963,140 @@ export function tessellate(brep: BrepModel, opts: TessOptions = {}): MeshResult 
     tick(stitchQ);
     const fill = fillMicroHoles(z.positions, tj.indices, tj.faceOf, 0.05,
       solid.open ? undefined : { edge: targetEdge, dev: 0.75 * chordTol }, tj.topo);
-    { const zp = z.positions; for (let i = 0; i < zp.length; i++) positions.push(zp[i]!); }
-    { const ti = tj.indices; for (let i = 0; i < ti.length; i++) indices.push(ti[i]! + voff); }
-    for (let i = 0; i < fill.indices.length; i++) indices.push(fill.indices[i]! + voff);
-    voff += z.positions.length / 3;
-    for (let i = 0; i < tj.faceOf.length; i++) { faceOfTri.push(tj.faceOf[i]!); solidOfTri.push(solid.id); }
-    for (let i = 0; i < fill.faceOf.length; i++) { faceOfTri.push(fill.faceOf[i]!); solidOfTri.push(solid.id); }
-    tick(stitchQ);
-  }
+    return { positions: z.positions, indices: tj.indices, faceOf: tj.faceOf, fillIndices: fill.indices, fillFaceOf: fill.faceOf };
+  };
 
-  // Sew jointly-closing open shells across solids (see sewSolids). Only OPEN boundary rings can
-  // pair, so closed bodies in a genuine assembly are never bridged.
-  if (brep.solids.length > 1) {
-    const openIds = new Set(brep.solids.filter((s) => s.open).map((s) => s.id));
-    // Harmonize sheet-body orientations BEFORE sewing: the ribbons inherit their rails' windings.
-    if (openIds.size > 1) {
-      const frameKey = new Map<number, string>();
-      for (const s of brep.solids) if (s.open) frameKey.set(s.id, JSON.stringify([s.instances ?? s.transform ?? null, s.scale ?? null]));
-      const flipped = orientSheets(positions, indices, solidOfTri, frameKey, Math.max(0.02, 2 * chordTol));
-      if (DBG && flipped > 0) console.error(`[tess] orientSheets: flipped ${flipped} sheet(s)`);
-    }
-    const unsewn = new Set<number>();
-    const sewnSolids = new Set<number>();
-    const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds, unsewn, sewnSolids);
-    if (sewn > 0) warn("heuristic-fill", -1, `${sewn} coincident open rim pair(s) sewn across solids`);
-    // Sheet bodies masquerading as solids: a shell whose OWN B-rep has boundary edges (an edge
-    // referenced by exactly one face loop) cannot close alone — it either closes JOINTLY (the
-    // sewing above) or it is a surface body in the SBSM sense no matter what CLOSED_SHELL claims
-    // (a bare tube resting against another solid's FACE has no mate ring to sew — ABC 00000452's
-    // pin bores). Reclassify the still-open ones as open bodies so diagnostics treat them like
-    // every other sheet. B-rep structural test only — tessellation failures cannot trigger it.
-    for (const solid of brep.solids) {
-      if (solid.open || !unsewn.has(solid.id)) continue;
-      // A solid that DID sew somewhere is load-bearing: its ribbon triangles carry ITS solid id,
-      // so excluding it would orphan the mate's rim in the watertight count (run9 00009564).
-      // Only solids with NO successful sew anywhere may be reclassified.
-      if (sewnSolids.has(solid.id)) continue;
-      const useCount = new Map<number, number>();
-      for (const f of solid.faces) for (const lp of f.loops) for (const oe of lp.edges) {
-        useCount.set(oe.edgeId, (useCount.get(oe.edgeId) ?? 0) + 1);
+  const appendSolid = (solid: BSolid, m: SolidMesh): void => {
+    { const zp = m.positions; for (let i = 0; i < zp.length; i++) positions.push(zp[i]!); }
+    { const ti = m.indices; for (let i = 0; i < ti.length; i++) indices.push(ti[i]! + voff); }
+    for (let i = 0; i < m.fillIndices.length; i++) indices.push(m.fillIndices[i]! + voff);
+    voff += m.positions.length / 3;
+    for (let i = 0; i < m.faceOf.length; i++) { faceOfTri.push(m.faceOf[i]!); solidOfTri.push(solid.id); }
+    for (let i = 0; i < m.fillFaceOf.length; i++) { faceOfTri.push(m.fillFaceOf[i]!); solidOfTri.push(solid.id); }
+    tick(solid.faces.length);
+  };
+
+  const finish = (): MeshResult => {
+    // Sew jointly-closing open shells across solids (see sewSolids). Only OPEN boundary rings can
+    // pair, so closed bodies in a genuine assembly are never bridged.
+    if (brep.solids.length > 1) {
+      const openIds = new Set(brep.solids.filter((s) => s.open).map((s) => s.id));
+      // Harmonize sheet-body orientations BEFORE sewing: the ribbons inherit their rails' windings.
+      if (openIds.size > 1) {
+        const frameKey = new Map<number, string>();
+        for (const s of brep.solids) if (s.open) frameKey.set(s.id, JSON.stringify([s.instances ?? s.transform ?? null, s.scale ?? null]));
+        const flipped = orientSheets(positions, indices, solidOfTri, frameKey, Math.max(0.02, 2 * chordTol));
+        if (DBG && flipped > 0) console.error(`[tess] orientSheets: flipped ${flipped} sheet(s)`);
       }
-      let boundary = 0;
-      for (const n of useCount.values()) if (n === 1) boundary++;
-      if (boundary > 0) {
-        solid.open = true;
-        warn("open-shell", -1, `solid ${solid.id} claims CLOSED_SHELL but its B-rep has ${boundary} boundary edge(s) and no mate to sew — classified as a surface body`);
-        if (DBG) console.error(`[tess] sewSolids: solid ${solid.id} reclassified open (${boundary} B-rep boundary edges, unsewn rings)`);
+      const unsewn = new Set<number>();
+      const sewnSolids = new Set<number>();
+      const sewn = sewSolids(positions, indices, faceOfTri, solidOfTri, Math.max(0.02, 2 * chordTol), openIds, unsewn, sewnSolids);
+      if (sewn > 0) warn("heuristic-fill", -1, `${sewn} coincident open rim pair(s) sewn across solids`);
+      // Sheet bodies masquerading as solids: a shell whose OWN B-rep has boundary edges (an edge
+      // referenced by exactly one face loop) cannot close alone — it either closes JOINTLY (the
+      // sewing above) or it is a surface body in the SBSM sense no matter what CLOSED_SHELL claims
+      // (a bare tube resting against another solid's FACE has no mate ring to sew — ABC 00000452's
+      // pin bores). Reclassify the still-open ones as open bodies so diagnostics treat them like
+      // every other sheet. B-rep structural test only — tessellation failures cannot trigger it.
+      for (const solid of brep.solids) {
+        if (solid.open || !unsewn.has(solid.id)) continue;
+        // A solid that DID sew somewhere is load-bearing: its ribbon triangles carry ITS solid id,
+        // so excluding it would orphan the mate's rim in the watertight count (run9 00009564).
+        // Only solids with NO successful sew anywhere may be reclassified.
+        if (sewnSolids.has(solid.id)) continue;
+        const useCount = new Map<number, number>();
+        for (const f of solid.faces) for (const lp of f.loops) for (const oe of lp.edges) {
+          useCount.set(oe.edgeId, (useCount.get(oe.edgeId) ?? 0) + 1);
+        }
+        let boundary = 0;
+        for (const n of useCount.values()) if (n === 1) boundary++;
+        if (boundary > 0) {
+          solid.open = true;
+          warn("open-shell", -1, `solid ${solid.id} claims CLOSED_SHELL but its B-rep has ${boundary} boundary edge(s) and no mate to sew — classified as a surface body`);
+          if (DBG) console.error(`[tess] sewSolids: solid ${solid.id} reclassified open (${boundary} B-rep boundary edges, unsewn rings)`);
+        }
       }
     }
-  }
 
-  // No precise B-rep? Fall back to AP242 tessellated geometry (a pre-faceted body in the file).
-  if (brep.solids.length === 0) {
-    const tg = readTessellated(brep);
-    if (tg && tg.verts.length > 0) {
-      const { mesh } = weld(tg.verts);
-      for (const x of mesh.positions) positions.push(x);
-      for (const ix of mesh.indices) indices.push(ix + voff);
-      voff += mesh.positions.length / 3;
-      for (let k = 0; k < tg.faceIds.length; k++) { faceOfTri.push(tg.faceIds[k]!); solidOfTri.push(tg.solidIds[k]!); }
-      facesTotal += tg.faces; facesTessellated += tg.faces;
+    // No precise B-rep? Fall back to AP242 tessellated geometry (a pre-faceted body in the file).
+    if (brep.solids.length === 0) {
+      const tg = readTessellated(brep);
+      if (tg && tg.verts.length > 0) {
+        const { mesh } = weld(tg.verts);
+        for (const x of mesh.positions) positions.push(x);
+        for (const ix of mesh.indices) indices.push(ix + voff);
+        voff += mesh.positions.length / 3;
+        for (let k = 0; k < tg.faceIds.length; k++) { faceOfTri.push(tg.faceIds[k]!); solidOfTri.push(tg.solidIds[k]!); }
+        facesTotal += tg.faces; facesTessellated += tg.faces;
+      }
     }
-  }
 
+    return {
+      mesh: { positions: new Float64Array(positions), indices: new Uint32Array(indices) },
+      faceOfTri: new Uint32Array(faceOfTri),
+      solidOfTri: new Uint32Array(solidOfTri),
+      openSolids: brep.solids.filter((s) => s.open).map((s) => s.id),
+      stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped, ...(facesDegenerate ? { degenerate: facesDegenerate } : {}) },
+      warnings: takeWarnings(),
+      ...(opts.collectEdgePolylines ? { edgePolylines: sampled } : {}),
+    };
+  };
+
+  const recordFace = (solid: BSolid, face: BFace, verts: number[], faceIds: number[]): FaceOutcome => {
+    const n0 = facesTotal, t0 = facesTessellated, d0 = facesDegenerate;
+    const before = { ...skipped };
+    beginWarnings();
+    meshFace(solid, face, verts, faceIds);
+    const warnings = takeWarnings();
+    let key: string | null = null;
+    for (const k in skipped) if (skipped[k] !== before[k]) key = k;
+    const o: FaceOutcome = { tessellated: facesTessellated > t0, degenerate: facesDegenerate > d0, skipped: key, warnings, trace: null };
+    // The counts are applied when the outcome is replayed, not here.
+    facesTotal = n0; facesTessellated = t0; facesDegenerate = d0;
+    if (key !== null) { if (before[key] === undefined) delete skipped[key]; else skipped[key] = before[key]; }
+    return o;
+  };
+  const replayFace = (face: BFace, o: FaceOutcome, vertsBefore: number): void => {
+    facesTotal++;
+    if (vertsBefore > SOLID_VERTS_LIMIT) throw vertsLimitError(vertsBefore);
+    if (o.skipped !== null) bump(skipped, o.skipped);
+    for (const w of o.warnings) warn(w.code, w.faceId, w.detail);
+    if (trace && o.trace) for (const n of o.trace) trace(face.faceId, n);
+    if (o.degenerate) facesDegenerate++;
+    if (o.tessellated) facesTessellated++;
+  };
+  const faceCost = (face: BFace): number => {
+    let n = 0;
+    for (const lp of face.loops) for (const oe of lp.edges) n += sampled.get(oe.edgeId)?.length ?? 0;
+    return n + 4 * bodyTriLowerBound([face], sampled, (fid) => tolOf(fid).targetEdge);
+  };
+  const exportPrep = (): TessPrep => {
+    let nE = 0, nP = 0;
+    for (const pts of sampled.values()) { nE++; nP += pts.length; }
+    // Shared memory where there is any, so that handing the samples to N workers copies nothing.
+    const xyzBytes = nP * 3 * 8;
+    const edgeXYZ = new Float64Array(typeof SharedArrayBuffer === "function" ? new SharedArrayBuffer(xyzBytes) : new ArrayBuffer(xyzBytes));
+    const edgeIds = new Int32Array(nE), edgeOff = new Int32Array(nE + 1);
+    let k = 0, o = 0;
+    for (const [id, pts] of sampled) {
+      edgeIds[k] = id; edgeOff[k++] = o / 3;
+      for (const q of pts) { edgeXYZ[o++] = q[0]; edgeXYZ[o++] = q[1]; edgeXYZ[o++] = q[2]; }
+    }
+    edgeOff[k] = o / 3;
+    return {
+      edgeIds, edgeOff, edgeXYZ,
+      overlap: [...overlapFaces],
+      fields: fields ? [...fields].map(([id, f]) => [id, f.toData()] as [number, SizeFieldData]) : null,
+      surfHistory: historyAtStart,
+    };
+  };
+  let parked: WarningState | null = null;
   return {
-    mesh: { positions: new Float64Array(positions), indices: new Uint32Array(indices) },
-    faceOfTri: new Uint32Array(faceOfTri),
-    solidOfTri: new Uint32Array(solidOfTri),
-    openSolids: brep.solids.filter((s) => s.open).map((s) => s.id),
-    stats: { solids: brep.solids.length, facesTotal, facesTessellated, skipped, ...(facesDegenerate ? { degenerate: facesDegenerate } : {}) },
-    warnings: takeWarnings(),
-    ...(opts.collectEdgePolylines ? { edgePolylines: sampled } : {}),
+    exportPrep,
+    beginSolid, selectSolid, meshFace, recordFace, replayFace, stitchSolid, appendSolid, finish, faceCost, tick,
+    isCurrent: () => mySeq === sessionSeq,
+    parkWarnings: () => { parked = parkWarnings(); },
+    unparkWarnings: () => { if (parked) unparkWarnings(parked); parked = null; },
   };
 }
 

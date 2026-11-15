@@ -267,6 +267,31 @@ next work-unit boundary — in a worker UI, abort first and keep `terminate()` a
 centers/radii/axes, boundary polylines coincident with the mesh) into `result.measure`, so a
 viewer can offer CAD-style measuring on the tessellation.
 
+**Several threads:** `importStepAsync` returns exactly what `importStep` returns (the same
+vertices, triangles, ids and warnings) and meshes the faces on worker threads:
+
+```ts
+import { importStepAsync } from "meshstep";
+const result = await importStepAsync(stepText, opts); // Node: nothing else to set up
+
+// In a browser, or when the library is bundled: say how to start a worker on meshStep's worker module
+const result2 = await importStepAsync(stepText, {
+  ...opts,
+  createWorker: () => new Worker(new URL("meshstep/worker", import.meta.url), { type: "module" }),
+});
+```
+
+A large model takes about half the time in the default mode (6 workers on a 12-core Apple M6:
+Ontos_V2 17.2 s → 9.2 s, nist_ctc_04 11.7 s → 6.2 s, GoProHandlePod 5.7 s → 2.6 s; the whole
+60-model corpus 146 s → 93 s). The isotropic mode gains less (155 s → 119 s), because half of
+its work is preparation that one thread does. A small model is
+meshed on the calling thread without a worker being started, so it costs what `importStep`
+costs. `threads` sets the number of workers (default: half the hardware threads, at most 6, and
+fewer for a very large file); each worker reads the model itself, so memory use grows by about
+one parsed copy of the model per worker. Without a way to start workers the import runs on the
+calling thread. `signal` aborts as before, and here also while a worker is in the middle of a
+face.
+
 **Per-face overrides:** `faceOverrides` refines (or coarsens) individual CAD faces, keyed by the
 face ids `faceOfTri` reports, each with its own `surfaceDeviation` / `normalDeviation` /
 `maxEdge` (an omitted value falls back to the global one). Every B-rep edge is still sampled

@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // meshStep — public API.
-import { buildBrep } from "./brep/build.ts";
+import { buildBrep, type BrepModel } from "./brep/build.ts";
 import { mergeShortEdges } from "./brep/defeature.ts";
 import { tessellate, type FaceTol, type MeshResult, type TessOptions } from "./mesh/tessellate.ts";
+import { MeshPool, defaultThreads, type PoolConfig, type WorkerLike } from "./mesh/pool.ts";
 import { remesh } from "./mesh/remesh.ts";
 import { orientConsistent } from "./mesh/orient.ts";
 import { makeSurface, type Surface } from "./geom/surfaces.ts";
@@ -69,50 +70,81 @@ function applyAssemblyPlacement(
     out[o + 2] = f.x[2] * x + f.y[2] * y + f.z[2] * z;
   };
   // Extra instances first (they read the still-untransformed local coordinates), then instance 0.
-  const extraV: number[] = [], extraI: number[] = [], extraF: number[] = [], extraS: number[] = [], extraInst: number[] = [];
-  const extraN: number[] = [], extraUV: number[] = [];
+  // Each further placement of a solid appends a copy of the solid's vertices (ascending) and of
+  // its triangles (ascending), in the order of `xf` and of its frames. The solids' vertex and
+  // triangle lists are gathered once, so the cost is the size of the copies, not (number of
+  // placements) x (size of the whole mesh).
+  const nT = solidOfTri.length;
+  const multi = new Map<number, number>(); // solid id -> index among the solids with further placements
+  for (const [sid, frames] of xf) if (frames.length > 1 && firstInst.has(sid)) multi.set(sid, multi.size);
+  let extraVerts = 0, extraTris = 0;
+  const vStart = new Int32Array(multi.size + 1), tStart = new Int32Array(multi.size + 1);
+  const vList = new Int32Array(nV), tList = new Int32Array(nT);
+  const rank = new Int32Array(nV); // position of a vertex among its solid's vertices
+  if (multi.size > 0) {
+    const vIdx = new Int32Array(nV).fill(-1), tIdx = new Int32Array(nT).fill(-1);
+    for (let v = 0; v < nV; v++) { const m = multi.get(vSolid[v]!); if (m !== undefined) { vIdx[v] = m; vStart[m + 1]!++; } }
+    for (let t = 0; t < nT; t++) { const m = multi.get(solidOfTri[t]!); if (m !== undefined) { tIdx[t] = m; tStart[m + 1]!++; } }
+    for (let m = 0; m < multi.size; m++) { vStart[m + 1]! += vStart[m]!; tStart[m + 1]! += tStart[m]!; }
+    const vFill = vStart.slice(0, multi.size), tFill = tStart.slice(0, multi.size);
+    for (let v = 0; v < nV; v++) { const m = vIdx[v]!; if (m >= 0) { rank[v] = vFill[m]! - vStart[m]!; vList[vFill[m]!++] = v; } }
+    for (let t = 0; t < nT; t++) { const m = tIdx[t]!; if (m >= 0) tList[tFill[m]!++] = t; }
+    for (const [sid, m] of multi) {
+      const copies = xf.get(sid)!.length - 1;
+      extraVerts += copies * (vStart[m + 1]! - vStart[m]!);
+      extraTris += copies * (tStart[m + 1]! - tStart[m]!);
+    }
+  }
+  /** Instance 0 of every placed solid: transformed in place. */
+  const placeFirst = (): void => {
+    for (let v = 0; v < nV; v++) {
+      const f = xf.get(vSolid[v]!)?.[0]; if (!f) continue;
+      app(f, P, v * 3, P[v * 3]!, P[v * 3 + 1]!, P[v * 3 + 2]!);
+      if (N) rotD(f, N, v * 3, N[v * 3]!, N[v * 3 + 1]!, N[v * 3 + 2]!);
+    }
+  };
+  if (extraVerts === 0) { placeFirst(); return unchanged; }
+  const positions = new Float64Array(P.length + extraVerts * 3);
+  const indices = new Uint32Array(I.length + extraTris * 3);
+  const fo = new Uint32Array(nT + extraTris);
+  const so = new Uint32Array(nT + extraTris);
+  const io = new Uint32Array(nT + extraTris);
+  const normals = N ? new Float32Array(N.length + extraVerts * 3) : undefined;
+  const uv = UV ? new Float32Array(UV.length + extraTris * 6) : undefined;
+  let vo = nV, to = nT;
   for (const [sid, frames] of xf) {
-    const base = firstInst.get(sid);
-    if (base === undefined) continue; // solid with no triangles — nothing to replicate
+    const m = multi.get(sid);
+    if (m === undefined) continue;
+    const base = firstInst.get(sid)!;
+    const v0 = vStart[m]!, v1 = vStart[m + 1]!, t0 = tStart[m]!, t1 = tStart[m + 1]!;
     for (let k = 1; k < frames.length; k++) {
       const f = frames[k]!;
-      const remap = new Map<number, number>();
-      const tmp = new Float64Array(3);
-      for (let v = 0; v < nV; v++) {
-        if (vSolid[v] !== sid) continue;
-        remap.set(v, nV + (extraV.length / 3));
-        app(f, tmp, 0, P[v * 3]!, P[v * 3 + 1]!, P[v * 3 + 2]!);
-        extraV.push(tmp[0]!, tmp[1]!, tmp[2]!);
-        if (N) rotD(f, extraN, extraN.length, N[v * 3]!, N[v * 3 + 1]!, N[v * 3 + 2]!);
+      const first = vo; // index of this copy's first vertex
+      for (let q = v0; q < v1; q++, vo++) {
+        const v = vList[q]!;
+        app(f, positions, vo * 3, P[v * 3]!, P[v * 3 + 1]!, P[v * 3 + 2]!);
+        if (N) rotD(f, normals!, vo * 3, N[v * 3]!, N[v * 3 + 1]!, N[v * 3 + 2]!);
       }
-      for (let t = 0; t < solidOfTri.length; t++) {
-        if (solidOfTri[t] !== sid) continue;
-        extraI.push(remap.get(I[t * 3]!)!, remap.get(I[t * 3 + 1]!)!, remap.get(I[t * 3 + 2]!)!);
-        extraF.push(faceOfTri[t]!); extraS.push(sid); extraInst.push(base + k);
-        if (UV) for (let e = 0; e < 6; e++) extraUV.push(UV[t * 6 + e]!);
+      for (let q = t0; q < t1; q++, to++) {
+        const t = tList[q]!;
+        for (let e = 0; e < 3; e++) {
+          const v = I[t * 3 + e]!;
+          // (a corner on another solid's vertex has no copy here; it read as index 0 before, too)
+          indices[to * 3 + e] = vSolid[v] === sid ? first + rank[v]! : 0;
+        }
+        fo[to] = faceOfTri[t]!; so[to] = sid; io[to] = base + k;
+        if (UV) for (let e = 0; e < 6; e++) uv![to * 6 + e] = UV[t * 6 + e]!;
       }
     }
   }
-  for (let v = 0; v < nV; v++) {
-    const f = xf.get(vSolid[v]!)?.[0]; if (!f) continue;
-    app(f, P, v * 3, P[v * 3]!, P[v * 3 + 1]!, P[v * 3 + 2]!);
-    if (N) rotD(f, N, v * 3, N[v * 3]!, N[v * 3 + 1]!, N[v * 3 + 2]!);
-  }
-  if (extraV.length === 0) return unchanged;
-  const positions = new Float64Array(P.length + extraV.length);
-  positions.set(P); positions.set(extraV, P.length);
-  const indices = new Uint32Array(I.length + extraI.length);
-  indices.set(I); indices.set(extraI, I.length);
-  const fo = new Uint32Array(faceOfTri.length + extraF.length);
-  fo.set(faceOfTri); fo.set(extraF, faceOfTri.length);
-  const so = new Uint32Array(solidOfTri.length + extraS.length);
-  so.set(solidOfTri); so.set(extraS, solidOfTri.length);
-  const io = new Uint32Array(baseInstOfTri.length + extraInst.length);
-  io.set(baseInstOfTri); io.set(extraInst, baseInstOfTri.length);
-  let normals: Float32Array | undefined;
-  if (N) { normals = new Float32Array(N.length + extraN.length); normals.set(N); normals.set(extraN, N.length); }
-  let uv: Float32Array | undefined;
-  if (UV) { uv = new Float32Array(UV.length + extraUV.length); uv.set(UV); uv.set(extraUV, UV.length); }
+  placeFirst();
+  positions.set(P);
+  indices.set(I);
+  fo.set(faceOfTri);
+  so.set(solidOfTri);
+  io.set(baseInstOfTri);
+  if (N) normals!.set(N);
+  if (UV) uv!.set(UV);
   return { mesh: { positions, indices }, faceOfTri: fo, solidOfTri: so, instances, instanceOfTri: io, normals, uv };
 }
 
@@ -311,8 +343,36 @@ function resolveFaceOverrides(
   return out.size > 0 ? out : undefined;
 }
 
-/** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
-export function importStep(src: string, opts: ImportOptions = {}): ImportResult {
+/** Options of `importStepAsync` on top of the import options. */
+export interface ParallelOptions {
+  /** Worker threads to mesh on. Default: half the machine's hardware threads, at most 6, and
+   * fewer for a very large file (each worker holds the parsed model). 1 (or less) meshes on
+   * the calling thread, like `importStep`. */
+  threads?: number;
+  /** Creates one worker running meshStep's worker module (`meshstep/worker`). Under Node the
+   * default starts worker threads itself; in a browser, or when the library is bundled into a
+   * single file, pass e.g.
+   * `() => new Worker(new URL("meshstep/worker", import.meta.url), { type: "module" })`.
+   * Without a way to create workers the import runs on the calling thread. */
+  createWorker?: () => WorkerLike;
+}
+export type { WorkerLike } from "./mesh/pool.ts";
+
+/** Everything of an import before tessellation: the model read, cleaned up, and the options
+ * resolved. */
+interface ImportStart {
+  surfaceDev: number;
+  maxEdge: number;
+  normalDevRad: number;
+  mergeTol: number;
+  brep: BrepModel;
+  merged: MergeSummary | undefined;
+  colors: ModelColors | null;
+  structure: PartNode;
+  tess: TessOptions;
+}
+
+function importBegin(src: string, opts: ImportOptions): ImportStart {
   const surfaceDev = opts.surfaceDeviation ?? 0.01;
   const maxEdge = opts.maxEdge ?? 1.0;
   const normalDevRad = (opts.normalDeviation ?? 15) * Math.PI / 180;
@@ -321,7 +381,7 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
 
   signal?.throwIfAborted();
   onProgress?.({ phase: "parse", done: 0, total: 0 });
-  let brep = buildBrep(src);
+  const brep = buildBrep(src);
   const mergeTol = opts.mergeTolerance !== undefined && opts.mergeTolerance > 0 ? opts.mergeTolerance : 0;
   let merged: MergeSummary | undefined;
   if (mergeTol > 0) {
@@ -329,8 +389,8 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
     merged = { edges: m.edges, faces: m.faces, maxMove: m.maxMove, reverted: false };
   }
   signal?.throwIfAborted();
-  let colors = extractColors(brep.table, brep.solids);
-  let structure = extractStructure(brep.table, brep.solids);
+  const colors = extractColors(brep.table, brep.solids);
+  const structure = extractStructure(brep.table, brep.solids);
   // Sample boundaries to the surface-deviation tolerance so feature edges (rims, holes) are fine
   // even without remeshing. The robust CDT handles the resulting dense/collinear boundaries.
   // maxEdge is a pure upper CAP on segment length — it must never loosen the chord tolerance
@@ -347,30 +407,29 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
     faceTol: resolveFaceOverrides(opts.faceOverrides, surfaceDev, maxEdge, normalDevRad),
     isotropic: opts.isotropic, growthRate: opts.growthRate, minEdge: opts.minEdge, mappedFillets: opts.mappedFillets,
   };
-  let result = tessellate(brep, tess);
-  signal?.throwIfAborted();
-  // SAFETY NET for the merge: a merged model may never come out less sound than the model as
-  // it is. If the merged mesh has an open or non-manifold edge or any mesher warning, mesh the
-  // untouched model as well and keep that one unless it is no better. Costs a second
-  // tessellation only when something is wrong.
-  if (merged && merged.edges > 0) {
-    const trouble = (r: MeshResult): number => {
-      const d = meshDefects(r.mesh, r.solidOfTri, r.openSolids);
-      return d.openEdges + d.nonManifoldEdges + r.warnings.length;
-    };
-    const tm = trouble(result);
-    if (tm > 0) {
-      const plainBrep = buildBrep(src);
-      const plain = tessellate(plainBrep, tess);
-      signal?.throwIfAborted();
-      if (trouble(plain) < tm) {
-        brep = plainBrep; result = plain; merged.reverted = true;
-        colors = extractColors(brep.table, brep.solids);
-        structure = extractStructure(brep.table, brep.solids);
-      }
-    }
-  }
-  onProgress?.({ phase: "finalize", done: 0, total: 0 });
+  return { surfaceDev, maxEdge, normalDevRad, mergeTol, brep, merged, colors, structure, tess };
+}
+
+/** How unsound a tessellation is (the merge safety net compares the merged model's with the
+ * untouched one's). */
+function trouble(r: MeshResult): number {
+  const d = meshDefects(r.mesh, r.solidOfTri, r.openSolids);
+  return d.openEdges + d.nonManifoldEdges + r.warnings.length;
+}
+
+/** The merge safety net decided for the untouched model: carry on with that one. */
+function revertMerge(c: ImportStart, plainBrep: BrepModel): void {
+  c.brep = plainBrep;
+  c.merged!.reverted = true;
+  c.colors = extractColors(plainBrep.table, plainBrep.solids);
+  c.structure = extractStructure(plainBrep.table, plainBrep.solids);
+}
+
+/** Everything of an import after tessellation. */
+function importEnd(c: ImportStart, result: MeshResult, opts: ImportOptions): ImportResult {
+  const { surfaceDev, maxEdge, normalDevRad, brep, merged, colors, structure } = c;
+  const signal = opts.signal;
+  opts.onProgress?.({ phase: "finalize", done: 0, total: 0 });
   // Assembly placements per solid (empty for a single part); applied to the final mesh below.
   // A part with N occurrences carries N frames and is replicated after meshing.
   const solidXf = new Map<number, Frame[]>();
@@ -415,4 +474,73 @@ export function importStep(src: string, opts: ImportOptions = {}): ImportResult 
     : {};
   const placed = applyAssemblyPlacement(r.mesh, r.faceOfTri, solidOfTri, solidXf, attrs);
   return { ...result, ...placed, diagnostics: buildDiagnostics(result, placed.mesh, placed.solidOfTri), units: brep.units.label, colors, structure, measure, faces, faceUV: attrs.faceUV, merged };
+}
+
+/** Parse a STEP file (ISO-10303-21 text) and tessellate it into a uniform, watertight mesh. */
+export function importStep(src: string, opts: ImportOptions = {}): ImportResult {
+  const c = importBegin(src, opts);
+  let result = tessellate(c.brep, c.tess);
+  opts.signal?.throwIfAborted();
+  // SAFETY NET for the merge: a merged model may never come out less sound than the model as
+  // it is. If the merged mesh has an open or non-manifold edge or any mesher warning, mesh the
+  // untouched model as well and keep that one unless it is no better. Costs a second
+  // tessellation only when something is wrong.
+  if (c.merged && c.merged.edges > 0) {
+    const tm = trouble(result);
+    if (tm > 0) {
+      const plainBrep = buildBrep(src);
+      const plain = tessellate(plainBrep, c.tess);
+      opts.signal?.throwIfAborted();
+      if (trouble(plain) < tm) { result = plain; revertMerge(c, plainBrep); }
+    }
+  }
+  return importEnd(c, result, opts);
+}
+
+/**
+ * `importStep` with the faces meshed on worker threads: the same result (vertices, triangles,
+ * ids, warnings), sooner on a machine with several cores. A large model takes about half the
+ * time in the default mode; less is gained in the isotropic mode, where half the work is
+ * preparation that one thread does. A small model is meshed on the calling thread, without a
+ * worker being started.
+ * Every worker reads the model itself, so memory use grows with the thread count: about one
+ * more copy of the parsed model per thread.
+ * `signal` aborts as in `importStep`, and here also while a worker is in the middle of a face.
+ */
+export async function importStepAsync(src: string, opts: ImportOptions & ParallelOptions = {}): Promise<ImportResult> {
+  const threads = Math.floor(opts.threads ?? defaultThreads(src.length));
+  if (!(threads > 1)) return importStep(src, opts);
+  opts.signal?.throwIfAborted();
+  const surfaceDev = opts.surfaceDeviation ?? 0.01;
+  const maxEdge = opts.maxEdge ?? 1.0;
+  const normalDevRad = (opts.normalDeviation ?? 15) * Math.PI / 180;
+  const faceTol = resolveFaceOverrides(opts.faceOverrides, surfaceDev, maxEdge, normalDevRad);
+  const cfg: PoolConfig = {
+    chordTol: surfaceDev, targetEdge: maxEdge, normalDev: normalDevRad,
+    faceTol: faceTol ? [...faceTol] : null,
+    isotropic: !!opts.isotropic, growthRate: opts.growthRate, minEdge: opts.minEdge, mappedFillets: opts.mappedFillets,
+    mergeTol: opts.mergeTolerance !== undefined && opts.mergeTolerance > 0 ? opts.mergeTolerance : 0,
+    trace: !!opts.trace,
+  };
+  // The workers start reading the model now, while this thread reads it too.
+  const pool = await MeshPool.open(src, cfg, threads, opts.createWorker);
+  if (!pool) return importStep(src, opts);
+  try {
+    const c = importBegin(src, opts);
+    let result = await pool.run(c.brep, c.tess, opts.signal);
+    opts.signal?.throwIfAborted();
+    if (c.merged && c.merged.edges > 0) { // the merge safety net, as in importStep
+      const tm = trouble(result);
+      if (tm > 0) {
+        const plainBrep = buildBrep(src);
+        pool.reinit({ ...cfg, mergeTol: 0 });
+        const plain = await pool.run(plainBrep, c.tess, opts.signal);
+        opts.signal?.throwIfAborted();
+        if (trouble(plain) < tm) { result = plain; revertMerge(c, plainBrep); }
+      }
+    }
+    return importEnd(c, result, opts);
+  } finally {
+    pool.close();
+  }
 }

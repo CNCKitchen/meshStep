@@ -50,14 +50,22 @@ function stableSortRange(ids: Int32Array, keys: Float64Array, tmpIds: Int32Array
   }
 }
 
+/** A built SizeField as plain data (see SizeField.toData). */
+export interface SizeFieldData {
+  g: number; hMin: number; hMax: number;
+  px: Float64Array; ph: Float64Array;
+  nLo: Int32Array; nHi: Int32Array; nLeft: Int32Array; nRight: Int32Array;
+  nMinH: Float64Array; nBox: Float64Array;
+}
+
 export class SizeField {
   /** Size growth per unit distance (growthRate − 1). */
   readonly g: number;
   readonly hMin: number;
   readonly hMax: number;
   private stage: number[] = []; // x, y, z, h per staged source (before build)
-  private px = new Float64Array(0);
-  private ph = new Float64Array(0);
+  private px: Float64Array = new Float64Array(0);
+  private ph: Float64Array = new Float64Array(0);
   // kd-tree, one entry per node. Leaves hold sources [lo, hi); inner nodes have two children.
   private nLo: number[] = [];
   private nHi: number[] = [];
@@ -160,6 +168,29 @@ export class SizeField {
     const dy = y < box[b + 1]! ? box[b + 1]! - y : y > box[b + 4]! ? y - box[b + 4]! : 0;
     const dz = z < box[b + 2]! ? box[b + 2]! - z : z > box[b + 5]! ? z - box[b + 5]! : 0;
     return this.nMinH[id]! + this.g * Math.sqrt(dx * dx + dy * dy + dz * dz);
+  }
+
+  /** The built field as plain data (typed arrays), for handing it to another thread. */
+  toData(): SizeFieldData {
+    return {
+      g: this.g, hMin: this.hMin, hMax: this.hMax, px: this.px, ph: this.ph,
+      nLo: Int32Array.from(this.nLo), nHi: Int32Array.from(this.nHi),
+      nLeft: Int32Array.from(this.nLeft), nRight: Int32Array.from(this.nRight),
+      nMinH: Float64Array.from(this.nMinH), nBox: Float64Array.from(this.nBox),
+    };
+  }
+  /** A field that answers `at` exactly as the one `toData` was taken from. */
+  static fromData(d: SizeFieldData): SizeField {
+    const f = new SizeField(2, d.hMin, d.hMax);
+    (f as { g: number }).g = d.g;
+    f.px = d.px; f.ph = d.ph;
+    f.nLo = Array.from(d.nLo); f.nHi = Array.from(d.nHi);
+    f.nLeft = Array.from(d.nLeft); f.nRight = Array.from(d.nRight);
+    f.nMinH = Array.from(d.nMinH); f.nBox = Array.from(d.nBox);
+    let depth = 2;
+    for (let m = d.ph.length; m > LEAF; m >>= 1) depth++;
+    f.stack = new Int32Array(Math.max(64, 2 * depth + 8));
+    return f;
   }
 
   /** Allowed edge length at a point (mm). */

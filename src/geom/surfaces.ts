@@ -314,8 +314,9 @@ class OffsetSurface implements Surface {
   base: Surface; dist: number;
   periodicU: boolean; periodicV?: boolean; uPeriod?: number; vPeriod?: number; uSeam?: number; vSeam?: number;
   uDomain?: [number, number]; vDomain?: [number, number];
-  /** Consecutive wrong-branch rescans in project() that found nothing closer (cost cap). */
-  private fruitlessScans = 0;
+  /** @internal Consecutive wrong-branch rescans in project() that found nothing closer (cost
+   * cap). The one piece of a surface that depends on what it was asked before. */
+  fruitlessScans = 0;
   constructor(base: Surface, dist: number) {
     this.base = base; this.dist = dist;
     this.periodicU = base.periodicU; this.periodicV = base.periodicV;
@@ -1037,6 +1038,20 @@ function makeBSplineSurface(t: Table, id: number, s: number): BSplineSurface | n
 }
 
 /** Construct a Surface from a STEP surface entity; returns null for unsupported. */
+/** What a surface remembers of its use so far (an offset surface's rescan counter, for it and
+ * the surfaces it is built on), so a copy made on another thread can be brought to the same
+ * state. Empty for a surface that remembers nothing. */
+export function surfaceHistory(s: Surface): number[] {
+  const out: number[] = [];
+  for (let x: Surface | undefined = s; x instanceof OffsetSurface; x = x.base) out.push(x.fruitlessScans);
+  while (out.length > 0 && out[out.length - 1] === 0) out.pop();
+  return out;
+}
+export function restoreSurfaceHistory(s: Surface, h: readonly number[]): void {
+  let k = 0;
+  for (let x: Surface | undefined = s; x instanceof OffsetSurface && k < h.length; x = x.base) x.fruitlessScans = h[k++]!;
+}
+
 export function makeSurface(t: Table, id: number, s: number, aRad = 1): Surface | null {
   const kind = t.typeOf(id);
   if (!kind) return makeBSplineSurface(t, id, s); // complex (rational B-spline) surface

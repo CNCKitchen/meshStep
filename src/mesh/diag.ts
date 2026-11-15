@@ -112,6 +112,16 @@ export function takeWarnings(): MeshWarning[] {
   return w;
 }
 
+/** The collector's state, taken out of the module-level sink and put back unchanged: an import
+ * that waits for worker threads (pool.ts) must not hold the sink while it waits. */
+export interface WarningState { sink: MeshWarning[] | null; seen: Set<string> | null; truncated: number; }
+export function parkWarnings(): WarningState {
+  const s = { sink, seen, truncated };
+  sink = null; seen = null; truncated = 0;
+  return s;
+}
+export function unparkWarnings(s: WarningState): void { sink = s.sink; seen = s.seen; truncated = s.truncated; }
+
 export interface EdgeDefects { openEdges: number; nonManifoldEdges: number; }
 
 /** Count boundary defects: edges bounding exactly one triangle (open — a crack or hole) and edges

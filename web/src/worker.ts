@@ -2,8 +2,9 @@
 /// <reference lib="webworker" />
 // Runs the meshStep pipeline off the main thread so the UI stays responsive.
 // Produces the raw tessellation (remesh: false) from one STEP file.
-import { importStep, estimateStepSize, readSTL, read3MF, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate, type SolidInstance } from "../../src/index.ts";
+import { importStepAsync, estimateStepSize, readSTL, read3MF, indexSoup, meshDefects, type ImportOptions, type ImportDiagnostics, type MeasureGeometry, type MeshResult, type ModelColors, type PartNode, type SizeEstimate, type SolidInstance } from "../../src/index.ts";
 import { EdgeTable } from "../../src/mesh/edge-table.ts";
+import { isWorkerMessage, serveWorkerMessage } from "../../src/mesh/face-serve.ts";
 
 export interface ConvertRequest {
   type: "convert";
@@ -295,6 +296,12 @@ async function load3mf(req: Load3mfRequest): Promise<void> {
 }
 
 ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
+  // This script also runs as the conversion's own workers (see convert): those get the mesh
+  // pool's messages, not the viewer's.
+  if (isWorkerMessage(ev.data)) {
+    serveWorkerMessage(ev.data, (m, transfer) => ctx.postMessage(m, transfer ?? []));
+    return;
+  }
   const req = ev.data;
   if (req.type === "measure") {
     post({ type: "size", estimate: estimateStepSize(req.stepText) });
@@ -315,16 +322,27 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
     return;
   }
   if (req.type !== "convert") return;
-  try {
+  convert(req).catch((err: unknown) => {
+    post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
+  });
+};
+
+/** STEP path: the faces are meshed on further workers started from this one (up to half the
+ * machine's hardware threads, at most 6); a small model is meshed right here. Those workers
+ * run this same script, so nothing more is downloaded for them. Terminating this worker (the
+ * UI's abort) ends them as well. */
+async function convert(req: ConvertRequest): Promise<void> {
+  {
     post({ type: "progress", stage: "Parsing…" });
-    // Tessellation is synchronous in this worker, but postMessage delivers immediately, so the
-    // main thread repaints the bar while we compute. Throttled: full-rate ticks (one per edge/
-    // face) would flood the main thread's event loop on big assemblies.
+    // postMessage delivers immediately, so the main thread repaints the bar while this worker
+    // computes. Throttled: full-rate ticks (one per edge/face) would flood the main thread's
+    // event loop on big assemblies.
     let lastPost = 0;
-    const tess = importStep(req.stepText, {
+    const tess = await importStepAsync(req.stepText, {
       ...req.opts,
       remesh: false,
       measureGeometry: true,
+      createWorker: () => new Worker(self.location.href, { type: "module" }),
       onProgress: (p) => {
         if (p.phase === "finalize") { post({ type: "progress", stage: "Finalizing…", fraction: 1 }); return; }
         if (p.phase !== "tessellate" || p.total <= 0) return;
@@ -362,7 +380,5 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
       [pos.buffer, idx.buffer, fot.buffer, sot.buffer, tess.instanceOfTri.buffer,
         ...(tess.measure ? [tess.measure.points.buffer] : [])],
     );
-  } catch (err) {
-    post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
   }
-};
+}

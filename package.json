@@ -11,6 +11,9 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./worker": {
+      "default": "./dist/mesh/face-worker.js"
     }
   },
   "types": "./dist/index.d.ts",
@@ -19,7 +22,10 @@
     "src",
     "README.md"
   ],
-  "sideEffects": false,
+  "sideEffects": [
+    "./dist/mesh/face-worker.js",
+    "./src/mesh/face-worker.ts"
+  ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/CNCKitchen/meshStep.git"
@@ -36,6 +42,7 @@
     "test:faces": "node test/face-info.ts",
     "test:attrs": "node test/attributes.ts",
     "test:abort": "node test/abort.ts",
+    "test:parallel": "node test/parallel.ts",
     "test:overrides": "node test/face-overrides.ts",
     "test:parse": "node test/parse-recovery.ts",
     "test:geometry": "node test/geometry-regressions.ts",
@@ -49,7 +56,7 @@
     "test:version": "node test/version.ts",
     "typecheck": "tsc --noEmit",
     "version": "node scripts/sync-version.mjs && git add src/version.ts",
-    "prepublishOnly": "npm run typecheck && npm run build && npm run test:version && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort && npm run test:overrides && npm run test:parse && npm run test:geometry && npm run test:isotropic"
+    "prepublishOnly": "npm run typecheck && npm run build && npm run test:version && npm run test:stl && npm run test:units && npm run test:faces && npm run test:attrs && npm run test:abort && npm run test:parallel && npm run test:overrides && npm run test:parse && npm run test:geometry && npm run test:isotropic"
   },
   "keywords": [
     "step",
