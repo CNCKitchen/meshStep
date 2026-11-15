@@ -24,109 +24,109 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 
 | Converter | Converted | Watertight | Flipped areas | Missing surface | Errors / timeouts |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 62 / 64 | 49 / 52 | 1 | 1 | 0 |
-| meshStep isotropic 0.2.0 | 61 / 64 | 46 / 52 | 1 | 1 | 1 |
-| meshStep (deviation only) 0.2.0 | 63 / 64 | 49 / 52 | 1 | 0 | 0 |
+| meshStep 0.2.0 | 62 / 64 | 49 / 52 | 0 | 0 | 1 |
+| meshStep isotropic 0.2.0 | 62 / 64 | 47 / 52 | 0 | 0 | 1 |
+| meshStep (deviation only) 0.2.0 | 63 / 64 | 49 / 52 | 0 | 0 | 0 |
 | occt-import-js 0.0.23 | 60 / 64 | 42 / 52 | 0 | 0 | 4 |
 | @tx-code/occt-js 0.1.7 | 60 / 64 | 39 / 52 | 0 | 2 | 2 |
 | occt-wasm 5.17.2 | 60 / 64 | 39 / 52 | 0 | 2 | 2 |
 | opencascade.js 1.1.1 | 60 / 64 | 40 / 52 | 1 | 0 | 3 |
-| brepkit-wasm 4.11.20 | 41 / 64 | 25 / 52 | 3 | 6 | 17 |
+| brepkit-wasm 4.11.20 | 42 / 64 | 26 / 52 | 3 | 5 | 17 |
 
 **Speed** (38 common models; ratio = geometric mean against occt-import-js, < 1 is faster)
 
 | Converter | First file, fresh page | ratio | Same file again | ratio | Peak memory (median) |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 60.7 s | ×1.42 | 53.1 s | ×1.91 | 447 MB |
-| meshStep isotropic 0.2.0 | 75.2 s | ×1.46 | 69.0 s | ×1.94 | 432 MB |
-| meshStep (deviation only) 0.2.0 | 21.5 s | ×0.59 | 15.9 s | ×0.58 | 365 MB |
-| occt-import-js 0.0.23 | 53.4 s | ×1.00 | 44.4 s | ×1.00 | 404 MB |
-| @tx-code/occt-js 0.1.7 | 42.6 s | ×0.80 | 35.5 s | ×0.73 | 409 MB |
-| occt-wasm 5.17.2 | 30.2 s | ×0.69 | 21.7 s | ×0.51 | 514 MB |
-| opencascade.js 1.1.1 | 109.5 s | ×2.57 | 87.2 s | ×2.11 | 880 MB |
-| brepkit-wasm 4.11.20 | 9.5 s | ×0.20 | 7.3 s | ×0.17 | 210 MB |
+| meshStep 0.2.0 | 66.0 s | ×1.56 | 56.0 s | ×2.09 | 457 MB |
+| meshStep isotropic 0.2.0 | 79.4 s | ×1.44 | 73.8 s | ×2.01 | 440 MB |
+| meshStep (deviation only) 0.2.0 | 24.3 s | ×0.66 | 18.3 s | ×0.67 | 370 MB |
+| occt-import-js 0.0.23 | 55.6 s | ×1.00 | 45.9 s | ×1.00 | 404 MB |
+| @tx-code/occt-js 0.1.7 | 44.9 s | ×0.80 | 37.4 s | ×0.73 | 409 MB |
+| occt-wasm 5.17.2 | 31.6 s | ×0.71 | 22.5 s | ×0.52 | 515 MB |
+| opencascade.js 1.1.1 | 111.8 s | ×2.55 | 90.5 s | ×2.17 | 883 MB |
+| brepkit-wasm 4.11.20 | 10.1 s | ×0.20 | 7.8 s | ×0.18 | 213 MB |
 
 **Mesh** (38 common models)
 
 | Converter | Triangles | ratio | Min angle p5 | < 20° | < 5° | Radius ratio | Deviation p99 / tol | Max deviation ≤ 1.25 tol |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 7,081,667 | ×7.54 | 16.2° | 22.1% | 1.6% | 0.68 | 0.61 | 55% |
-| meshStep isotropic 0.2.0 | 9,202,060 | ×7.86 | 36.0° | 0.9% | 0.2% | 0.88 | 0.63 | 66% |
-| meshStep (deviation only) 0.2.0 | 1,645,185 | ×1.27 | 6.2° | 62.9% | 8.8% | 0.40 | 0.79 | 21% |
-| occt-import-js 0.0.23 | 2,103,631 | ×1.00 | 1.1° | 63.9% | 29.0% | 0.38 | 0.38 | 82% |
-| @tx-code/occt-js 0.1.7 | 2,099,006 | ×0.99 | 1.0° | 64.5% | 28.8% | 0.38 | 0.39 | 76% |
-| occt-wasm 5.17.2 | 2,098,706 | ×0.99 | 1.0° | 64.5% | 28.8% | 0.38 | 0.39 | 76% |
-| opencascade.js 1.1.1 | 2,105,978 | ×1.00 | 1.1° | 63.9% | 29.1% | 0.38 | 0.38 | 82% |
-| brepkit-wasm 4.11.20 | 2,842,719 | ×1.18 | 1.2° | 56.5% | 20.8% | 0.47 | 0.75 | 63% |
+| meshStep 0.2.0 | 7,150,929 | ×7.68 | 16.2° | 21.9% | 1.6% | 0.68 | 0.71 | 79% |
+| meshStep isotropic 0.2.0 | 9,229,260 | ×7.92 | 36.0° | 0.9% | 0.2% | 0.88 | 0.70 | 76% |
+| meshStep (deviation only) 0.2.0 | 1,941,465 | ×1.56 | 6.1° | 58.3% | 8.2% | 0.42 | 0.77 | 71% |
+| occt-import-js 0.0.23 | 2,103,631 | ×1.00 | 1.1° | 63.9% | 29.0% | 0.38 | 0.41 | 79% |
+| @tx-code/occt-js 0.1.7 | 2,099,006 | ×0.99 | 1.0° | 64.5% | 28.8% | 0.38 | 0.41 | 76% |
+| occt-wasm 5.17.2 | 2,098,706 | ×0.99 | 1.0° | 64.5% | 28.8% | 0.38 | 0.41 | 76% |
+| opencascade.js 1.1.1 | 2,105,978 | ×1.00 | 1.1° | 63.9% | 29.1% | 0.38 | 0.41 | 79% |
+| brepkit-wasm 4.11.20 | 2,842,719 | ×1.18 | 1.2° | 56.5% | 20.8% | 0.47 | 0.84 | 66% |
 
 <details><summary>Per model: time to first mesh (s) / watertight</summary>
 
 | Model | Closed in file | meshStep | meshStep isotropic | meshStep (deviation only) | occt-import-js | @tx-code/occt-js | occt-wasm | opencascade.js | brepkit-wasm |
 |---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|
-| ETA 6497-1 Movement Corrected | yes | 12.51 ✓ | 19.65 ✗ | 3.78 ✓ | 11.92 ✗ | 11.41 ✗ | 6.42 ✗ | 23.26 ✗ | error |
-| GoProHandlePod | yes | 7.26 ✓ | 9.11 ✓ | 1.09 ✓ | 1.66 ✓ | 1.82 ✓ | 1.26 ✓ | 2.72 ✓ | 0.45 ✓ |
-| INDX M3x16 ISO7380-3 Torx button head | yes | 0.26 ⚠ | 0.25 ⚠ | 0.17 ✓ | error | error | error | error | 0.05 ⚠ |
-| INDX XT30 connector (818 sheets) | **no** | 0.96 | 1.12 | 0.48 | error | error | error | error | 1.94 |
-| Insta360GO3_case | yes | 0.79 ✓ | 0.80 ✓ | 0.33 ✓ | 0.45 ✓ | 0.37 ✓ | 0.36 ✓ | 1.10 ✓ | 0.15 ✓ |
-| LampenHalter | yes | 0.33 ✓ | 0.34 ✓ | 0.16 ✓ | 0.26 ✓ | 0.21 ✓ | 0.24 ✓ | 0.81 ✓ | 0.04 ✓ |
-| MicHolder_Inserts | yes | 0.71 ✓ | 0.84 ✓ | 0.32 ✓ | 0.34 ✓ | 0.34 ✓ | 0.32 ✓ | 1.07 ✓ | 0.10 ✓ |
-| SquAIRPot | yes | 0.80 ✓ | 0.98 ✓ | 0.48 ✓ | 1.13 ✓ | 1.20 ✓ | 0.84 ✓ | 2.14 ✓ | 0.43 ✓ |
-| Tapered Collet Insert | yes | 0.60 ✓ | 0.59 ✓ | 0.29 ✓ | 0.41 ✓ | 0.40 ✓ | 0.35 ✓ | 0.85 ✓ | 0.18 ✗ |
-| Tool-free Z-Axis Belt Tensioner for Voron 2.4 | yes | 4.37 ✓ | 7.77 ✗ | 1.69 ✓ | 4.90 ✓ | 5.26 ✗ | 2.89 ✗ | 14.23 ✓ | 0.88 ✗ |
-| WN1452 K25x10 TX7 screw | yes | 0.72 ✓ | 0.96 ✓ | 0.41 ✓ | 0.95 ✓ | 1.03 ✓ | 0.84 ✓ | 1.57 ✓ | 1.41 ⚠ |
-| chamferFillet | yes | 0.35 ✓ | 0.37 ✓ | 0.17 ✓ | 0.17 ✓ | 0.16 ✓ | 0.18 ✓ | 0.61 ✓ | 0.04 ✓ |
-| cone | yes | 0.13 ✓ | 0.12 ✓ | 0.09 ✓ | 0.15 ✓ | 0.17 ⚠ | 0.17 ⚠ | 0.59 ✓ | 0.02 ✓ |
-| cube | yes | 0.27 ✓ | 0.24 ✓ | 0.05 ✓ | 0.08 ✓ | 0.09 ✓ | 0.11 ✓ | 0.45 ✓ | 0.02 ✓ |
-| cylinder | yes | 0.31 ✓ | 0.17 ✓ | 0.12 ✓ | 0.09 ✓ | 0.08 ✓ | 0.11 ✓ | 0.47 ✓ | 0.02 ✓ |
-| cylinderWithHole | yes | 0.40 ✓ | 0.27 ✓ | 0.14 ✓ | 0.12 ✓ | 0.11 ✓ | 0.13 ✓ | 0.51 ✓ | 0.03 ✓ |
-| everything | yes | 1.80 ✓ | 1.79 ✓ | 1.15 ✓ | 7.10 ✓ | 8.04 ⚠ | 5.59 ⚠ | 9.12 ✓ | 0.26 ⚠ |
-| newtestmodels/GARMIN_MOUNT_v15 | yes | 0.21 ✓ | 0.21 ✓ | 0.13 ✓ | 0.17 ✓ | 0.15 ✓ | 0.17 ✓ | 0.65 ✓ | 0.04 ✓ |
-| newtestmodels/Goblin Drone V2 (reinforced) | yes | 0.88 ✓ | 1.09 ✓ | 0.38 ✓ | 0.79 ✗ | 0.77 ✗ | 0.58 ✗ | 2.47 ✗ | 0.13 ✓ |
-| newtestmodels/Goblin drone V3 (extra reinforced) | yes | 2.12 ✓ | 3.60 ✓ | 0.95 ✓ | 1.61 ✗ | 1.68 ✗ | 1.00 ✗ | 4.05 ✗ | 0.30 ✓ |
-| newtestmodels/GoblinDrone | yes | 0.85 ✓ | 1.08 ✓ | 0.33 ✓ | 0.86 ✗ | 0.89 ✗ | 0.62 ✗ | 2.68 ✗ | 0.13 ✓ |
-| newtestmodels/Ontos_V2 | yes | 9.04 ✓ | 16.95 ✓ | 3.07 ✗ | 7.93 ✗ | 6.58 ✗ | 4.28 ✗ | 19.83 ✗ | error |
-| newtestmodels/Ratched toothpaste tube squeezer v2 | yes | 2.11 ✓ | 2.99 ✓ | 1.41 ✓ | 2.16 ✓ | 2.27 ✓ | 1.15 ✓ | 5.03 ✓ | 0.41 ✗ |
-| newtestmodels/Rugged Box Parametric V2 | yes | 1.80 ✓ | 1.63 ✓ | 0.47 ✓ | 0.67 ✓ | 0.70 ✓ | 0.50 ✓ | 2.31 ✓ | 0.12 ✓ |
-| newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2 | yes | 9.30 ✗ | 16.37 ✗ | 3.37 ✗ | 7.89 ✗ | 6.95 ✗ | 4.22 ✗ | 20.01 ✗ | 1.18 ✗ |
-| newtestmodels/boomerang-v2 | **no** | 1.77 | 1.93 | 0.48 | 0.71 | 0.68 | 0.51 | 1.57 | 0.14 |
-| newtestmodels/bottle-cage | yes | 4.83 ✓ | 6.47 ✓ | 2.14 ✓ | 4.91 ✗ | 4.51 ✗ | 3.35 ✗ | 10.36 ✗ | error |
-| newtestmodels/trivenger | yes | 1.07 ✓ | 0.99 ✓ | 0.33 ✓ | 0.98 ✓ | 0.90 ✓ | 0.62 ✓ | 1.60 ✓ | error |
-| newtestmodels/wallganizer | yes | 36.32 ✓ | timeout | 3.63 ✓ | 26.05 ✓ | 14.38 ✓ | 9.55 ✓ | 43.10 ✓ | 20.41 ✗ |
-| roundedCube | yes | 0.30 ✓ | 0.29 ✓ | 0.19 ✓ | 0.14 ✓ | 0.14 ✓ | 0.16 ✓ | 0.62 ✓ | 0.06 ✓ |
-| sourcemodels/1797609in | yes | 0.39 ✓ | 0.36 ✓ | 0.23 ✓ | 0.30 ✓ | 0.29 ✓ | 0.30 ✓ | 0.98 ✓ | error |
-| sourcemodels/2827056 | yes | 0.73 ✓ | 0.74 ✓ | 0.30 ✓ | 0.63 ✓ | 0.63 ✓ | 0.53 ✓ | 1.80 ✓ | error |
-| sourcemodels/GARMIN_MOUNT_v15 | yes | 0.20 ✓ | 0.19 ✓ | 0.14 ✓ | 0.17 ✓ | 0.16 ✓ | 0.18 ✓ | 0.68 ✓ | 0.06 ✓ |
-| sourcemodels/OpenVessel | yes | 2.51 ✓ | 3.50 ✓ | 1.09 ✓ | 1.86 ✓ | 1.77 ✓ | 1.19 ✓ | 3.52 ✗ | error |
-| sourcemodels/OpenVessel_extract-01 | **no** | 0.21 | 0.28 | 0.17 | 0.28 | 0.30 | 0.26 | 0.78 | 0.07 |
-| sourcemodels/OpenVessel_fusion360 | yes | 2.06 ✓ | 2.80 ✓ | 0.95 ✓ | 1.35 ✗ | 1.23 ✗ | 0.83 ✗ | 2.60 ✗ | 0.36 ✗ |
-| sourcemodels/filler | yes | 0.48 ✓ | 0.35 ✓ | 0.17 ✓ | 0.26 ✗ | 0.27 ✗ | 0.23 ✗ | 0.72 ✗ | error |
-| sourcemodels/furniture-leg | yes | 1.24 ✓ | 1.05 ✓ | 0.47 ✓ | 2.07 ✓ | 1.68 ✓ | 1.33 ✓ | 3.17 ✓ | 0.26 ✓ |
-| sourcemodels/gear | **no** | 0.75 | 0.35 | 0.43 | 0.21 | 0.18 | 0.20 | 0.61 | empty |
-| sourcemodels/hose-fitting | yes | 0.54 ✓ | 0.36 ✓ | 0.22 ✓ | 0.26 ✓ | 0.24 ✓ | 0.26 ✓ | 0.82 ✓ | error |
-| sourcemodels/iso14649-demo | yes | 0.67 ✓ | 0.47 ✓ | 0.27 ✓ | 0.31 ✓ | 0.28 ✓ | 0.31 ✓ | 1.01 ✓ | 0.07 ✗ |
-| sourcemodels/jack_in_the_box | yes | 0.72 ⚠ | 0.76 ⚠ | 0.39 ⚠ | 1.26 ✓ | 1.17 ✓ | 0.97 ✓ | 2.50 ⚠ | error |
-| sourcemodels/nist_ctc_01_asme1_ap242-e1 | yes | 0.57 ✓ | 0.46 ✓ | 0.23 ✓ | 0.29 ✓ | 0.27 ✓ | 0.28 ✓ | 1.00 ✓ | error |
-| sourcemodels/nist_ctc_02_asme1_ap242-e2 | **no** | 2.09 | 2.21 | 0.80 | 1.28 | 1.23 | 0.75 | 3.06 | error |
-| sourcemodels/nist_ctc_03_asme1_ap242-e2 | yes | 0.70 ✓ | 0.53 ✓ | 0.38 ✓ | 0.36 ✓ | 0.27 ✓ | 0.29 ✓ | 1.02 ✓ | 0.04 ✓ |
-| sourcemodels/nist_ctc_04_asme1_ap242-e1 | **no** | 2.29 | 2.04 | 0.65 | 0.80 | 0.84 | 0.58 | 2.32 | 0.18 |
-| sourcemodels/nist_ctc_05_asme1_ap242-e1 | yes | 0.74 ✓ | 0.67 ✓ | 0.31 ✓ | 0.53 ✓ | 0.42 ✓ | 0.41 ✓ | 1.35 ✓ | 0.08 ✓ |
-| sourcemodels/nist_ftc_06_asme1_ap242-e2 | yes | 1.02 ✓ | 0.88 ✓ | 0.41 ✓ | 0.79 ✓ | 0.42 ✓ | 0.41 ✓ | 1.54 ✓ | error |
-| sourcemodels/nist_ftc_07_asme1_ap242-e2 | **no** | 5.47 | 5.19 | 0.76 | 0.78 | 0.61 | 0.46 | 1.83 | 0.87 |
-| sourcemodels/nist_ftc_08_asme1_ap242-e1-tg | **no** | 0.13 | 0.13 | 0.13 | empty | 0.19 | 0.16 | error | empty |
-| sourcemodels/nist_ftc_08_asme1_ap242-e2 | yes | 1.99 ✓ | 1.78 ✓ | 0.64 ✓ | 4.94 ✓ | 0.53 ✓ | 0.47 ✓ | 5.59 ✓ | 0.32 ✓ |
-| sourcemodels/nist_ftc_09_asme1_ap242-e1 | **no** | 0.75 | 0.55 | 0.37 | 1.28 | 0.49 | 0.50 | 1.79 | 0.07 |
-| sourcemodels/nist_ftc_10_asme1_ap242-e2 | **no** | 1.44 | 1.46 | 0.62 | 0.87 | 0.75 | 0.59 | 2.07 | 1.51 |
-| sourcemodels/nist_ftc_11_asme1_ap242-e2 | yes | 0.77 ✓ | 1.65 ✓ | 0.25 ✓ | 2.20 ✓ | 0.38 ✓ | 0.33 ✓ | 2.55 ✓ | 0.26 ⚠ |
-| sourcemodels/nist_stc_06_asme1_ap242-e3 | yes | 0.42 ✓ | 0.78 ✓ | 0.25 ✓ | 0.58 ✓ | 0.43 ✓ | 0.38 ✓ | 1.25 ✓ | 0.72 ⚠ |
-| sourcemodels/nist_stc_07_asme1_ap242-e3 | **no** | 4.89 | 5.04 | 0.76 | error | 0.58 | 0.51 | 1.82 | error |
-| sourcemodels/nist_stc_08_asme1_ap242-e3 | **no** | 2.07 | 1.86 | 0.60 | 1.11 | 0.48 | 0.43 | 1.98 | 0.08 |
-| sourcemodels/nist_stc_09_asme1_ap242-e3 | yes | 0.75 ✓ | 0.59 ✓ | 0.39 ✓ | 1.17 ✓ | 0.49 ✓ | 0.47 ✓ | 1.93 ✓ | 0.07 ✓ |
-| sourcemodels/nist_stc_10_asme1_ap242-e2 | yes | 1.78 ✓ | 2.02 ✓ | 0.67 ✓ | 4.00 ✓ | 0.64 ✓ | 0.60 ✓ | 4.72 ✓ | 0.12 ✓ |
-| sourcemodels/roundedCube | yes | 0.33 ✓ | 0.27 ✓ | 0.18 ✓ | 0.14 ✓ | 0.14 ✓ | 0.16 ✓ | 0.58 ✓ | 0.06 ✓ |
-| sourcemodels/weldment_asm_solid | yes | 3.63 ✓ | 4.38 ✓ | 0.89 ✓ | 1.65 ✓ | 1.31 ✓ | 1.11 ✓ | 4.40 ✓ | error |
-| sphere | yes | 0.08 ✓ | 0.09 ✓ | 0.07 ✓ | 0.23 ✓ | 0.24 ✓ | 0.24 ✓ | 0.66 ✓ | 0.02 ⚠ |
-| splineThing | yes | 1.59 ✓ | 1.65 ✓ | 0.93 ✓ | 8.13 ✓ | 8.59 ✓ | 6.18 ✓ | 10.34 ✓ | 0.25 ✗ |
-| tool | yes | 0.85 ✓ | 1.09 ✓ | 0.43 ✓ | 0.50 ✓ | 0.48 ✓ | 0.40 ✓ | 1.36 ✓ | 0.15 ✓ |
+| ETA 6497-1 Movement Corrected | yes | 13.76 ✓ | 20.04 ✗ | 3.93 ✓ | 13.51 ✗ | 11.22 ✗ | 6.58 ✗ | 23.30 ✗ | error |
+| GoProHandlePod | yes | 7.56 ✓ | 9.20 ✓ | 1.21 ✓ | 1.69 ✓ | 1.77 ✓ | 1.26 ✓ | 2.65 ✓ | 0.51 ✓ |
+| INDX M3x16 ISO7380-3 Torx button head | yes | 0.27 ✓ | 0.23 ✓ | 0.20 ✓ | error | error | error | error | 0.05 ✓ |
+| INDX XT30 connector (818 sheets) | **no** | 1.00 | 1.09 | 0.63 | error | error | error | error | 1.92 |
+| Insta360GO3_case | yes | 0.87 ✓ | 0.80 ✓ | 0.42 ✓ | 0.43 ✓ | 0.38 ✓ | 0.35 ✓ | 1.11 ✓ | 0.14 ✓ |
+| LampenHalter | yes | 0.50 ✓ | 0.35 ✓ | 0.31 ✓ | 0.22 ✓ | 0.20 ✓ | 0.35 ✓ | 1.02 ✓ | 0.06 ✓ |
+| MicHolder_Inserts | yes | 1.12 ✓ | 0.86 ✓ | 0.41 ✓ | 0.34 ✓ | 0.33 ✓ | 0.40 ✓ | 1.09 ✓ | 0.13 ✓ |
+| SquAIRPot | yes | 1.18 ✓ | 1.09 ✓ | 1.04 ✓ | 1.08 ✓ | 1.14 ✓ | 0.85 ✓ | 2.55 ✓ | 0.43 ✓ |
+| Tapered Collet Insert | yes | 0.77 ✓ | 0.61 ✓ | 0.41 ✓ | 0.38 ✓ | 0.41 ✓ | 0.32 ✓ | 0.84 ✓ | 0.18 ✗ |
+| Tool-free Z-Axis Belt Tensioner for Voron 2.4 | yes | 4.73 ✓ | 9.81 ✗ | 1.69 ✓ | 4.75 ✓ | 5.34 ✗ | 2.75 ✗ | 14.40 ✓ | 0.88 ✗ |
+| WN1452 K25x10 TX7 screw | yes | 1.14 ✓ | 0.92 ✓ | 0.52 ✓ | 1.32 ✓ | 1.00 ✓ | 0.74 ✓ | 1.46 ✓ | 1.40 ⚠ |
+| chamferFillet | yes | 0.66 ✓ | 0.36 ✓ | 0.20 ✓ | 0.17 ✓ | 0.16 ✓ | 0.16 ✓ | 0.65 ✓ | 0.04 ✓ |
+| cone | yes | 0.12 ✓ | 0.14 ✓ | 0.08 ✓ | 0.20 ✓ | 0.20 ⚠ | 0.18 ⚠ | 0.53 ✓ | 0.02 ✓ |
+| cube | yes | 0.26 ✓ | 0.24 ✓ | 0.05 ✓ | 0.08 ✓ | 0.08 ✓ | 0.10 ✓ | 0.45 ✓ | 0.02 ✓ |
+| cylinder | yes | 0.30 ✓ | 0.18 ✓ | 0.13 ✓ | 0.09 ✓ | 0.09 ✓ | 0.11 ✓ | 0.50 ✓ | 0.02 ✓ |
+| cylinderWithHole | yes | 0.64 ✓ | 0.26 ✓ | 0.24 ✓ | 0.11 ✓ | 0.10 ✓ | 0.20 ✓ | 0.61 ✓ | 0.03 ✓ |
+| everything | yes | 1.84 ✓ | 1.73 ✓ | 1.70 ✓ | 7.63 ✓ | 8.29 ⚠ | 5.77 ⚠ | 9.10 ✓ | 0.28 ⚠ |
+| newtestmodels/GARMIN_MOUNT_v15 | yes | 0.21 ✓ | 0.21 ✓ | 0.13 ✓ | 0.17 ✓ | 0.15 ✓ | 0.18 ✓ | 0.64 ✓ | 0.04 ✓ |
+| newtestmodels/Goblin Drone V2 (reinforced) | yes | 0.92 ✓ | 1.11 ✓ | 0.38 ✓ | 0.80 ✗ | 0.77 ✗ | 0.58 ✗ | 2.63 ✗ | 0.14 ✓ |
+| newtestmodels/Goblin drone V3 (extra reinforced) | yes | 2.20 ✓ | 3.58 ✓ | 1.05 ✓ | 1.65 ✗ | 1.69 ✗ | 1.47 ✗ | 4.06 ✗ | 0.36 ✓ |
+| newtestmodels/GoblinDrone | yes | 0.86 ✓ | 1.07 ✓ | 0.37 ✓ | 0.91 ✗ | 0.93 ✗ | 0.61 ✗ | 2.76 ✗ | 0.14 ✓ |
+| newtestmodels/Ontos_V2 | yes | 9.58 ✓ | 17.37 ✓ | 4.39 ✗ | 9.98 ✗ | 6.55 ✗ | 4.30 ✗ | 20.40 ✗ | error |
+| newtestmodels/Ratched toothpaste tube squeezer v2 | yes | 2.11 ✓ | 2.99 ✓ | 1.46 ✓ | 2.92 ✓ | 2.26 ✓ | 1.12 ✓ | 4.98 ✓ | 0.44 ✗ |
+| newtestmodels/Rugged Box Parametric V2 | yes | 1.71 ✓ | 1.66 ✓ | 0.42 ✓ | 0.69 ✓ | 0.68 ✓ | 0.52 ✓ | 2.35 ✓ | 0.10 ✓ |
+| newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2 | yes | 9.48 ✗ | 18.02 ✗ | 3.02 ✗ | 6.57 ✗ | 7.54 ✗ | 4.29 ✗ | 20.73 ✗ | 1.30 ✗ |
+| newtestmodels/boomerang-v2 | **no** | 1.84 | 1.88 | 0.53 | 0.72 | 0.69 | 0.49 | 1.50 | 0.14 |
+| newtestmodels/bottle-cage | yes | 5.43 ✓ | 6.35 ✓ | 2.60 ✓ | 4.80 ✗ | 5.29 ✗ | 4.00 ✗ | 10.40 ✗ | error |
+| newtestmodels/trivenger | yes | 1.11 ✓ | 0.98 ✓ | 0.48 ✓ | 0.99 ✓ | 0.93 ✓ | 0.65 ✓ | 1.62 ✓ | error |
+| newtestmodels/wallganizer | yes | timeout | timeout | 3.71 ✓ | 25.97 ✓ | 14.28 ✓ | 9.56 ✓ | 43.09 ✓ | 20.32 ✗ |
+| roundedCube | yes | 0.32 ✓ | 0.29 ✓ | 0.22 ✓ | 0.15 ✓ | 0.14 ✓ | 0.17 ✓ | 0.56 ✓ | 0.09 ✓ |
+| sourcemodels/1797609in | yes | 0.40 ✓ | 0.35 ✓ | 0.22 ✓ | 0.30 ✓ | 0.27 ✓ | 0.31 ✓ | 1.03 ✓ | error |
+| sourcemodels/2827056 | yes | 0.70 ✓ | 0.66 ✓ | 0.30 ✓ | 0.58 ✓ | 0.61 ✓ | 0.49 ✓ | 1.80 ✓ | error |
+| sourcemodels/GARMIN_MOUNT_v15 | yes | 0.20 ✓ | 0.19 ✓ | 0.14 ✓ | 0.16 ✓ | 0.17 ✓ | 0.17 ✓ | 0.62 ✓ | 0.06 ✓ |
+| sourcemodels/OpenVessel | yes | 2.94 ✓ | 3.44 ✓ | 1.68 ✓ | 1.83 ✓ | 1.78 ✓ | 1.17 ✓ | 3.35 ✗ | error |
+| sourcemodels/OpenVessel_extract-01 | **no** | 0.22 | 0.25 | 0.18 | 0.28 | 0.27 | 0.24 | 0.72 | 0.06 |
+| sourcemodels/OpenVessel_fusion360 | yes | 2.28 ✓ | 2.71 ✓ | 1.31 ✓ | 1.39 ✗ | 1.70 ✗ | 0.87 ✗ | 2.51 ✗ | 0.36 ✗ |
+| sourcemodels/filler | yes | 0.45 ✓ | 0.32 ✓ | 0.23 ✓ | 0.25 ✗ | 0.26 ✗ | 0.23 ✗ | 0.69 ✗ | error |
+| sourcemodels/furniture-leg | yes | 1.44 ✓ | 1.04 ✓ | 0.55 ✓ | 2.12 ✓ | 1.80 ✓ | 1.76 ✓ | 3.23 ✓ | 0.28 ✓ |
+| sourcemodels/gear | **no** | 0.69 | 0.34 | 0.46 | 0.29 | 0.29 | 0.19 | 0.65 | empty |
+| sourcemodels/hose-fitting | yes | 0.52 ✓ | 0.33 ✓ | 0.24 ✓ | 0.39 ✓ | 0.24 ✓ | 0.30 ✓ | 0.80 ✓ | error |
+| sourcemodels/iso14649-demo | yes | 0.65 ✓ | 0.51 ✓ | 0.27 ✓ | 0.29 ✓ | 0.28 ✓ | 0.30 ✓ | 1.06 ✓ | 0.09 ✗ |
+| sourcemodels/jack_in_the_box | yes | 1.23 ⚠ | 0.76 ⚠ | 0.44 ⚠ | 1.51 ✓ | 1.12 ✓ | 0.95 ✓ | 2.76 ⚠ | error |
+| sourcemodels/nist_ctc_01_asme1_ap242-e1 | yes | 0.62 ✓ | 0.47 ✓ | 0.30 ✓ | 0.29 ✓ | 0.25 ✓ | 0.27 ✓ | 0.93 ✓ | error |
+| sourcemodels/nist_ctc_02_asme1_ap242-e2 | **no** | 2.77 | 2.76 | 1.00 | 1.92 | 1.63 | 0.75 | 3.17 | error |
+| sourcemodels/nist_ctc_03_asme1_ap242-e2 | yes | 0.75 ✓ | 0.53 ✓ | 0.37 ✓ | 0.36 ✓ | 0.26 ✓ | 0.28 ✓ | 0.95 ✓ | 0.05 ✓ |
+| sourcemodels/nist_ctc_04_asme1_ap242-e1 | **no** | 2.72 | 2.29 | 0.70 | 0.79 | 1.37 | 0.72 | 2.41 | 0.16 |
+| sourcemodels/nist_ctc_05_asme1_ap242-e1 | yes | 1.36 ✓ | 0.66 ✓ | 0.46 ✓ | 0.50 ✓ | 0.40 ✓ | 0.41 ✓ | 1.55 ✓ | 0.12 ✓ |
+| sourcemodels/nist_ftc_06_asme1_ap242-e2 | yes | 0.98 ✓ | 0.83 ✓ | 0.50 ✓ | 1.15 ✓ | 0.44 ✓ | 0.63 ✓ | 2.06 ✓ | error |
+| sourcemodels/nist_ftc_07_asme1_ap242-e2 | **no** | 5.71 | 5.16 | 1.02 | 0.75 | 0.61 | 0.52 | 1.92 | 0.89 |
+| sourcemodels/nist_ftc_08_asme1_ap242-e1-tg | **no** | 0.15 | 0.14 | 0.14 | empty | 0.19 | 0.20 | error | empty |
+| sourcemodels/nist_ftc_08_asme1_ap242-e2 | yes | 2.36 ✓ | 1.84 ✓ | 0.63 ✓ | 5.83 ✓ | 0.54 ✓ | 0.52 ✓ | 5.72 ✓ | 0.31 ✓ |
+| sourcemodels/nist_ftc_09_asme1_ap242-e1 | **no** | 0.70 | 0.52 | 0.37 | 1.30 | 0.47 | 0.53 | 1.88 | 0.07 |
+| sourcemodels/nist_ftc_10_asme1_ap242-e2 | **no** | 1.56 | 1.39 | 0.64 | 1.11 | 0.70 | 0.60 | 2.00 | 1.84 |
+| sourcemodels/nist_ftc_11_asme1_ap242-e2 | yes | 0.84 ✓ | 1.55 ✓ | 0.27 ✓ | 2.42 ✓ | 0.38 ✓ | 0.33 ✓ | 2.63 ✓ | 0.29 ⚠ |
+| sourcemodels/nist_stc_06_asme1_ap242-e3 | yes | 0.45 ✓ | 1.05 ✓ | 0.25 ✓ | 0.55 ✓ | 0.42 ✓ | 0.37 ✓ | 1.31 ✓ | 0.72 ⚠ |
+| sourcemodels/nist_stc_07_asme1_ap242-e3 | **no** | 5.21 | 5.24 | 1.07 | error | 0.57 | 0.48 | 1.89 | error |
+| sourcemodels/nist_stc_08_asme1_ap242-e3 | **no** | 2.20 | 1.82 | 0.59 | 1.55 | 0.73 | 0.43 | 1.98 | 0.07 |
+| sourcemodels/nist_stc_09_asme1_ap242-e3 | yes | 0.85 ✓ | 0.62 ✓ | 0.40 ✓ | 1.54 ✓ | 0.50 ✓ | 0.46 ✓ | 1.94 ✓ | 0.07 ✓ |
+| sourcemodels/nist_stc_10_asme1_ap242-e2 | yes | 1.87 ✓ | 2.33 ✓ | 0.66 ✓ | 4.97 ✓ | 0.68 ✓ | 0.56 ✓ | 4.90 ✓ | 0.12 ✓ |
+| sourcemodels/roundedCube | yes | 0.32 ✓ | 0.27 ✓ | 0.21 ✓ | 0.16 ✓ | 0.14 ✓ | 0.18 ✓ | 0.60 ✓ | 0.06 ✓ |
+| sourcemodels/weldment_asm_solid | yes | 4.79 ✓ | 4.71 ✓ | 1.15 ✓ | 1.75 ✓ | 1.26 ✓ | 1.15 ✓ | 4.56 ✓ | error |
+| sphere | yes | 0.08 ✓ | 0.08 ✓ | 0.07 ✓ | 0.23 ✓ | 0.23 ✓ | 0.24 ✓ | 0.65 ✓ | 0.03 ⚠ |
+| splineThing | yes | 1.65 ✓ | 1.62 ✓ | 1.63 ✓ | 8.10 ✓ | 8.96 ✓ | 6.41 ✓ | 10.35 ✓ | 0.23 ✗ |
+| tool | yes | 0.90 ✓ | 1.11 ✓ | 0.52 ✓ | 0.49 ✓ | 0.49 ✓ | 0.39 ✓ | 1.39 ✓ | 0.14 ✓ |
 
 ✓ watertight · ✗ converted but open · no mark: converted, file not closed (not counted) · ⚠ surface missing (> 1%), wrong scale or empty
 
@@ -140,94 +140,94 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 
 | Converter | Converted | Watertight | Flipped areas | Missing surface | Errors / timeouts |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 62 / 64 | 49 / 52 | 1 | 1 | 0 |
-| meshStep (workers) 0.2.0 | 62 / 64 | 49 / 52 | 1 | 1 | 0 |
+| meshStep 0.2.0 | 63 / 64 | 50 / 52 | 0 | 0 | 0 |
+| meshStep (workers) 0.2.0 | 63 / 64 | 50 / 52 | 0 | 0 | 0 |
 | occt-import-js 0.0.23 | 60 / 64 | 42 / 52 | 0 | 0 | 4 |
 
 **Speed** (59 common models; ratio = geometric mean against occt-import-js, < 1 is faster)
 
 | Converter | First file, fresh page | ratio | Same file again | ratio | Peak memory (median) |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 113.8 s | ×1.28 | 103.3 s | ×1.55 | 439 MB |
-| meshStep (workers) 0.2.0 | 76.5 s | ×1.17 | 69.2 s | ×1.49 | 1,048 MB |
-| occt-import-js 0.0.23 | 104.0 s | ×1.00 | 94.2 s | ×1.00 | 396 MB |
+| meshStep 0.2.0 | 117.1 s | ×1.32 | 106.7 s | ×1.63 | 436 MB |
+| meshStep (workers) 0.2.0 | 77.2 s | ×1.20 | 70.2 s | ×1.55 | 1,057 MB |
+| occt-import-js 0.0.23 | 103.9 s | ×1.00 | 94.1 s | ×1.00 | 397 MB |
 
 **Mesh** (59 common models)
 
 | Converter | Triangles | ratio | Min angle p5 | < 20° | < 5° | Radius ratio | Deviation p99 / tol | Max deviation ≤ 1.25 tol |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 26,709,905 | ×5.74 | 14.2° | 32.6% | 2.7% | 0.60 | 0.69 | 51% |
-| meshStep (workers) 0.2.0 | 26,709,905 | ×5.74 | 14.2° | 32.6% | 2.7% | 0.60 | 0.69 | 51% |
-| occt-import-js 0.0.23 | 9,336,705 | ×1.00 | 1.1° | 54.3% | 24.7% | 0.44 | 0.40 | 75% |
+| meshStep 0.2.0 | 26,798,389 | ×5.82 | 14.8° | 32.5% | 2.7% | 0.60 | 0.72 | 71% |
+| meshStep (workers) 0.2.0 | 26,798,389 | ×5.82 | 14.8° | 32.5% | 2.7% | 0.60 | 0.72 | 71% |
+| occt-import-js 0.0.23 | 9,336,705 | ×1.00 | 1.1° | 54.3% | 24.7% | 0.44 | 0.42 | 73% |
 
 <details><summary>Per model: time to first mesh (s) / watertight</summary>
 
 | Model | Closed in file | meshStep | meshStep (workers) | occt-import-js |
 |---|:-:|--:|--:|--:|
-| ETA 6497-1 Movement Corrected | yes | 9.51 ✓ | 5.12 ✓ | 9.11 ✗ |
-| GoProHandlePod | yes | 5.41 ✓ | 2.58 ✓ | 1.24 ✓ |
-| INDX M3x16 ISO7380-3 Torx button head | yes | 0.20 ⚠ | 0.19 ⚠ | error |
-| INDX XT30 connector (818 sheets) | **no** | 0.70 | 0.84 | error |
-| Insta360GO3_case | yes | 0.67 ✓ | 0.64 ✓ | 0.33 ✓ |
-| LampenHalter | yes | 0.26 ✓ | 0.23 ✓ | 0.19 ✓ |
-| MicHolder_Inserts | yes | 0.56 ✓ | 0.63 ✓ | 0.27 ✓ |
-| SquAIRPot | yes | 0.61 ✓ | 0.76 ✓ | 0.87 ✓ |
-| Tapered Collet Insert | yes | 0.48 ✓ | 0.53 ✓ | 0.31 ✓ |
-| Tool-free Z-Axis Belt Tensioner for Voron 2.4 | yes | 3.41 ✓ | 2.40 ✓ | 3.83 ✓ |
-| WN1452 K25x10 TX7 screw | yes | 0.57 ✓ | 0.67 ✓ | 0.69 ✓ |
-| chamferFillet | yes | 0.26 ✓ | 0.28 ✓ | 0.13 ✓ |
+| ETA 6497-1 Movement Corrected | yes | 10.37 ✓ | 5.37 ✓ | 9.04 ✗ |
+| GoProHandlePod | yes | 5.66 ✓ | 2.56 ✓ | 1.22 ✓ |
+| INDX M3x16 ISO7380-3 Torx button head | yes | 0.21 ✓ | 0.20 ✓ | error |
+| INDX XT30 connector (818 sheets) | **no** | 0.74 | 0.89 | error |
+| Insta360GO3_case | yes | 0.64 ✓ | 0.65 ✓ | 0.33 ✓ |
+| LampenHalter | yes | 0.25 ✓ | 0.23 ✓ | 0.17 ✓ |
+| MicHolder_Inserts | yes | 0.63 ✓ | 0.63 ✓ | 0.27 ✓ |
+| SquAIRPot | yes | 0.89 ✓ | 0.99 ✓ | 0.86 ✓ |
+| Tapered Collet Insert | yes | 0.59 ✓ | 0.61 ✓ | 0.31 ✓ |
+| Tool-free Z-Axis Belt Tensioner for Voron 2.4 | yes | 3.41 ✓ | 2.45 ✓ | 3.83 ✓ |
+| WN1452 K25x10 TX7 screw | yes | 0.89 ✓ | 0.96 ✓ | 0.70 ✓ |
+| chamferFillet | yes | 0.28 ✓ | 0.26 ✓ | 0.13 ✓ |
 | cone | yes | 0.10 ✓ | 0.10 ✓ | 0.12 ✓ |
-| cube | yes | 0.21 ✓ | 0.20 ✓ | 0.06 ✓ |
-| cylinder | yes | 0.25 ✓ | 0.23 ✓ | 0.07 ✓ |
-| cylinderWithHole | yes | 0.30 ✓ | 0.32 ✓ | 0.08 ✓ |
-| everything | yes | 1.47 ✓ | 1.57 ✓ | 5.53 ✓ |
-| newtestmodels/GARMIN_MOUNT_v15 | yes | 0.16 ✓ | 0.16 ✓ | 0.13 ✓ |
-| newtestmodels/Goblin Drone V2 (reinforced) | yes | 0.67 ✓ | 0.75 ✓ | 0.63 ✗ |
-| newtestmodels/Goblin drone V3 (extra reinforced) | yes | 1.81 ✓ | 1.57 ✓ | 1.31 ✗ |
-| newtestmodels/GoblinDrone | yes | 0.68 ✓ | 0.74 ✓ | 0.68 ✗ |
-| newtestmodels/Ontos_V2 | yes | 7.18 ✓ | 4.53 ✓ | 6.54 ✗ |
-| newtestmodels/Ratched toothpaste tube squeezer v2 | yes | 1.73 ✓ | 1.67 ✓ | 1.72 ✓ |
-| newtestmodels/Rugged Box Parametric V2 | yes | 1.40 ✓ | 1.01 ✓ | 0.57 ✓ |
-| newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2 | yes | 7.40 ✗ | 4.64 ✗ | 6.40 ✗ |
-| newtestmodels/boomerang-v2 | **no** | 1.43 | 1.04 | 0.58 |
-| newtestmodels/bottle-cage | yes | 3.84 ✓ | 2.42 ✓ | 4.27 ✗ |
-| newtestmodels/trivenger | yes | 0.82 ✓ | 0.91 ✓ | 0.79 ✓ |
-| newtestmodels/wallganizer | yes | 32.08 ✓ | 15.01 ✓ | 26.12 ✓ |
-| roundedCube | yes | 0.24 ✓ | 0.24 ✓ | 0.12 ✓ |
+| cube | yes | 0.21 ✓ | 0.21 ✓ | 0.06 ✓ |
+| cylinder | yes | 0.23 ✓ | 0.24 ✓ | 0.07 ✓ |
+| cylinderWithHole | yes | 0.31 ✓ | 0.35 ✓ | 0.10 ✓ |
+| everything | yes | 1.48 ✓ | 1.52 ✓ | 5.51 ✓ |
+| newtestmodels/GARMIN_MOUNT_v15 | yes | 0.17 ✓ | 0.16 ✓ | 0.13 ✓ |
+| newtestmodels/Goblin Drone V2 (reinforced) | yes | 0.70 ✓ | 0.74 ✓ | 0.64 ✗ |
+| newtestmodels/Goblin drone V3 (extra reinforced) | yes | 1.91 ✓ | 1.61 ✓ | 1.32 ✗ |
+| newtestmodels/GoblinDrone | yes | 0.69 ✓ | 0.76 ✓ | 0.69 ✗ |
+| newtestmodels/Ontos_V2 | yes | 7.06 ✓ | 4.53 ✓ | 6.58 ✗ |
+| newtestmodels/Ratched toothpaste tube squeezer v2 | yes | 1.71 ✓ | 1.65 ✓ | 1.70 ✓ |
+| newtestmodels/Rugged Box Parametric V2 | yes | 1.31 ✓ | 1.02 ✓ | 0.57 ✓ |
+| newtestmodels/SMILEY - Shrub X MHP Bolt Action - Release R1.2 | yes | 7.42 ✗ | 4.71 ✗ | 6.41 ✗ |
+| newtestmodels/boomerang-v2 | **no** | 1.51 | 1.10 | 0.58 |
+| newtestmodels/bottle-cage | yes | 4.16 ✓ | 2.31 ✓ | 4.27 ✗ |
+| newtestmodels/trivenger | yes | 0.87 ✓ | 0.85 ✓ | 0.80 ✓ |
+| newtestmodels/wallganizer | yes | 32.48 ✓ | 14.31 ✓ | 26.04 ✓ |
+| roundedCube | yes | 0.26 ✓ | 0.29 ✓ | 0.12 ✓ |
 | sourcemodels/1797609in | yes | 0.29 ✓ | 0.26 ✓ | 0.24 ✓ |
-| sourcemodels/2827056 | yes | 0.54 ✓ | 0.62 ✓ | 0.47 ✓ |
+| sourcemodels/2827056 | yes | 0.53 ✓ | 0.63 ✓ | 0.46 ✓ |
 | sourcemodels/GARMIN_MOUNT_v15 | yes | 0.16 ✓ | 0.15 ✓ | 0.13 ✓ |
-| sourcemodels/OpenVessel | yes | 1.93 ✓ | 1.57 ✓ | 1.42 ✓ |
-| sourcemodels/OpenVessel_extract-01 | **no** | 0.16 | 0.16 | 0.22 |
-| sourcemodels/OpenVessel_fusion360 | yes | 1.56 ✓ | 1.40 ✓ | 1.07 ✗ |
-| sourcemodels/filler | yes | 0.36 ✓ | 0.42 ✓ | 0.20 ✗ |
-| sourcemodels/furniture-leg | yes | 0.87 ✓ | 0.83 ✓ | 1.61 ✓ |
-| sourcemodels/gear | **no** | 0.59 | 0.62 | 0.15 |
-| sourcemodels/hose-fitting | yes | 0.38 ✓ | 0.45 ✓ | 0.21 ✓ |
-| sourcemodels/iso14649-demo | yes | 0.53 ✓ | 0.53 ✓ | 0.23 ✓ |
-| sourcemodels/jack_in_the_box | yes | 0.56 ⚠ | 0.68 ⚠ | 0.96 ✓ |
-| sourcemodels/nist_ctc_01_asme1_ap242-e1 | yes | 0.42 ✓ | 0.46 ✓ | 0.24 ✓ |
-| sourcemodels/nist_ctc_02_asme1_ap242-e2 | **no** | 1.71 | 1.42 | 0.98 |
-| sourcemodels/nist_ctc_03_asme1_ap242-e2 | yes | 0.54 ✓ | 0.56 ✓ | 0.29 ✓ |
-| sourcemodels/nist_ctc_04_asme1_ap242-e1 | **no** | 1.82 | 1.33 | 0.63 |
-| sourcemodels/nist_ctc_05_asme1_ap242-e1 | yes | 0.58 ✓ | 0.64 ✓ | 0.41 ✓ |
-| sourcemodels/nist_ftc_06_asme1_ap242-e2 | yes | 0.76 ✓ | 0.82 ✓ | 0.69 ✓ |
-| sourcemodels/nist_ftc_07_asme1_ap242-e2 | **no** | 4.09 | 1.99 | 0.59 |
+| sourcemodels/OpenVessel | yes | 2.20 ✓ | 1.64 ✓ | 1.41 ✓ |
+| sourcemodels/OpenVessel_extract-01 | **no** | 0.17 | 0.17 | 0.22 |
+| sourcemodels/OpenVessel_fusion360 | yes | 1.72 ✓ | 1.43 ✓ | 1.07 ✗ |
+| sourcemodels/filler | yes | 0.36 ✓ | 0.46 ✓ | 0.20 ✗ |
+| sourcemodels/furniture-leg | yes | 1.05 ✓ | 0.84 ✓ | 1.60 ✓ |
+| sourcemodels/gear | **no** | 0.58 | 0.64 | 0.15 |
+| sourcemodels/hose-fitting | yes | 0.38 ✓ | 0.47 ✓ | 0.21 ✓ |
+| sourcemodels/iso14649-demo | yes | 0.52 ✓ | 0.52 ✓ | 0.23 ✓ |
+| sourcemodels/jack_in_the_box | yes | 0.63 ⚠ | 0.73 ⚠ | 0.96 ✓ |
+| sourcemodels/nist_ctc_01_asme1_ap242-e1 | yes | 0.43 ✓ | 0.46 ✓ | 0.24 ✓ |
+| sourcemodels/nist_ctc_02_asme1_ap242-e2 | **no** | 1.73 | 1.42 | 0.97 |
+| sourcemodels/nist_ctc_03_asme1_ap242-e2 | yes | 0.58 ✓ | 0.57 ✓ | 0.28 ✓ |
+| sourcemodels/nist_ctc_04_asme1_ap242-e1 | **no** | 1.81 | 1.37 | 0.65 |
+| sourcemodels/nist_ctc_05_asme1_ap242-e1 | yes | 0.58 ✓ | 0.62 ✓ | 0.40 ✓ |
+| sourcemodels/nist_ftc_06_asme1_ap242-e2 | yes | 0.78 ✓ | 0.81 ✓ | 0.67 ✓ |
+| sourcemodels/nist_ftc_07_asme1_ap242-e2 | **no** | 4.12 | 1.98 | 0.59 |
 | sourcemodels/nist_ftc_08_asme1_ap242-e1-tg | **no** | 0.10 | 0.10 | empty |
-| sourcemodels/nist_ftc_08_asme1_ap242-e2 | yes | 1.61 ✓ | 1.14 ✓ | 4.13 ✓ |
-| sourcemodels/nist_ftc_09_asme1_ap242-e1 | **no** | 0.56 | 0.70 | 1.05 |
-| sourcemodels/nist_ftc_10_asme1_ap242-e2 | **no** | 1.20 | 1.12 | 0.72 |
-| sourcemodels/nist_ftc_11_asme1_ap242-e2 | yes | 0.61 ✓ | 0.59 ✓ | 1.80 ✓ |
-| sourcemodels/nist_stc_06_asme1_ap242-e3 | yes | 0.34 ✓ | 0.42 ✓ | 0.44 ✓ |
-| sourcemodels/nist_stc_07_asme1_ap242-e3 | **no** | 3.70 | 2.03 | error |
-| sourcemodels/nist_stc_08_asme1_ap242-e3 | **no** | 1.50 | 1.14 | 0.91 |
-| sourcemodels/nist_stc_09_asme1_ap242-e3 | yes | 0.60 ✓ | 0.84 ✓ | 0.99 ✓ |
-| sourcemodels/nist_stc_10_asme1_ap242-e2 | yes | 1.45 ✓ | 1.25 ✓ | 3.26 ✓ |
-| sourcemodels/roundedCube | yes | 0.24 ✓ | 0.25 ✓ | 0.12 ✓ |
-| sourcemodels/weldment_asm_solid | yes | 2.88 ✓ | 1.77 ✓ | 1.36 ✓ |
+| sourcemodels/nist_ftc_08_asme1_ap242-e2 | yes | 1.55 ✓ | 1.21 ✓ | 4.14 ✓ |
+| sourcemodels/nist_ftc_09_asme1_ap242-e1 | **no** | 0.55 | 0.78 | 1.05 |
+| sourcemodels/nist_ftc_10_asme1_ap242-e2 | **no** | 1.09 | 1.10 | 0.72 |
+| sourcemodels/nist_ftc_11_asme1_ap242-e2 | yes | 0.60 ✓ | 0.58 ✓ | 1.80 ✓ |
+| sourcemodels/nist_stc_06_asme1_ap242-e3 | yes | 0.32 ✓ | 0.42 ✓ | 0.44 ✓ |
+| sourcemodels/nist_stc_07_asme1_ap242-e3 | **no** | 3.76 | 1.98 | error |
+| sourcemodels/nist_stc_08_asme1_ap242-e3 | **no** | 1.56 | 1.16 | 0.94 |
+| sourcemodels/nist_stc_09_asme1_ap242-e3 | yes | 0.60 ✓ | 0.81 ✓ | 0.99 ✓ |
+| sourcemodels/nist_stc_10_asme1_ap242-e2 | yes | 1.49 ✓ | 1.29 ✓ | 3.27 ✓ |
+| sourcemodels/roundedCube | yes | 0.26 ✓ | 0.29 ✓ | 0.12 ✓ |
+| sourcemodels/weldment_asm_solid | yes | 2.82 ✓ | 1.77 ✓ | 1.36 ✓ |
 | sphere | yes | 0.06 ✓ | 0.06 ✓ | 0.18 ✓ |
-| splineThing | yes | 1.31 ✓ | 1.32 ✓ | 6.25 ✓ |
-| tool | yes | 0.65 ✓ | 0.76 ✓ | 0.38 ✓ |
+| splineThing | yes | 1.30 ✓ | 1.30 ✓ | 6.24 ✓ |
+| tool | yes | 0.73 ✓ | 0.80 ✓ | 0.38 ✓ |
 
 ✓ watertight · ✗ converted but open · no mark: converted, file not closed (not counted) · ⚠ surface missing (> 1%), wrong scale or empty
 
@@ -235,7 +235,7 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 
 ### ABC dataset sample, fine tolerance
 
-300 models · chord tolerance 1e-4 × model diagonal, 15° · 295 models converted by every library (speed, size and shape columns use these)
+300 models · chord tolerance 1e-4 × model diagonal, 15° · 296 models converted by every library (speed, size and shape columns use these)
 
 **Robustness** (all models; watertight counts the 287 models whose STEP file describes only closed solids. The other 13 contain surface bodies or no topology, so they cannot be watertight)
 
@@ -243,37 +243,37 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 |---|--:|--:|--:|--:|--:|
 | meshStep 0.2.0 | 298 / 300 | 282 / 287 | 0 | 2 | 0 |
 | meshStep isotropic 0.2.0 | 299 / 300 | 281 / 287 | 0 | 1 | 0 |
-| meshStep (deviation only) 0.2.0 | 297 / 300 | 281 / 287 | 1 | 3 | 0 |
+| meshStep (deviation only) 0.2.0 | 298 / 300 | 282 / 287 | 1 | 2 | 0 |
 | occt-import-js 0.0.23 | 300 / 300 | 282 / 287 | 0 | 0 | 0 |
 | @tx-code/occt-js 0.1.7 | 300 / 300 | 280 / 287 | 0 | 0 | 0 |
 | occt-wasm 5.17.2 | 300 / 300 | 280 / 287 | 0 | 0 | 0 |
 | opencascade.js 1.1.1 | 298 / 300 | 281 / 287 | 0 | 0 | 2 |
 | brepkit-wasm 4.11.20 | 25 / 300 | 22 / 287 | 0 | 1 | 274 |
 
-**Speed** (295 common models; ratio = geometric mean against occt-import-js, < 1 is faster)
+**Speed** (296 common models; ratio = geometric mean against occt-import-js, < 1 is faster)
 
 | Converter | First file, fresh page | ratio | Same file again | ratio | Peak memory (median) |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 272.0 s | ×1.36 | 226.5 s | ×2.11 | 322 MB |
-| meshStep isotropic 0.2.0 | 314.4 s | ×1.32 | 272.7 s | ×2.02 | 271 MB |
-| meshStep (deviation only) 0.2.0 | 90.7 s | ×0.69 | 55.4 s | ×0.65 | 214 MB |
-| occt-import-js 0.0.23 | 196.3 s | ×1.00 | 150.6 s | ×1.00 | 334 MB |
-| @tx-code/occt-js 0.1.7 | 199.5 s | ×0.93 | 155.2 s | ×0.83 | 352 MB |
-| occt-wasm 5.17.2 | 139.2 s | ×0.96 | 88.6 s | ×0.66 | 454 MB |
-| opencascade.js 1.1.1 | 470.1 s | ×3.31 | 316.0 s | ×2.26 | 884 MB |
+| meshStep 0.2.0 | 303.1 s | ×1.42 | 249.4 s | ×2.11 | 332 MB |
+| meshStep isotropic 0.2.0 | 328.8 s | ×1.32 | 285.2 s | ×1.98 | 271 MB |
+| meshStep (deviation only) 0.2.0 | 102.6 s | ×0.72 | 64.8 s | ×0.68 | 222 MB |
+| occt-import-js 0.0.23 | 208.3 s | ×1.00 | 161.0 s | ×1.00 | 334 MB |
+| @tx-code/occt-js 0.1.7 | 212.4 s | ×0.93 | 168.1 s | ×0.83 | 354 MB |
+| occt-wasm 5.17.2 | 147.6 s | ×0.95 | 95.8 s | ×0.65 | 451 MB |
+| opencascade.js 1.1.1 | 503.7 s | ×3.38 | 340.2 s | ×2.27 | 881 MB |
 | brepkit-wasm 4.11.20 | – | – | – | – | – |
 
-**Mesh** (295 common models)
+**Mesh** (296 common models)
 
 | Converter | Triangles | ratio | Min angle p5 | < 20° | < 5° | Radius ratio | Deviation p99 / tol | Max deviation ≤ 1.25 tol |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 39,687,105 | ×15.31 | 31.7° | 21.5% | 3.3% | 0.68 | 0.76 | 76% |
-| meshStep isotropic 0.2.0 | 47,342,347 | ×13.82 | 39.2° | 7.6% | 3.2% | 0.83 | 0.67 | 80% |
-| meshStep (deviation only) 0.2.0 | 10,439,774 | ×2.80 | 8.8° | 41.4% | 7.8% | 0.53 | 0.89 | 44% |
-| occt-import-js 0.0.23 | 7,849,397 | ×1.00 | 1.1° | 50.3% | 16.0% | 0.51 | 0.40 | 87% |
-| @tx-code/occt-js 0.1.7 | 7,825,697 | ×1.01 | 1.1° | 50.8% | 15.7% | 0.51 | 0.40 | 85% |
-| occt-wasm 5.17.2 | 7,825,737 | ×1.01 | 1.1° | 50.8% | 15.7% | 0.51 | 0.41 | 85% |
-| opencascade.js 1.1.1 | 7,850,772 | ×1.00 | 1.1° | 50.3% | 15.9% | 0.51 | 0.41 | 87% |
+| meshStep 0.2.0 | 39,926,165 | ×15.24 | 31.6° | 21.6% | 3.2% | 0.68 | 0.78 | 80% |
+| meshStep isotropic 0.2.0 | 47,413,771 | ×13.70 | 39.2° | 7.5% | 3.2% | 0.83 | 0.74 | 82% |
+| meshStep (deviation only) 0.2.0 | 10,949,290 | ×2.98 | 8.3° | 42.6% | 7.9% | 0.52 | 0.85 | 71% |
+| occt-import-js 0.0.23 | 7,907,639 | ×1.00 | 1.1° | 50.2% | 15.9% | 0.51 | 0.41 | 85% |
+| @tx-code/occt-js 0.1.7 | 7,883,231 | ×1.01 | 1.1° | 50.7% | 15.6% | 0.51 | 0.41 | 84% |
+| occt-wasm 5.17.2 | 7,883,271 | ×1.01 | 1.1° | 50.7% | 15.6% | 0.51 | 0.41 | 84% |
+| opencascade.js 1.1.1 | 7,909,014 | ×1.00 | 1.1° | 50.2% | 15.9% | 0.51 | 0.41 | 86% |
 | brepkit-wasm 4.11.20 | – | – | – | – | – | – | – | – |
 
 – brepkit-wasm 4.11.20: converts fewer than half of the models, so it is left out of the speed and mesh comparison.
@@ -282,306 +282,306 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 
 | Model | Closed in file | meshStep | meshStep isotropic | meshStep (deviation only) | occt-import-js | @tx-code/occt-js | occt-wasm | opencascade.js | brepkit-wasm |
 |---|:-:|--:|--:|--:|--:|--:|--:|--:|--:|
-| abc/00020000 | yes | 0.18 ✓ | 0.18 ✓ | 0.14 ✓ | 0.15 ✓ | 0.13 ✓ | 0.15 ✓ | 0.55 ✓ | error |
-| abc/00020033 | **no** | 0.15 | 0.20 | 0.08 | 0.15 | 0.14 | 0.16 | 0.65 | 0.02 |
-| abc/00020066 | yes | 0.50 ✓ | 0.48 ✓ | 0.31 ✓ | 0.18 ✓ | 0.14 ✓ | 0.20 ✓ | 0.62 ✓ | error |
-| abc/00020099 | yes | 0.27 ✓ | 0.24 ✓ | 0.13 ✓ | 0.10 ✓ | 0.09 ✓ | 0.11 ✓ | 0.52 ✓ | error |
-| abc/00020132 | yes | 0.77 ✗ | 0.64 ✗ | 0.41 ✗ | 0.71 ✓ | 0.61 ✓ | 0.50 ✓ | 1.63 ✓ | error |
-| abc/00020165 | yes | 1.06 ✓ | 0.68 ✓ | 0.26 ✓ | 0.60 ✗ | 0.54 ✗ | 0.48 ✗ | 1.70 ✗ | error |
-| abc/00020198 | yes | 0.34 ✓ | 0.33 ✓ | 0.18 ✓ | 0.22 ✓ | 0.19 ✓ | 0.19 ✓ | 0.73 ✓ | error |
-| abc/00020231 | yes | 0.24 ✓ | 0.28 ✓ | 0.15 ✓ | 0.15 ✓ | 0.13 ✓ | 0.16 ✓ | 0.56 ✓ | error |
-| abc/00020264 | yes | 0.61 ✓ | 0.45 ✓ | 0.29 ✓ | 0.19 ✓ | 0.19 ✓ | 0.18 ✓ | 0.62 ✓ | error |
-| abc/00020297 | yes | 0.30 ✓ | 0.23 ✓ | 0.13 ✓ | 0.13 ✓ | 0.10 ✓ | 0.15 ✓ | 0.55 ✓ | error |
-| abc/00020330 | yes | 0.30 ✓ | 0.30 ✓ | 0.19 ✓ | 0.20 ✓ | 0.24 ✓ | 0.23 ✓ | 0.73 ✓ | error |
-| abc/00020363 | yes | 0.57 ✓ | 0.51 ✓ | 0.25 ✓ | 0.58 ✓ | 0.43 ✓ | 0.47 ✓ | 1.66 ✓ | error |
-| abc/00020396 | yes | 0.31 ✓ | 0.23 ✓ | 0.14 ✓ | 0.18 ✓ | 0.16 ✓ | 0.19 ✓ | 0.69 ✓ | error |
-| abc/00020429 | yes | 0.25 ✓ | 0.24 ✓ | 0.09 ✓ | 0.14 ✓ | 0.14 ✓ | 0.18 ✓ | 0.67 ✓ | error |
-| abc/00020462 | yes | 0.25 ✓ | 0.22 ✓ | 0.09 ✓ | 0.14 ✓ | 0.13 ✓ | 0.16 ✓ | 0.63 ✓ | error |
-| abc/00020495 | yes | 0.23 ✓ | 0.21 ✓ | 0.06 ✓ | 0.10 ✓ | 0.09 ✓ | 0.15 ✓ | 0.48 ✓ | 0.02 ✓ |
-| abc/00020528 | yes | 1.11 ✓ | 6.27 ✓ | 0.64 ✓ | 13.95 ✓ | 14.31 ✓ | 9.18 ✓ | 11.96 ✓ | error |
-| abc/00020561 | yes | 0.51 ✓ | 0.86 ✓ | 0.25 ✓ | 0.45 ✓ | 0.40 ✓ | 0.36 ✓ | 1.25 ✓ | error |
-| abc/00020594 | yes | 0.17 ✓ | 0.17 ✓ | 0.15 ✓ | 0.14 ✓ | 0.14 ✓ | 0.16 ✓ | 0.59 ✓ | error |
-| abc/00020627 | yes | 0.19 ✓ | 0.19 ✓ | 0.15 ✓ | 0.12 ✓ | 0.14 ✓ | 0.15 ✓ | 0.55 ✓ | error |
-| abc/00020660 | yes | 1.85 ✓ | 6.75 ✓ | 0.75 ⚠ | 2.48 ✓ | 3.13 ✓ | 1.40 ✓ | 7.33 ✓ | error |
-| abc/00020693 | yes | 0.26 ✓ | 0.19 ✓ | 0.12 ✓ | 0.19 ✓ | 0.16 ✓ | 0.18 ✓ | 0.73 ✓ | error |
-| abc/00020726 | yes | 0.17 ✓ | 0.17 ✓ | 0.14 ✓ | 0.14 ✓ | 0.11 ✓ | 0.14 ✓ | 0.50 ✓ | error |
-| abc/00020759 | yes | 7.10 ✓ | 11.51 ✓ | 3.76 ✓ | 4.38 ✓ | 3.74 ✓ | 3.16 ✓ | 9.17 ✓ | error |
-| abc/00020792 | yes | 0.32 ✓ | 0.30 ✓ | 0.15 ✓ | 0.14 ✓ | 0.13 ✓ | 0.15 ✓ | 0.58 ✓ | error |
-| abc/00020825 | yes | 1.41 ✓ | 1.05 ✓ | 0.35 ✓ | 0.45 ✓ | 0.38 ✓ | 0.41 ✓ | 1.11 ✓ | error |
-| abc/00020858 | yes | 0.08 ✓ | 0.10 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.11 ✓ | 0.45 ✓ | error |
-| abc/00020891 | yes | 0.22 ✓ | 0.19 ✓ | 0.12 ✓ | 0.11 ✓ | 0.11 ✓ | 0.13 ✓ | 0.50 ✓ | error |
-| abc/00020924 | yes | 0.17 ✓ | 0.16 ✓ | 0.14 ✓ | 0.15 ✓ | 0.13 ✓ | 0.15 ✓ | 0.54 ✓ | error |
-| abc/00020957 | yes | 0.54 ✓ | 0.60 ✓ | 0.33 ✓ | 0.90 ✓ | 0.70 ✓ | 0.56 ✓ | 2.00 ✓ | error |
-| abc/00020990 | yes | 0.22 ✓ | 0.20 ✓ | 0.12 ✓ | 0.12 ✓ | 0.12 ✓ | 0.14 ✓ | 0.51 ✓ | error |
-| abc/00021023 | yes | 0.17 ✓ | 0.17 ✓ | 0.15 ✓ | 0.14 ✓ | 0.14 ✓ | 0.17 ✓ | 0.60 ✓ | error |
-| abc/00021056 | yes | 0.15 ✓ | 0.17 ✓ | 0.15 ✓ | 0.16 ✓ | 0.13 ✓ | 0.16 ✓ | 0.55 ✓ | error |
-| abc/00021089 | yes | 0.24 ✓ | 0.36 ✓ | 0.12 ✓ | 0.32 ✓ | 0.29 ✓ | 0.30 ✓ | 1.00 ✓ | 0.06 ✓ |
-| abc/00021122 | yes | 0.20 ✓ | 0.18 ✓ | 0.11 ✓ | 0.09 ✓ | 0.11 ✓ | 0.13 ✓ | 0.48 ✓ | error |
-| abc/00021155 | yes | 1.71 ✓ | 1.92 ✓ | 0.51 ✓ | 1.15 ✓ | 0.82 ✓ | 0.72 ✓ | 3.58 ✓ | error |
-| abc/00021188 | yes | 0.41 ✓ | 0.34 ✓ | 0.06 ✓ | 0.11 ✓ | 0.10 ✓ | 0.14 ✓ | 0.50 ✓ | 0.02 ✓ |
-| abc/00021221 | yes | 0.92 ✓ | 0.71 ✓ | 0.36 ✓ | 0.57 ✓ | 0.51 ✓ | 0.46 ✓ | 1.44 ✓ | error |
-| abc/00021254 | yes | 0.09 ✓ | 0.09 ✓ | 0.09 ✓ | 0.08 ✓ | 0.09 ✓ | 0.12 ✓ | 0.44 ✓ | error |
-| abc/00021287 | yes | 0.58 ✓ | 0.61 ✓ | 0.27 ✓ | 0.68 ✓ | 0.64 ✓ | 0.51 ✓ | 1.69 ✓ | error |
-| abc/00021320 | yes | 0.22 ✓ | 0.22 ✓ | 0.14 ✓ | 0.16 ✓ | 0.15 ✓ | 0.17 ✓ | 0.64 ✓ | error |
-| abc/00021353 | yes | 0.27 ✓ | 0.28 ✓ | 0.15 ✓ | 0.22 ✓ | 0.14 ✓ | 0.17 ✓ | 0.56 ✓ | error |
-| abc/00021386 | yes | 0.78 ✓ | 1.28 ✓ | 0.34 ✓ | 0.67 ✓ | 0.72 ✓ | 0.51 ✓ | 2.00 ✓ | error |
-| abc/00021419 | yes | 0.12 ✓ | 0.13 ✓ | 0.09 ✓ | 0.15 ✓ | 0.15 ✓ | 0.18 ✓ | 0.65 ✓ | error |
-| abc/00021452 | yes | 0.26 ✓ | 0.21 ✓ | 0.13 ✓ | 0.16 ✓ | 0.16 ✓ | 0.16 ✓ | 0.56 ✓ | error |
-| abc/00021485 | yes | 0.37 ✓ | 0.24 ✓ | 0.15 ✓ | 0.13 ✓ | 0.13 ✓ | 0.15 ✓ | 0.51 ✓ | error |
-| abc/00021518 | yes | 0.28 ✓ | 0.29 ✓ | 0.13 ✓ | 0.15 ✓ | 0.14 ✓ | 0.15 ✓ | 0.61 ✓ | error |
-| abc/00021551 | yes | 0.41 ✓ | 0.37 ✓ | 0.20 ✓ | 0.25 ✓ | 0.22 ✓ | 0.24 ✓ | 0.87 ✓ | error |
-| abc/00021584 | yes | 13.12 ✓ | 9.85 ✓ | 0.64 ✓ | 0.98 ✓ | 0.77 ✓ | 0.72 ✓ | 2.68 ✓ | error |
-| abc/00021617 | **no** | 0.16 | 0.23 | 0.12 | 0.22 | 0.22 | 0.23 | 0.69 | 0.05 |
-| abc/00021650 | yes | 0.24 ✓ | 0.23 ✓ | 0.09 ✓ | 0.13 ✓ | 0.13 ✓ | 0.16 ✓ | 0.56 ✓ | error |
-| abc/00021683 | yes | 0.09 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.09 ✓ | 0.11 ✓ | 0.47 ✓ | error |
-| abc/00021716 | **no** | 1.31 | 0.96 | 0.41 | 0.58 | 0.49 | 0.51 | 1.55 | error |
-| abc/00021749 | yes | 0.28 ✓ | 0.28 ✓ | 0.12 ✓ | 0.14 ✓ | 0.13 ✓ | 0.17 ✓ | 0.61 ✓ | error |
-| abc/00021782 | yes | 0.47 ✓ | 0.23 ✓ | 0.12 ✓ | 0.16 ✓ | 0.15 ✓ | 0.16 ✓ | 0.60 ✓ | error |
-| abc/00021815 | **no** | 1.60 | 2.98 | 0.85 | 1.44 | 1.18 | 0.84 | 3.02 | 0.23 |
-| abc/00021848 | yes | 0.12 ✓ | 0.13 ✓ | 0.11 ✓ | 0.25 ✓ | 0.25 ✓ | 0.24 ✓ | 0.69 ✓ | error |
-| abc/00021881 | yes | 0.19 ✓ | 0.20 ✓ | 0.14 ✓ | 0.18 ✓ | 0.14 ✓ | 0.17 ✓ | 0.57 ✓ | error |
-| abc/00021914 | yes | 0.09 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.09 ✓ | 0.14 ✓ | 0.44 ✓ | error |
-| abc/00021947 | yes | 0.22 ✓ | 0.22 ✓ | 0.15 ✓ | 0.14 ✓ | 0.15 ✓ | 0.17 ✓ | 0.59 ✓ | error |
-| abc/00021980 | yes | 0.20 ✓ | 0.21 ✓ | 0.17 ✓ | 0.15 ✓ | 0.15 ✓ | 0.18 ✓ | 0.57 ✓ | error |
-| abc/00022013 | yes | 0.13 ✓ | 0.12 ✓ | 0.05 ✓ | 0.11 ✓ | 0.09 ✓ | 0.11 ✓ | 0.53 ✓ | 0.02 ✓ |
-| abc/00022046 | yes | 0.40 ✓ | 0.24 ✓ | 0.21 ✓ | 0.15 ✓ | 0.15 ✓ | 0.16 ✓ | 0.58 ✓ | error |
-| abc/00022079 | yes | 0.19 ✓ | 0.18 ✓ | 0.13 ✓ | 0.09 ✓ | 0.10 ✓ | 0.13 ✓ | 0.46 ✓ | error |
-| abc/00022112 | yes | 0.12 ✓ | 0.11 ✓ | 0.08 ✓ | 0.13 ✓ | 0.12 ✓ | 0.15 ✓ | 0.59 ✓ | error |
-| abc/00022145 | yes | 22.51 ✓ | 28.52 ✗ | 5.92 ✓ | 11.64 ✓ | 12.32 ✓ | 7.10 ✓ | 23.82 ✓ | error |
-| abc/00022178 | yes | 1.49 ✗ | 1.40 ✗ | 0.61 ✗ | 1.30 ✓ | 1.27 ✓ | 0.73 ✓ | 2.68 ✓ | 0.16 ✓ |
-| abc/00022211 | yes | 0.49 ✓ | 0.34 ✓ | 0.21 ✓ | 0.34 ✓ | 0.32 ✓ | 0.31 ✓ | 0.91 ✓ | error |
-| abc/00022244 | yes | 0.22 ✓ | 0.19 ✓ | 0.08 ✓ | 0.11 ✓ | 0.12 ✓ | 0.13 ✓ | 0.51 ✓ | error |
-| abc/00022277 | yes | 0.22 ✓ | 0.22 ✓ | 0.09 ✓ | 0.14 ✓ | 0.12 ✓ | 0.15 ✓ | 0.52 ✓ | error |
-| abc/00022310 | yes | 0.29 ✓ | 0.27 ✓ | 0.18 ✓ | 0.16 ✓ | 0.16 ✓ | 0.16 ✓ | 0.58 ✓ | error |
-| abc/00022343 | yes | 0.35 ✓ | 0.27 ✓ | 0.16 ✓ | 0.15 ✓ | 0.14 ✓ | 0.16 ✓ | 0.59 ✓ | error |
-| abc/00022376 | yes | 0.13 ✓ | 0.18 ✓ | 0.09 ✓ | 0.17 ✓ | 0.14 ✓ | 0.16 ✓ | 0.58 ✓ | error |
-| abc/00022409 | yes | 0.37 ✓ | 0.30 ✓ | 0.17 ✓ | 0.18 ✓ | 0.16 ✓ | 0.19 ✓ | 0.60 ✓ | error |
-| abc/00022442 | yes | 3.04 ✓ | 2.38 ✓ | 0.42 ✓ | 0.40 ✗ | 0.34 ✗ | 0.36 ✗ | 1.02 ✗ | error |
-| abc/00022475 | yes | 1.13 ✓ | 1.75 ✓ | 0.64 ✓ | 1.44 ✓ | 1.33 ✓ | 0.95 ✓ | 2.78 ✓ | error |
-| abc/00022508 | yes | 0.23 ✓ | 0.20 ✓ | 0.15 ✓ | 0.12 ✓ | 0.12 ✓ | 0.15 ✓ | 0.59 ✓ | error |
-| abc/00022541 | yes | 0.09 ✓ | 0.10 ✓ | 0.08 ✓ | 0.08 ✓ | 0.10 ✓ | 0.12 ✓ | 0.47 ✓ | error |
-| abc/00022574 | yes | 0.65 ✓ | 0.66 ✓ | 0.30 ✓ | 0.53 ✓ | 0.47 ✓ | 0.38 ✓ | 1.07 ✓ | error |
-| abc/00022607 | yes | 0.59 ✓ | 0.60 ✓ | 0.26 ✓ | 0.60 ✓ | 0.49 ✓ | 0.45 ✓ | 1.58 ✓ | error |
-| abc/00022640 | yes | 0.43 ✓ | 0.28 ✓ | 0.11 ✓ | 0.11 ✓ | 0.10 ✓ | 0.12 ✓ | 0.54 ✓ | error |
-| abc/00022673 | yes | 0.22 ✓ | 0.24 ✓ | 0.17 ✓ | 0.37 ✓ | 0.34 ✓ | 0.32 ✓ | 0.87 ✓ | error |
-| abc/00022706 | yes | 2.39 ✓ | 2.69 ✓ | 0.76 ✓ | 1.40 ✓ | 1.43 ✓ | 0.88 ✓ | 3.57 ✓ | error |
-| abc/00022739 | yes | 0.53 ✓ | 0.58 ✓ | 0.33 ✓ | 0.75 ✓ | 0.62 ✓ | 0.49 ✓ | 1.81 ✓ | error |
-| abc/00022772 | yes | 0.19 ✓ | 0.18 ✓ | 0.12 ✓ | 0.13 ✓ | 0.11 ✓ | 0.12 ✓ | 0.48 ✓ | error |
-| abc/00022805 | yes | 0.19 ✓ | 0.21 ✓ | 0.16 ✓ | 0.16 ✓ | 0.15 ✓ | 0.18 ✓ | 0.59 ✓ | error |
-| abc/00022838 | yes | 0.20 ✓ | 0.23 ✓ | 0.17 ✓ | 0.16 ✓ | 0.14 ✓ | 0.20 ✓ | 0.55 ✓ | error |
-| abc/00022871 | yes | 0.08 ✓ | 0.10 ✓ | 0.08 ✓ | 0.09 ✓ | 0.08 ✓ | 0.12 ✓ | 0.46 ✓ | error |
-| abc/00022904 | yes | 0.20 ✓ | 0.20 ✓ | 0.14 ✓ | 0.13 ✓ | 0.14 ✓ | 0.16 ✓ | 0.53 ✓ | error |
-| abc/00022937 | yes | 0.50 ✓ | 0.56 ✓ | 0.37 ✓ | 0.71 ✓ | 0.67 ✓ | 0.56 ✓ | 1.53 ✓ | error |
-| abc/00022970 | yes | 0.73 ✓ | 0.84 ✓ | 0.35 ✓ | 0.69 ✓ | 0.64 ✓ | 0.49 ✓ | 1.34 ✓ | error |
-| abc/00023003 | **no** | 0.47 | 0.54 | 0.24 | 0.41 | 0.24 | 0.26 | 0.89 | error |
-| abc/00023036 | yes | 0.17 ✓ | 0.25 ✓ | 0.16 ✓ | 0.12 ✓ | 0.14 ✓ | 0.16 ✓ | 0.53 ✓ | error |
-| abc/00023069 | yes | 0.22 ✓ | 0.21 ✓ | 0.16 ✓ | 0.14 ✓ | 0.14 ✓ | 0.19 ✓ | 0.57 ✓ | error |
-| abc/00023102 | yes | 0.63 ✓ | 0.59 ✓ | 0.29 ✓ | 0.59 ✓ | 0.53 ✓ | 0.46 ✓ | 1.62 ✓ | error |
-| abc/00023135 | yes | 0.54 ✓ | 0.60 ✓ | 0.34 ✓ | 0.79 ✓ | 0.69 ✓ | 0.58 ✓ | 1.96 ✓ | error |
-| abc/00023168 | yes | 2.84 ✓ | 3.79 ✓ | 1.19 ✓ | 2.55 ✓ | 2.38 ✓ | 1.44 ✓ | 6.69 ✓ | error |
-| abc/00023201 | yes | 0.24 ✓ | 0.15 ✓ | 0.13 ✓ | 0.12 ✓ | 0.12 ✓ | 0.14 ✓ | 0.50 ✓ | error |
-| abc/00023234 | yes | 1.09 ✓ | 0.85 ✓ | 0.37 ✓ | 0.71 ✓ | 0.62 ✓ | 0.47 ✓ | 1.92 ✓ | error |
-| abc/00023267 | yes | 2.72 ✓ | 3.04 ✓ | 1.24 ✓ | 1.83 ✓ | 1.55 ✓ | 1.14 ✓ | 4.01 ✓ | error |
-| abc/00023300 | yes | 1.08 ✓ | 0.88 ✓ | 0.53 ✓ | 0.64 ✓ | 0.57 ✓ | 0.52 ✓ | 1.43 ✓ | error |
-| abc/00023333 | yes | 0.33 ✓ | 0.32 ✓ | 0.16 ✓ | 0.23 ✓ | 0.20 ✓ | 0.21 ✓ | 0.71 ✓ | error |
-| abc/00023366 | yes | 0.10 ✓ | 0.10 ✓ | 0.09 ✓ | 0.11 ✓ | 0.12 ✓ | 0.13 ✓ | 0.50 ✓ | error |
-| abc/00023399 | yes | 0.35 ✓ | 0.20 ✓ | 0.14 ✓ | 0.15 ✓ | 0.16 ✓ | 0.18 ✓ | 0.64 ✓ | error |
-| abc/00023432 | yes | 1.25 ✓ | 1.06 ✓ | 0.43 ✓ | 0.61 ✓ | 0.57 ✓ | 0.44 ✓ | 1.69 ✓ | error |
-| abc/00023465 | yes | 0.24 ✓ | 0.19 ✓ | 0.12 ✓ | 0.11 ✓ | 0.10 ✓ | 0.11 ✓ | 0.53 ✓ | error |
-| abc/00023498 | yes | 0.30 ✓ | 0.23 ✓ | 0.13 ✓ | 0.15 ✓ | 0.16 ✓ | 0.17 ✓ | 0.70 ✓ | error |
-| abc/00023531 | yes | 0.53 ✓ | 0.57 ✓ | 0.37 ✓ | 0.79 ✓ | 0.64 ✓ | 0.60 ✓ | 2.00 ✓ | error |
-| abc/00023564 | yes | 0.38 ✓ | 0.34 ✓ | 0.20 ✓ | 0.37 ✓ | 0.31 ✓ | 0.31 ✓ | 1.22 ✓ | error |
-| abc/00023597 | yes | 1.95 ✓ | 2.21 ✓ | 0.79 ✓ | 2.13 ✓ | 1.87 ✓ | 1.34 ✓ | 3.66 ✓ | error |
-| abc/00023630 | yes | 0.50 ✓ | 0.51 ✓ | 0.35 ✓ | 0.66 ✓ | 0.68 ✓ | 0.57 ✓ | 1.49 ✓ | error |
-| abc/00023663 | yes | 0.77 ✓ | 0.78 ✓ | 0.33 ✓ | 0.71 ✓ | 0.59 ✓ | 0.47 ✓ | 1.32 ✓ | error |
-| abc/00023696 | yes | 0.48 ✓ | 0.36 ✓ | 0.23 ✓ | 0.40 ✓ | 0.35 ✓ | 0.35 ✓ | 1.30 ✓ | error |
-| abc/00023729 | yes | 1.05 ✓ | 0.95 ✓ | 0.42 ✓ | 1.00 ✓ | 0.92 ✗ | 0.64 ✗ | 1.72 ✓ | error |
-| abc/00023762 | yes | 0.54 ✓ | 0.38 ✓ | 0.23 ✓ | 0.40 ✓ | 0.38 ✓ | 0.36 ✓ | 1.33 ✓ | error |
-| abc/00023795 | yes | 0.38 ✓ | 0.33 ✓ | 0.20 ✓ | 0.34 ✓ | 0.30 ✓ | 0.30 ✓ | 1.21 ✓ | error |
-| abc/00023828 | yes | 0.18 ✓ | 0.17 ✓ | 0.14 ✓ | 0.13 ✓ | 0.12 ✓ | 0.14 ✓ | 0.59 ✓ | error |
-| abc/00023861 | yes | 0.91 ✓ | 0.91 ✓ | 0.44 ✓ | 1.04 ✓ | 0.95 ✗ | 0.64 ✗ | 1.79 ✓ | error |
-| abc/00023894 | yes | 0.71 ✓ | 0.82 ✓ | 0.35 ✓ | 0.66 ✓ | 0.62 ✓ | 0.52 ✓ | 1.34 ✓ | error |
-| abc/00023927 | yes | 0.51 ✓ | 0.38 ✓ | 0.24 ✓ | 0.42 ✓ | 0.36 ✓ | 0.35 ✓ | 1.28 ✓ | error |
-| abc/00023960 | yes | 0.10 ✓ | 0.10 ✓ | 0.10 ✓ | 0.09 ✓ | 0.12 ✓ | 0.13 ✓ | 0.48 ✓ | error |
-| abc/00023993 | yes | 19.09 ✗ | 42.11 ✗ | 3.66 ✗ | 12.03 ✗ | 10.44 ✗ | 6.65 ✗ | 24.52 ✗ | error |
-| abc/00024026 | yes | 0.16 ✓ | 0.18 ✓ | 0.09 ✓ | 0.13 ✓ | 0.11 ✓ | 0.14 ✓ | 0.57 ✓ | error |
-| abc/00024059 | yes | 0.47 ✓ | 0.33 ✓ | 0.22 ✓ | 0.22 ✓ | 0.22 ✓ | 0.25 ✓ | 0.86 ✓ | error |
-| abc/00024092 | yes | 0.47 ✓ | 0.48 ✓ | 0.24 ✓ | 0.34 ✓ | 0.32 ✓ | 0.33 ✓ | 1.15 ✓ | error |
-| abc/00024125 | yes | 8.58 ✓ | 5.80 ✓ | 0.46 ✓ | 0.38 ✓ | 0.29 ✓ | 0.30 ✓ | 0.89 ✓ | error |
-| abc/00024158 | yes | 0.51 ✓ | 0.53 ✓ | 0.35 ✓ | 0.75 ✓ | 0.67 ✓ | 0.53 ✓ | 1.52 ✓ | error |
-| abc/00024191 | yes | 0.59 ✓ | 0.50 ✓ | 0.22 ✓ | 0.42 ✓ | 0.37 ✓ | 0.39 ✓ | 1.48 ✓ | error |
-| abc/00024224 | yes | 0.57 ✓ | 0.62 ✓ | 0.27 ✓ | 0.65 ✓ | 0.50 ✓ | 0.47 ✓ | 1.60 ✓ | error |
-| abc/00024257 | yes | 0.23 ✓ | 0.21 ✓ | 0.06 ✓ | 0.09 ✓ | 0.08 ✓ | 0.10 ✓ | 0.50 ✓ | 0.02 ✓ |
-| abc/00024290 | yes | 0.72 ✓ | 0.79 ✓ | 0.33 ✓ | 0.69 ✓ | 0.62 ✓ | 0.51 ✓ | 1.40 ✓ | error |
-| abc/00024323 | yes | 0.19 ✓ | 0.19 ✓ | 0.12 ✓ | 0.10 ✓ | 0.10 ✓ | 0.13 ✓ | 0.51 ✓ | error |
-| abc/00024356 | yes | 14.14 ✓ | 16.89 ✗ | 3.93 ✓ | 6.47 ✓ | 7.52 ✓ | 3.82 ✓ | 13.65 ✓ | error |
-| abc/00024389 | yes | 0.55 ✓ | 0.62 ✓ | 0.27 ✓ | 0.56 ✓ | 0.52 ✓ | 0.46 ✓ | 1.60 ✓ | error |
-| abc/00024422 | yes | 0.63 ✓ | 0.32 ✓ | 0.24 ✓ | 0.16 ✓ | 0.15 ✓ | 0.17 ✓ | 0.59 ✓ | error |
-| abc/00024455 | yes | 0.39 ✓ | 0.40 ✓ | 0.30 ✓ | 0.12 ✓ | 0.12 ✓ | 0.16 ✓ | 0.53 ✓ | error |
-| abc/00024488 | yes | 0.24 ✓ | 0.25 ✓ | 0.11 ✓ | 0.19 ✓ | 0.18 ✓ | 0.19 ✓ | 0.74 ✓ | error |
-| abc/00024521 | yes | 0.16 ✓ | 0.17 ✓ | 0.12 ✓ | 0.21 ✓ | 0.19 ✓ | 0.22 ✓ | 0.68 ✓ | error |
-| abc/00024554 | yes | 0.39 ✓ | 0.30 ✓ | 0.09 ✓ | 0.14 ✓ | 0.11 ✓ | 0.14 ✓ | 0.54 ✓ | error |
-| abc/00024587 | yes | 0.80 ✓ | 0.74 ✓ | 0.31 ✓ | 0.46 ✓ | 0.39 ✓ | 0.38 ✓ | 1.35 ✓ | error |
-| abc/00024620 | yes | 0.36 ✓ | 0.30 ✓ | 0.20 ✓ | 0.18 ✓ | 0.17 ✓ | 0.20 ✓ | 0.65 ✓ | error |
-| abc/00024653 | yes | 0.22 ✓ | 0.21 ✓ | 0.10 ✓ | 0.11 ✓ | 0.11 ✓ | 0.12 ✓ | 0.51 ✓ | error |
-| abc/00024686 | yes | 0.80 ✓ | 0.19 ✓ | 0.28 ✓ | 0.12 ✓ | 0.17 ✓ | 0.17 ✓ | 0.51 ✓ | error |
-| abc/00024719 | yes | 0.54 ✓ | 0.58 ✓ | 0.32 ✓ | 0.72 ✓ | 0.57 ✓ | 0.49 ✓ | 1.83 ✓ | error |
-| abc/00024752 | yes | 0.18 ✓ | 0.16 ✓ | 0.11 ✓ | 0.13 ✓ | 0.11 ✓ | 0.15 ✓ | 0.52 ✓ | error |
-| abc/00024785 | yes | 0.74 ✓ | 0.96 ✓ | 0.34 ✓ | 1.12 ✓ | 1.05 ✓ | 0.80 ✓ | 2.68 ✓ | error |
-| abc/00024818 | yes | 0.28 ✓ | 0.24 ✓ | 0.06 ✓ | 0.09 ✓ | 0.09 ✓ | 0.11 ✓ | 0.48 ✓ | 0.02 ✓ |
-| abc/00024851 | yes | 0.63 ✓ | 0.59 ✓ | 0.29 ✓ | 1.66 ✓ | 1.52 ✓ | 0.85 ✓ | 2.11 ✓ | error |
-| abc/00024884 | yes | 0.36 ✓ | 0.33 ✓ | 0.21 ✓ | 0.36 ✓ | 0.30 ✓ | 0.30 ✓ | 1.16 ✓ | error |
-| abc/00024917 | yes | 0.68 ✓ | 0.79 ✓ | 0.35 ✓ | 0.50 ✓ | 0.43 ✓ | 0.41 ✓ | 1.11 ✓ | error |
-| abc/00024950 | yes | 0.36 ✓ | 0.33 ✓ | 0.20 ✓ | 0.35 ✓ | 0.29 ✓ | 0.29 ✓ | 1.12 ✓ | error |
-| abc/00024983 | yes | 2.69 ✓ | 3.35 ✓ | 1.36 ✓ | 6.40 ✗ | 4.97 ✓ | 2.47 ✓ | 7.13 ✗ | error |
-| abc/00025016 | yes | 0.22 ✓ | 0.20 ✓ | 0.14 ✓ | 0.12 ✓ | 0.12 ✓ | 0.15 ✓ | 0.51 ✓ | error |
-| abc/00025049 | yes | 0.68 ✓ | 0.34 ✓ | 0.29 ✓ | 0.29 ✓ | 0.26 ✓ | 0.27 ✓ | 0.77 ✓ | error |
-| abc/00025082 | yes | 0.93 ✓ | 0.91 ✓ | 0.42 ✓ | 1.00 ✓ | 0.89 ✗ | 0.62 ✗ | 1.68 ✓ | error |
-| abc/00025115 | yes | 0.34 ✓ | 0.44 ✓ | 0.18 ✓ | 0.30 ✓ | 0.29 ✓ | 0.29 ✓ | 0.92 ✓ | error |
-| abc/00025148 | yes | 0.42 ✓ | 0.29 ✓ | 0.11 ✓ | 0.14 ✓ | 0.14 ✓ | 0.15 ✓ | 0.58 ✓ | error |
-| abc/00025181 | yes | 0.24 ✓ | 0.24 ✓ | 0.15 ✓ | 0.17 ✓ | 0.16 ✓ | 0.19 ✓ | 0.59 ✓ | error |
-| abc/00025214 | **no** | 0.10 | 0.11 | 0.10 | 0.46 | 0.46 | 0.46 | 0.88 | error |
-| abc/00025247 | yes | 0.48 ✓ | 0.44 ✓ | 0.23 ✓ | 0.40 ✓ | 0.32 ✓ | 0.36 ✓ | 1.13 ✓ | error |
-| abc/00025280 | yes | 0.25 ✓ | 0.24 ✓ | 0.15 ✓ | 0.14 ✓ | 0.14 ✓ | 0.15 ✓ | 0.55 ✓ | error |
-| abc/00025313 | yes | 0.60 ✓ | 0.60 ✓ | 0.26 ✓ | 0.74 ✓ | 0.61 ✓ | 0.51 ✓ | 1.71 ✓ | error |
-| abc/00025346 | yes | 0.70 ✓ | 0.87 ✓ | 0.33 ⚠ | 6.03 ✓ | 8.52 ✓ | 3.88 ✓ | 7.99 ✓ | error |
-| abc/00025379 | yes | 0.57 ✓ | 0.53 ✓ | 0.32 ✓ | 2.46 ✓ | 2.71 ✓ | 1.89 ✓ | 3.56 ✓ | error |
-| abc/00025412 | yes | 0.08 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.08 ✓ | 0.12 ✓ | 0.47 ✓ | error |
-| abc/00025445 | yes | 0.16 ✓ | 0.15 ✓ | 0.05 ✓ | 0.08 ✓ | 0.09 ✓ | 0.11 ✓ | 0.46 ✓ | 0.02 ✓ |
-| abc/00025478 | yes | 0.26 ✓ | 0.21 ✓ | 0.10 ✓ | 0.21 ✓ | 0.19 ✓ | 0.19 ✓ | 0.69 ✓ | error |
-| abc/00025511 | yes | 0.78 ⚠ | 4.07 ✓ | 0.38 ✓ | 2.33 ✓ | 2.39 ✓ | 1.77 ✓ | 3.50 ✓ | error |
-| abc/00025544 | yes | 13.31 ✓ | 7.10 ✓ | 0.62 ✓ | 0.26 ✓ | 0.23 ✓ | 0.24 ✓ | 1.00 ✓ | error |
-| abc/00025577 | yes | 0.26 ✓ | 0.18 ✓ | 0.14 ✓ | 0.12 ✓ | 0.11 ✓ | 0.13 ✓ | 0.47 ✓ | error |
-| abc/00025610 | yes | 0.08 ✓ | 0.08 ✓ | 0.07 ✓ | 0.24 ✓ | 0.25 ✓ | 0.27 ✓ | 0.72 ✓ | error |
-| abc/00025643 | yes | 1.16 ✓ | 0.82 ✓ | 0.26 ✓ | 0.26 ✓ | 0.27 ✓ | 0.31 ✓ | 0.87 ✓ | error |
-| abc/00025676 | yes | 1.61 ✓ | 2.10 ✓ | 1.00 ✓ | 2.37 ✗ | 2.10 ✗ | 1.74 ✗ | 4.21 ✗ | error |
-| abc/00025709 | yes | 1.71 ✓ | 1.60 ✓ | 1.46 ✓ | 2.45 ✓ | 2.79 ✓ | 1.90 ✓ | 3.53 ✓ | error |
-| abc/00025742 | **no** | 0.60 | 0.44 | 0.27 | 0.62 | 0.63 | 0.52 | 1.13 | error |
-| abc/00025775 | yes | 0.33 ✓ | 0.26 ✓ | 0.17 ✓ | 0.15 ✓ | 0.14 ✓ | 0.16 ✓ | 0.54 ✓ | error |
-| abc/00025808 | yes | 0.24 ✓ | 0.25 ✓ | 0.18 ✓ | 0.20 ✓ | 0.18 ✓ | 0.19 ✓ | 0.68 ✓ | error |
-| abc/00025841 | yes | 0.80 ✓ | 1.17 ✓ | 0.42 ✓ | 1.08 ✓ | 1.05 ✓ | 0.78 ✓ | 2.11 ✓ | error |
-| abc/00025874 | yes | 0.25 ✓ | 0.32 ✓ | 0.24 ✓ | 0.25 ✓ | 0.24 ✓ | 0.27 ✓ | 0.80 ✓ | error |
-| abc/00025907 | yes | 0.20 ✓ | 0.20 ✓ | 0.13 ✓ | 0.21 ✓ | 0.21 ✓ | 0.22 ✓ | 0.74 ✓ | error |
-| abc/00025940 | yes | 0.20 ✓ | 0.19 ✓ | 0.16 ✓ | 0.14 ✓ | 0.13 ✓ | 0.14 ✓ | 0.53 ✓ | error |
-| abc/00025973 | yes | 0.19 ✓ | 0.18 ✓ | 0.12 ✓ | 0.13 ✓ | 0.12 ✓ | 0.15 ✓ | 0.53 ✓ | error |
-| abc/00026006 | yes | 0.17 ✓ | 0.19 ✓ | 0.14 ✓ | 0.43 ✓ | 0.43 ✓ | 0.40 ✓ | 1.47 ✓ | error |
-| abc/00026039 | yes | 0.09 ✓ | 0.10 ✓ | 0.09 ✓ | 0.14 ✓ | 0.14 ✓ | 0.15 ✓ | 0.52 ✓ | error |
-| abc/00026072 | yes | 0.13 ✓ | 0.13 ✓ | 0.12 ✓ | 0.17 ✓ | 0.15 ✓ | 0.16 ✓ | 0.57 ✓ | error |
-| abc/00026105 | **no** | 0.97 | 0.94 | 0.47 | 1.09 | 0.68 | 0.67 | error | error |
-| abc/00026138 | yes | 0.08 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.08 ✓ | 0.11 ✓ | 0.49 ✓ | error |
-| abc/00026171 | **no** | 0.21 | 0.18 | 0.09 | 0.13 | 0.12 | 0.18 | 0.53 | error |
-| abc/00026204 | yes | 0.28 ✓ | 0.26 ✓ | 0.12 ✓ | 0.19 ✓ | 0.17 ✓ | 0.21 ✓ | 0.68 ✓ | error |
-| abc/00026237 | yes | 0.44 ✓ | 0.61 ✓ | 0.24 ✓ | 0.53 ✓ | 0.54 ✓ | 0.42 ✓ | 1.10 ✓ | error |
-| abc/00026270 | yes | 0.66 ✓ | 0.82 ✓ | 0.43 ✓ | 1.58 ✓ | 1.39 ✓ | 0.95 ✓ | 2.50 ✓ | error |
-| abc/00026303 | yes | 0.16 ✓ | 0.18 ✓ | 0.10 ✓ | 0.18 ✓ | 0.16 ✓ | 0.16 ✓ | 0.76 ✓ | 0.03 ✓ |
-| abc/00026336 | yes | 0.28 ✓ | 0.18 ✓ | 0.07 ✓ | 0.10 ✓ | 0.10 ✓ | 0.13 ✓ | 0.49 ✓ | error |
-| abc/00026369 | yes | 0.40 ✓ | 0.49 ✓ | 0.37 ✓ | 0.33 ✓ | 0.35 ✓ | 0.33 ✓ | 0.90 ✓ | error |
-| abc/00026402 | yes | 11.91 ✗ | 10.67 ✗ | 2.13 ✗ | 8.51 ✓ | 8.62 ✓ | 5.88 ✓ | 22.16 ✓ | error |
-| abc/00026435 | yes | 0.15 ✓ | 0.16 ✓ | 0.13 ✓ | 0.15 ✓ | 0.15 ✓ | 0.18 ✓ | 0.59 ✓ | error |
-| abc/00026468 | yes | 0.39 ✓ | 0.41 ✓ | 0.25 ✓ | 0.49 ✓ | 0.45 ✓ | 0.39 ✓ | 1.02 ✓ | error |
-| abc/00026501 | yes | 0.23 ✓ | 0.25 ✓ | 0.15 ✓ | 0.17 ✓ | 0.15 ✓ | 0.17 ✓ | 0.62 ✓ | error |
-| abc/00026534 | yes | 0.13 ✓ | 0.13 ✓ | 0.10 ✓ | 0.10 ✓ | 0.10 ✓ | 0.13 ✓ | 0.50 ✓ | error |
-| abc/00026567 | yes | 0.24 ✓ | 0.21 ✓ | 0.15 ✓ | 0.17 ✓ | 0.16 ✓ | 0.16 ✓ | 0.62 ✓ | error |
-| abc/00026600 | yes | 0.19 ✓ | 0.16 ✓ | 0.06 ✓ | 0.09 ✓ | 0.09 ✓ | 0.11 ✓ | 0.50 ✓ | 0.02 ✓ |
-| abc/00026633 | yes | 0.16 ✓ | 0.15 ✓ | 0.11 ✓ | 0.08 ✓ | 0.10 ✓ | 0.13 ✓ | 0.46 ✓ | error |
-| abc/00026666 | yes | 0.18 ✓ | 0.17 ✓ | 0.11 ✓ | 0.12 ✓ | 0.12 ✓ | 0.13 ✓ | 0.52 ✓ | error |
-| abc/00026699 | yes | 0.23 ✓ | 0.21 ✓ | 0.12 ✓ | 0.18 ✓ | 0.19 ✓ | 0.20 ✓ | 0.66 ✓ | error |
-| abc/00026732 | yes | 0.25 ✓ | 0.27 ✓ | 0.18 ✓ | 0.24 ✓ | 0.24 ✓ | 0.24 ✓ | 0.79 ✓ | error |
-| abc/00026765 | yes | 0.15 ✓ | 0.14 ✓ | 0.06 ✓ | 0.08 ✓ | 0.08 ✓ | 0.11 ✓ | 0.46 ✓ | 0.02 ✓ |
-| abc/00026798 | yes | 0.18 ✓ | 0.18 ✓ | 0.10 ✓ | 0.11 ✓ | 0.10 ✓ | 0.15 ✓ | 0.54 ✓ | error |
-| abc/00026831 | yes | 0.26 ✓ | 0.26 ✓ | 0.16 ✓ | 0.16 ✓ | 0.14 ✓ | 0.17 ✓ | 0.57 ✓ | error |
-| abc/00026864 | yes | 0.14 ✓ | 0.14 ✓ | 0.13 ✓ | 0.13 ✓ | 0.13 ✓ | 0.15 ✓ | 0.51 ✓ | error |
-| abc/00026897 | yes | 1.02 ✓ | 2.13 ✓ | 0.59 ✓ | 1.38 ✓ | 1.50 ✓ | 0.85 ✓ | 3.72 ✓ | error |
-| abc/00026930 | yes | 0.12 ✓ | 0.15 ✓ | 0.10 ✓ | 0.13 ✓ | 0.12 ✓ | 0.14 ✓ | 0.56 ✓ | error |
-| abc/00026963 | yes | 0.20 ✓ | 0.17 ✓ | 0.10 ✓ | 0.10 ✓ | 0.10 ✓ | 0.12 ✓ | 0.51 ✓ | error |
-| abc/00026996 | yes | 0.10 ✓ | 0.11 ✓ | 0.09 ✓ | 0.12 ✓ | 0.10 ✓ | 0.11 ✓ | 0.49 ✓ | error |
-| abc/00027029 | yes | 0.18 ✓ | 0.17 ✓ | 0.07 ✓ | 0.10 ✓ | 0.10 ✓ | 0.13 ✓ | 0.50 ✓ | 0.02 ✓ |
-| abc/00027062 | yes | 0.24 ✓ | 0.28 ✓ | 0.18 ✓ | 0.25 ✓ | 0.22 ✓ | 0.24 ✓ | 0.79 ✓ | error |
-| abc/00027095 | yes | 1.85 ✓ | 4.14 ✓ | 1.02 ✓ | 1.19 ✓ | 1.06 ✓ | 0.82 ✓ | 2.97 ✓ | error |
-| abc/00027128 | yes | 1.99 ✓ | 2.88 ✓ | 0.94 ✓ | 4.37 ✓ | 3.34 ✓ | 2.19 ✓ | 14.57 ✓ | error |
-| abc/00027161 | yes | 0.35 ✓ | 0.30 ✓ | 0.17 ✓ | 0.22 ✓ | 0.19 ✓ | 0.20 ✓ | 0.72 ✓ | error |
-| abc/00027194 | yes | 0.19 ✓ | 0.15 ✓ | 0.08 ✓ | 0.12 ✓ | 0.12 ✓ | 0.13 ✓ | 0.58 ✓ | error |
-| abc/00027227 | yes | 0.40 ✓ | 0.34 ✓ | 0.24 ✓ | 0.16 ✓ | 0.14 ✓ | 0.17 ✓ | 0.59 ✓ | error |
-| abc/00027260 | yes | 0.44 ✓ | 0.41 ✓ | 0.17 ✓ | 0.24 ✓ | 0.22 ✓ | 0.26 ✓ | 0.79 ✓ | error |
-| abc/00027293 | yes | 0.86 ✓ | 1.00 ✓ | 0.33 ✓ | 1.44 ✓ | 0.85 ✓ | 0.78 ✓ | 4.78 ✓ | 0.10 ✓ |
-| abc/00027326 | yes | 2.29 ✓ | 2.31 ✓ | 0.43 ✓ | 0.78 ✓ | 0.76 ✓ | 0.60 ✓ | 1.69 ✓ | error |
-| abc/00027359 | yes | 0.27 ✓ | 0.29 ✓ | 0.17 ✓ | 0.26 ✓ | 0.25 ✓ | 0.25 ✓ | 0.80 ✓ | error |
-| abc/00027392 | yes | 1.12 ✓ | 1.02 ✓ | 0.55 ✓ | 0.55 ✓ | 0.49 ✓ | 0.41 ✓ | 1.39 ✓ | error |
-| abc/00027425 | yes | 0.10 ✓ | 0.11 ✓ | 0.09 ✓ | 0.09 ✓ | 0.09 ✓ | 0.12 ✓ | 0.51 ✓ | error |
-| abc/00027458 | yes | 0.45 ✓ | 0.23 ✓ | 0.16 ✓ | 0.14 ✓ | 0.15 ✓ | 0.18 ✓ | 0.61 ✓ | error |
-| abc/00027491 | yes | 0.71 ✓ | 0.72 ✓ | 0.33 ✓ | 0.44 ✓ | 0.37 ✓ | 0.32 ✓ | 1.02 ✓ | error |
-| abc/00027524 | yes | 0.54 ✓ | 0.48 ✓ | 0.28 ✓ | 0.20 ✓ | 0.16 ✓ | 0.22 ✓ | 0.67 ✓ | error |
-| abc/00027557 | yes | 0.26 ✓ | 0.28 ✓ | 0.21 ✓ | 0.47 ✓ | 0.46 ✓ | 0.43 ✓ | 1.13 ✓ | error |
-| abc/00027590 | yes | 1.31 ✓ | 1.74 ✓ | 0.71 ✓ | 1.10 ✓ | 1.02 ✓ | 0.72 ✓ | 2.43 ✓ | error |
-| abc/00027623 | yes | 0.31 ✓ | 0.31 ✓ | 0.20 ✓ | 0.24 ✓ | 0.22 ✓ | 0.24 ✓ | 0.70 ✓ | error |
-| abc/00027656 | yes | 0.34 ✓ | 0.32 ✓ | 0.21 ✓ | 0.20 ✓ | 0.20 ✓ | 0.20 ✓ | 0.68 ✓ | error |
-| abc/00027689 | yes | 0.24 ✓ | 0.22 ✓ | 0.16 ✓ | 0.16 ✓ | 0.13 ✓ | 0.15 ✓ | 0.56 ✓ | error |
-| abc/00027722 | yes | 0.25 ✓ | 0.26 ✓ | 0.18 ✓ | 0.28 ✓ | 0.23 ✓ | 0.28 ✓ | 0.86 ✓ | error |
-| abc/00027755 | yes | 0.42 ✓ | 0.32 ✓ | 0.21 ✓ | 0.32 ✓ | 0.26 ✓ | 0.30 ✓ | 0.86 ✓ | error |
-| abc/00027788 | yes | 0.18 ✓ | 0.21 ✓ | 0.16 ✓ | 0.18 ✓ | 0.18 ✓ | 0.18 ✓ | 0.66 ✓ | error |
-| abc/00027821 | yes | 0.66 ✓ | 1.10 ✓ | 0.43 ✓ | 1.27 ✓ | 1.30 ✓ | 0.85 ✓ | 2.30 ✓ | error |
-| abc/00027854 | yes | 0.41 ✓ | 0.47 ✓ | 0.19 ✓ | 0.35 ✓ | 0.34 ✓ | 0.32 ✓ | 1.06 ✓ | error |
-| abc/00027887 | yes | 0.22 ✓ | 0.18 ✓ | 0.06 ✓ | 0.10 ✓ | 0.09 ✓ | 0.13 ✓ | 0.54 ✓ | 0.02 ✓ |
-| abc/00027920 | yes | 0.13 ✓ | 0.15 ✓ | 0.06 ✓ | 0.12 ✓ | 0.12 ✓ | 0.12 ✓ | 0.51 ✓ | 0.02 ✓ |
-| abc/00027953 | yes | 0.14 ✓ | 0.15 ✓ | 0.12 ✓ | 0.10 ✓ | 0.10 ✓ | 0.12 ✓ | 0.52 ✓ | error |
-| abc/00027986 | yes | 0.14 ✓ | 0.15 ✓ | 0.07 ✓ | 0.12 ✓ | 0.11 ✓ | 0.13 ✓ | 0.56 ✓ | 0.02 ✓ |
-| abc/00028019 | yes | 0.21 ✓ | 0.20 ✓ | 0.13 ✓ | 0.12 ✓ | 0.13 ✓ | 0.14 ✓ | 0.58 ✓ | error |
-| abc/00028052 | yes | 0.28 ✓ | 0.24 ✓ | 0.14 ✓ | 0.16 ✓ | 0.12 ✓ | 0.13 ✓ | 0.59 ✓ | error |
-| abc/00028085 | yes | 0.30 ✓ | 0.27 ✓ | 0.19 ✓ | 0.22 ✓ | 0.20 ✓ | 0.21 ✓ | 0.73 ✓ | error |
-| abc/00028118 | yes | 0.26 ✓ | 0.28 ✓ | 0.22 ✓ | 0.31 ✓ | 0.29 ✓ | 0.32 ✓ | 0.93 ✓ | error |
-| abc/00028151 | yes | 0.71 ✓ | 0.59 ✓ | 0.25 ✓ | 0.53 ✓ | 0.43 ✓ | 0.47 ✓ | 1.46 ✓ | error |
-| abc/00028184 | yes | 0.15 ✓ | 0.16 ✓ | 0.16 ✓ | 0.13 ✓ | 0.13 ✓ | 0.15 ✓ | 0.57 ✓ | error |
-| abc/00028217 | yes | 0.29 ✓ | 0.21 ✓ | 0.06 ✓ | 0.09 ✓ | 0.09 ✓ | 0.11 ✓ | 0.46 ✓ | 0.02 ✓ |
-| abc/00028250 | yes | 0.20 ✓ | 0.17 ✓ | 0.14 ✓ | 0.13 ✓ | 0.13 ✓ | 0.13 ✓ | 0.56 ✓ | error |
-| abc/00028283 | yes | 0.12 ✓ | 0.11 ✓ | 0.06 ✓ | 0.08 ✓ | 0.10 ✓ | 0.11 ✓ | 0.47 ✓ | 0.02 ✓ |
-| abc/00028316 | yes | 0.23 ✓ | 0.17 ✓ | 0.12 ✓ | 0.09 ✓ | 0.09 ✓ | 0.13 ✓ | 0.50 ✓ | error |
-| abc/00028349 | yes | 0.21 ✓ | 0.22 ✓ | 0.14 ✓ | 0.16 ✓ | 0.15 ✓ | 0.15 ✓ | 0.56 ✓ | error |
-| abc/00028382 | yes | 0.33 ✓ | 0.26 ✓ | 0.17 ✓ | 0.28 ✓ | 0.29 ✓ | 0.27 ✓ | 0.78 ✓ | error |
-| abc/00028415 | yes | 0.39 ✓ | 0.19 ✓ | 0.17 ✓ | 0.14 ✓ | 0.12 ✓ | 0.13 ✓ | 0.53 ✓ | error |
-| abc/00028448 | yes | 0.34 ✓ | 0.23 ✓ | 0.18 ✓ | 0.20 ✓ | 0.20 ✓ | 0.22 ✓ | 0.65 ✓ | error |
-| abc/00028481 | yes | 0.98 ✓ | 0.79 ✓ | 0.27 ✓ | 1.38 ✓ | 1.37 ✓ | 1.04 ✓ | 1.81 ✓ | error |
-| abc/00028514 | **no** | 2.97 | 6.66 | 1.62 | 6.85 | 2.62 | 2.09 | 20.06 | 0.14 ⚠ |
-| abc/00028547 | yes | 0.59 ✓ | 0.39 ✓ | 0.23 ✓ | 0.33 ✓ | 0.29 ✓ | 0.30 ✓ | 0.90 ✓ | error |
-| abc/00028580 | yes | 0.49 ✓ | 0.32 ✓ | 0.21 ✓ | 0.26 ✓ | 0.23 ✓ | 0.24 ✓ | 0.77 ✓ | error |
-| abc/00028613 | yes | 0.36 ✓ | 0.28 ✓ | 0.22 ✓ | 0.18 ✓ | 0.20 ✓ | 0.19 ✓ | 0.65 ✓ | error |
-| abc/00028646 | yes | 0.28 ✓ | 0.26 ✓ | 0.06 ✓ | 0.09 ✓ | 0.09 ✓ | 0.13 ✓ | 0.50 ✓ | 0.02 ✓ |
-| abc/00028679 | yes | 4.34 ✓ | 4.58 ✓ | 1.20 ✓ | 1.81 ✓ | 1.56 ✓ | 1.14 ✓ | 3.94 ✗ | error |
-| abc/00028712 | yes | 0.15 ✓ | 0.14 ✓ | 0.12 ✓ | 0.12 ✓ | 0.12 ✓ | 0.14 ✓ | 0.56 ✓ | error |
-| abc/00028745 | **no** | 0.50 ⚠ | 0.64 ⚠ | 0.28 ⚠ | 0.70 | 0.48 | 0.44 | error | error |
-| abc/00028778 | yes | 0.18 ✓ | 0.17 ✓ | 0.13 ✓ | 0.18 ✓ | 0.20 ✓ | 0.18 ✓ | 0.59 ✓ | error |
-| abc/00028811 | yes | 0.26 ✓ | 0.28 ✓ | 0.16 ✓ | 0.27 ✓ | 0.28 ✓ | 0.25 ✓ | 0.91 ✓ | error |
-| abc/00028844 | yes | 0.20 ✓ | 0.22 ✓ | 0.17 ✓ | 0.21 ✓ | 0.18 ✓ | 0.20 ✓ | 0.62 ✓ | error |
-| abc/00028877 | yes | 0.21 ✓ | 0.19 ✓ | 0.13 ✓ | 0.14 ✓ | 0.14 ✓ | 0.15 ✓ | 0.62 ✓ | error |
-| abc/00028910 | yes | 0.27 ✓ | 0.35 ✓ | 0.25 ✓ | 0.34 ✓ | 0.32 ✓ | 0.32 ✓ | 0.84 ✓ | error |
-| abc/00028943 | yes | 0.18 ✓ | 0.20 ✓ | 0.13 ✓ | 0.17 ✓ | 0.17 ✓ | 0.18 ✓ | 0.64 ✓ | error |
-| abc/00028976 | yes | 0.27 ✓ | 0.23 ✓ | 0.06 ✓ | 0.07 ✓ | 0.10 ✓ | 0.11 ✓ | 0.47 ✓ | 0.02 ✓ |
-| abc/00029009 | yes | 0.19 ✓ | 0.15 ✓ | 0.07 ✓ | 0.12 ✓ | 0.11 ✓ | 0.14 ✓ | 0.52 ✓ | error |
-| abc/00029042 | yes | 0.29 ✓ | 0.29 ✓ | 0.20 ✓ | 0.21 ✓ | 0.17 ✓ | 0.21 ✓ | 0.70 ✓ | error |
-| abc/00029075 | yes | 0.21 ✓ | 0.23 ✓ | 0.19 ✓ | 0.16 ✓ | 0.18 ✓ | 0.18 ✓ | 0.60 ✓ | error |
-| abc/00029108 | **no** | 0.28 | 0.25 | 0.11 | 0.16 | 0.14 | 0.20 | 0.57 | error |
-| abc/00029141 | yes | 19.16 ✓ | 26.72 ✓ | 2.09 ✓ | 6.28 ✓ | 26.62 ✓ | 5.41 ✓ | 24.64 ✓ | error |
-| abc/00029174 | yes | 0.27 ✓ | 0.28 ✓ | 0.16 ✓ | 0.35 ✓ | 0.29 ✓ | 0.31 ✓ | 1.05 ✓ | error |
-| abc/00029207 | yes | 0.12 ✓ | 0.13 ✓ | 0.07 ✓ | 0.13 ✓ | 0.11 ✓ | 0.16 ✓ | 0.57 ✓ | error |
-| abc/00029240 | yes | 0.25 ✓ | 0.20 ✓ | 0.13 ✓ | 0.17 ✓ | 0.16 ✓ | 0.18 ✓ | 0.65 ✓ | error |
-| abc/00029273 | yes | 0.27 ✓ | 0.20 ✓ | 0.17 ✓ | 0.14 ✓ | 0.15 ✓ | 0.16 ✓ | 0.58 ✓ | error |
-| abc/00029306 | yes | 0.24 ✓ | 0.23 ✓ | 0.12 ✓ | 0.20 ✓ | 0.19 ✓ | 0.23 ✓ | 0.80 ✓ | 0.03 ✓ |
-| abc/00029339 | yes | 0.16 ✓ | 0.19 ✓ | 0.13 ✓ | 0.22 ✓ | 0.17 ✓ | 0.21 ✓ | 0.65 ✓ | error |
-| abc/00029372 | yes | 1.53 ✓ | 1.44 ✓ | 0.61 ✓ | 1.20 ✓ | 1.15 ✓ | 0.76 ✓ | 3.00 ✓ | error |
-| abc/00029405 | yes | 1.04 ✓ | 0.75 ✓ | 0.35 ✓ | 0.92 ✓ | 0.77 ✓ | 0.84 ✓ | 2.49 ✓ | error |
-| abc/00029438 | yes | 0.54 ✓ | 0.30 ✓ | 0.21 ✓ | 0.19 ✓ | 0.17 ✓ | 0.19 ✓ | 0.68 ✓ | error |
-| abc/00029471 | yes | 0.47 ✓ | 0.32 ✓ | 0.22 ✓ | 0.29 ✓ | 0.24 ✓ | 0.28 ✓ | 0.84 ✓ | error |
-| abc/00029504 | yes | 4.10 ✓ | 4.04 ✓ | 0.64 ✓ | 1.60 ✓ | 1.56 ✓ | 1.06 ✓ | 4.83 ✓ | error |
-| abc/00029537 | yes | 0.25 ✓ | 0.21 ✓ | 0.08 ✓ | 0.11 ✓ | 0.11 ✓ | 0.12 ✓ | 0.50 ✓ | error |
-| abc/00029570 | yes | 0.34 ✓ | 0.25 ✓ | 0.15 ✓ | 0.20 ✓ | 0.17 ✓ | 0.20 ✓ | 0.68 ✓ | error |
-| abc/00029603 | yes | 1.04 ✓ | 1.02 ✓ | 0.41 ✓ | 7.49 ✓ | 5.96 ✓ | 3.15 ✓ | 5.95 ✓ | error |
-| abc/00029636 | yes | 0.11 ✓ | 0.14 ✓ | 0.11 ✓ | 0.14 ✓ | 0.13 ✓ | 0.14 ✓ | 0.56 ✓ | error |
-| abc/00029669 | yes | 0.22 ✓ | 0.17 ✓ | 0.06 ✓ | 0.08 ✓ | 0.09 ✓ | 0.12 ✓ | 0.46 ✓ | 0.02 ✓ |
-| abc/00029702 | yes | 0.34 ✓ | 0.30 ✓ | 0.19 ✓ | 0.18 ✓ | 0.16 ✓ | 0.18 ✓ | 0.62 ✓ | error |
-| abc/00029735 | yes | 0.46 ✓ | 0.31 ✓ | 0.15 ✓ | 0.25 ✓ | 0.22 ✓ | 0.26 ✓ | 0.87 ✓ | error |
-| abc/00029768 | yes | 0.24 ✓ | 0.35 ✓ | 0.08 ✓ | 0.16 ✓ | 0.16 ✓ | 0.18 ✓ | 0.61 ✓ | error |
-| abc/00029801 | **no** | 0.65 | 1.19 | 0.29 | 0.39 | 0.30 | 0.32 | 0.92 | empty |
-| abc/00029834 | yes | 0.46 ✓ | 0.52 ✓ | 0.26 ✓ | 0.93 ✓ | 0.71 ✓ | 0.53 ✓ | 1.30 ✓ | error |
-| abc/00029867 | yes | 0.12 ✓ | 0.13 ✓ | 0.11 ✓ | 0.18 ✓ | 0.17 ✓ | 0.18 ✓ | 0.59 ✓ | error |
+| abc/00020000 | yes | 0.17 ✓ | 0.18 ✓ | 0.13 ✓ | 0.12 ✓ | 0.12 ✓ | 0.22 ✓ | 0.56 ✓ | error |
+| abc/00020033 | **no** | 0.15 | 0.20 | 0.08 | 0.15 | 0.18 | 0.16 | 0.66 | 0.02 |
+| abc/00020066 | yes | 0.55 ✓ | 0.51 ✓ | 0.30 ✓ | 0.16 ✓ | 0.16 ✓ | 0.19 ✓ | 0.68 ✓ | error |
+| abc/00020099 | yes | 0.29 ✓ | 0.32 ✓ | 0.14 ✓ | 0.10 ✓ | 0.13 ✓ | 0.12 ✓ | 0.56 ✓ | error |
+| abc/00020132 | yes | 0.79 ✗ | 0.63 ✗ | 0.49 ✗ | 0.74 ✓ | 0.66 ✓ | 0.46 ✓ | 1.57 ✓ | error |
+| abc/00020165 | yes | 1.13 ✓ | 0.68 ✓ | 0.26 ✓ | 0.78 ✗ | 0.56 ✗ | 0.41 ✗ | 1.61 ✗ | error |
+| abc/00020198 | yes | 0.34 ✓ | 0.34 ✓ | 0.20 ✓ | 0.19 ✓ | 0.17 ✓ | 0.20 ✓ | 0.73 ✓ | error |
+| abc/00020231 | yes | 0.31 ✓ | 0.26 ✓ | 0.18 ✓ | 0.13 ✓ | 0.13 ✓ | 0.16 ✓ | 0.58 ✓ | error |
+| abc/00020264 | yes | 0.64 ✓ | 0.52 ✓ | 0.29 ✓ | 0.21 ✓ | 0.15 ✓ | 0.18 ✓ | 0.81 ✓ | error |
+| abc/00020297 | yes | 0.31 ✓ | 0.24 ✓ | 0.15 ✓ | 0.24 ✓ | 0.13 ✓ | 0.14 ✓ | 0.50 ✓ | error |
+| abc/00020330 | yes | 0.32 ✓ | 0.30 ✓ | 0.19 ✓ | 0.18 ✓ | 0.17 ✓ | 0.19 ✓ | 0.80 ✓ | error |
+| abc/00020363 | yes | 0.61 ✓ | 0.49 ✓ | 0.30 ✓ | 0.53 ✓ | 0.44 ✓ | 0.49 ✓ | 1.62 ✓ | error |
+| abc/00020396 | yes | 0.31 ✓ | 0.23 ✓ | 0.15 ✓ | 0.18 ✓ | 0.19 ✓ | 0.21 ✓ | 0.69 ✓ | error |
+| abc/00020429 | yes | 0.28 ✓ | 0.27 ✓ | 0.10 ✓ | 0.17 ✓ | 0.13 ✓ | 0.15 ✓ | 0.63 ✓ | error |
+| abc/00020462 | yes | 0.28 ✓ | 0.22 ✓ | 0.10 ✓ | 0.14 ✓ | 0.13 ✓ | 0.14 ✓ | 0.62 ✓ | error |
+| abc/00020495 | yes | 0.26 ✓ | 0.22 ✓ | 0.07 ✓ | 0.09 ✓ | 0.09 ✓ | 0.11 ✓ | 0.49 ✓ | 0.02 ✓ |
+| abc/00020528 | yes | 3.14 ✓ | 5.87 ✓ | 0.80 ✓ | 13.85 ✓ | 14.44 ✓ | 9.20 ✓ | 12.62 ✓ | error |
+| abc/00020561 | yes | 0.55 ✓ | 0.73 ✓ | 0.33 ✓ | 0.46 ✓ | 0.41 ✓ | 0.37 ✓ | 1.58 ✓ | error |
+| abc/00020594 | yes | 0.19 ✓ | 0.16 ✓ | 0.14 ✓ | 0.16 ✓ | 0.15 ✓ | 0.16 ✓ | 0.68 ✓ | error |
+| abc/00020627 | yes | 0.18 ✓ | 0.19 ✓ | 0.15 ✓ | 0.12 ✓ | 0.12 ✓ | 0.16 ✓ | 0.71 ✓ | error |
+| abc/00020660 | yes | 1.86 ✓ | 6.49 ✓ | 0.88 ⚠ | 2.61 ✓ | 3.09 ✓ | 1.40 ✓ | 7.44 ✓ | error |
+| abc/00020693 | yes | 0.25 ✓ | 0.21 ✓ | 0.14 ✓ | 0.18 ✓ | 0.16 ✓ | 0.19 ✓ | 1.01 ✓ | error |
+| abc/00020726 | yes | 0.17 ✓ | 0.16 ✓ | 0.13 ✓ | 0.11 ✓ | 0.13 ✓ | 0.13 ✓ | 0.52 ✓ | error |
+| abc/00020759 | yes | 7.17 ✓ | 13.22 ✓ | 4.08 ✓ | 4.38 ✓ | 3.72 ✓ | 3.13 ✓ | 9.17 ✓ | error |
+| abc/00020792 | yes | 0.32 ✓ | 0.28 ✓ | 0.16 ✓ | 0.13 ✓ | 0.12 ✓ | 0.13 ✓ | 0.57 ✓ | error |
+| abc/00020825 | yes | 1.30 ✓ | 1.02 ✓ | 0.33 ✓ | 0.44 ✓ | 0.39 ✓ | 0.39 ✓ | 1.12 ✓ | error |
+| abc/00020858 | yes | 0.09 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.08 ✓ | 0.12 ✓ | 0.46 ✓ | error |
+| abc/00020891 | yes | 0.22 ✓ | 0.19 ✓ | 0.12 ✓ | 0.12 ✓ | 0.12 ✓ | 0.12 ✓ | 0.50 ✓ | error |
+| abc/00020924 | yes | 0.17 ✓ | 0.16 ✓ | 0.14 ✓ | 0.14 ✓ | 0.15 ✓ | 0.16 ✓ | 0.52 ✓ | error |
+| abc/00020957 | yes | 0.50 ✓ | 0.57 ✓ | 0.32 ✓ | 0.87 ✓ | 0.70 ✓ | 0.54 ✓ | 2.09 ✓ | error |
+| abc/00020990 | yes | 0.23 ✓ | 0.21 ✓ | 0.12 ✓ | 0.13 ✓ | 0.11 ✓ | 0.12 ✓ | 0.50 ✓ | error |
+| abc/00021023 | yes | 0.15 ✓ | 0.16 ✓ | 0.14 ✓ | 0.14 ✓ | 0.16 ✓ | 0.15 ✓ | 0.58 ✓ | error |
+| abc/00021056 | yes | 0.16 ✓ | 0.16 ✓ | 0.15 ✓ | 0.15 ✓ | 0.14 ✓ | 0.16 ✓ | 0.56 ✓ | error |
+| abc/00021089 | yes | 0.23 ✓ | 0.32 ✓ | 0.11 ✓ | 0.31 ✓ | 0.29 ✓ | 0.30 ✓ | 1.02 ✓ | 0.06 ✓ |
+| abc/00021122 | yes | 0.20 ✓ | 0.17 ✓ | 0.10 ✓ | 0.10 ✓ | 0.12 ✓ | 0.13 ✓ | 0.48 ✓ | error |
+| abc/00021155 | yes | 1.69 ✓ | 2.23 ✓ | 0.60 ✓ | 1.18 ✓ | 0.84 ✓ | 0.71 ✓ | 3.49 ✓ | error |
+| abc/00021188 | yes | 0.42 ✓ | 0.35 ✓ | 0.06 ✓ | 0.11 ✓ | 0.10 ✓ | 0.16 ✓ | 0.67 ✓ | 0.02 ✓ |
+| abc/00021221 | yes | 1.12 ✓ | 0.65 ✓ | 0.40 ✓ | 0.58 ✓ | 0.55 ✓ | 0.45 ✓ | 1.78 ✓ | error |
+| abc/00021254 | yes | 0.09 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.10 ✓ | 0.13 ✓ | 0.43 ✓ | error |
+| abc/00021287 | yes | 0.56 ✓ | 0.63 ✓ | 0.26 ✓ | 0.91 ✓ | 0.92 ✓ | 0.52 ✓ | 1.76 ✓ | error |
+| abc/00021320 | yes | 0.27 ✓ | 0.21 ✓ | 0.12 ✓ | 0.16 ✓ | 0.17 ✓ | 0.19 ✓ | 0.60 ✓ | error |
+| abc/00021353 | yes | 0.25 ✓ | 0.25 ✓ | 0.14 ✓ | 0.21 ✓ | 0.14 ✓ | 0.15 ✓ | 0.57 ✓ | error |
+| abc/00021386 | yes | 0.72 ✓ | 1.14 ✓ | 0.35 ✓ | 0.75 ✓ | 0.89 ✓ | 0.48 ✓ | 1.92 ✓ | error |
+| abc/00021419 | yes | 0.12 ✓ | 0.13 ✓ | 0.09 ✓ | 0.16 ✓ | 0.15 ✓ | 0.16 ✓ | 0.58 ✓ | error |
+| abc/00021452 | yes | 0.27 ✓ | 0.20 ✓ | 0.15 ✓ | 0.15 ✓ | 0.14 ✓ | 0.17 ✓ | 0.58 ✓ | error |
+| abc/00021485 | yes | 0.44 ✓ | 0.23 ✓ | 0.16 ✓ | 0.12 ✓ | 0.12 ✓ | 0.14 ✓ | 0.58 ✓ | error |
+| abc/00021518 | yes | 0.40 ✓ | 0.29 ✓ | 0.13 ✓ | 0.14 ✓ | 0.13 ✓ | 0.16 ✓ | 0.58 ✓ | error |
+| abc/00021551 | yes | 0.58 ✓ | 0.37 ✓ | 0.20 ✓ | 0.24 ✓ | 0.22 ✓ | 0.22 ✓ | 1.16 ✓ | error |
+| abc/00021584 | yes | 13.98 ✓ | 10.06 ✓ | 0.64 ✓ | 0.98 ✓ | 0.80 ✓ | 0.94 ✓ | 2.66 ✓ | error |
+| abc/00021617 | **no** | 0.30 | 0.21 | 0.15 | 0.24 | 0.24 | 0.23 | 0.97 | 0.07 |
+| abc/00021650 | yes | 0.39 ✓ | 0.34 ✓ | 0.14 ✓ | 0.14 ✓ | 0.18 ✓ | 0.22 ✓ | 0.58 ✓ | error |
+| abc/00021683 | yes | 0.09 ✓ | 0.09 ✓ | 0.09 ✓ | 0.13 ✓ | 0.11 ✓ | 0.16 ✓ | 0.68 ✓ | error |
+| abc/00021716 | **no** | 1.89 | 0.95 | 0.56 | 0.60 | 0.50 | 0.49 | 2.43 | error |
+| abc/00021749 | yes | 0.44 ✓ | 0.28 ✓ | 0.21 ✓ | 0.23 ✓ | 0.13 ✓ | 0.22 ✓ | 0.75 ✓ | error |
+| abc/00021782 | yes | 0.47 ✓ | 0.26 ✓ | 0.12 ✓ | 0.16 ✓ | 0.17 ✓ | 0.18 ✓ | 0.77 ✓ | error |
+| abc/00021815 | **no** | 1.73 | 2.98 | 0.92 | 1.44 | 1.16 | 0.88 | 2.98 | 0.27 |
+| abc/00021848 | yes | 0.12 ✓ | 0.13 ✓ | 0.10 ✓ | 0.25 ✓ | 0.26 ✓ | 0.26 ✓ | 0.66 ✓ | error |
+| abc/00021881 | yes | 0.20 ✓ | 0.21 ✓ | 0.16 ✓ | 0.14 ✓ | 0.20 ✓ | 0.17 ✓ | 0.60 ✓ | error |
+| abc/00021914 | yes | 0.09 ✓ | 0.09 ✓ | 0.07 ✓ | 0.09 ✓ | 0.08 ✓ | 0.11 ✓ | 0.43 ✓ | error |
+| abc/00021947 | yes | 0.22 ✓ | 0.21 ✓ | 0.15 ✓ | 0.14 ✓ | 0.13 ✓ | 0.14 ✓ | 0.58 ✓ | error |
+| abc/00021980 | yes | 0.21 ✓ | 0.22 ✓ | 0.18 ✓ | 0.15 ✓ | 0.15 ✓ | 0.16 ✓ | 0.57 ✓ | error |
+| abc/00022013 | yes | 0.12 ✓ | 0.14 ✓ | 0.05 ✓ | 0.09 ✓ | 0.09 ✓ | 0.11 ✓ | 0.48 ✓ | 0.02 ✓ |
+| abc/00022046 | yes | 0.36 ✓ | 0.27 ✓ | 0.20 ✓ | 0.15 ✓ | 0.14 ✓ | 0.16 ✓ | 0.55 ✓ | error |
+| abc/00022079 | yes | 0.20 ✓ | 0.20 ✓ | 0.12 ✓ | 0.10 ✓ | 0.10 ✓ | 0.13 ✓ | 0.49 ✓ | error |
+| abc/00022112 | yes | 0.12 ✓ | 0.12 ✓ | 0.08 ✓ | 0.13 ✓ | 0.12 ✓ | 0.16 ✓ | 0.73 ✓ | error |
+| abc/00022145 | yes | 26.75 ✓ | 29.91 ✗ | 7.55 ✓ | 11.90 ✓ | 13.64 ✓ | 7.43 ✓ | 25.18 ✓ | error |
+| abc/00022178 | yes | 1.69 ✗ | 1.50 ✗ | 0.71 ✗ | 1.30 ✓ | 1.26 ✓ | 0.74 ✓ | 2.61 ✓ | 0.18 ✓ |
+| abc/00022211 | yes | 0.52 ✓ | 0.36 ✓ | 0.22 ✓ | 0.35 ✓ | 0.35 ✓ | 0.31 ✓ | 0.85 ✓ | error |
+| abc/00022244 | yes | 0.21 ✓ | 0.20 ✓ | 0.10 ✓ | 0.11 ✓ | 0.10 ✓ | 0.12 ✓ | 0.53 ✓ | error |
+| abc/00022277 | yes | 0.24 ✓ | 0.23 ✓ | 0.09 ✓ | 0.12 ✓ | 0.11 ✓ | 0.14 ✓ | 0.56 ✓ | error |
+| abc/00022310 | yes | 0.30 ✓ | 0.26 ✓ | 0.15 ✓ | 0.16 ✓ | 0.15 ✓ | 0.17 ✓ | 0.59 ✓ | error |
+| abc/00022343 | yes | 0.32 ✓ | 0.25 ✓ | 0.15 ✓ | 0.16 ✓ | 0.16 ✓ | 0.16 ✓ | 0.60 ✓ | error |
+| abc/00022376 | yes | 0.16 ✓ | 0.14 ✓ | 0.10 ✓ | 0.15 ✓ | 0.14 ✓ | 0.14 ✓ | 0.59 ✓ | error |
+| abc/00022409 | yes | 0.62 ✓ | 0.24 ✓ | 0.17 ✓ | 0.18 ✓ | 0.16 ✓ | 0.17 ✓ | 0.57 ✓ | error |
+| abc/00022442 | yes | 3.77 ✓ | 2.49 ✓ | 0.47 ✓ | 0.48 ✗ | 0.39 ✗ | 0.38 ✗ | 1.57 ✗ | error |
+| abc/00022475 | yes | 1.16 ✓ | 1.66 ✓ | 0.81 ✓ | 1.70 ✓ | 1.53 ✓ | 0.98 ✓ | 2.72 ✓ | error |
+| abc/00022508 | yes | 0.33 ✓ | 0.26 ✓ | 0.16 ✓ | 0.13 ✓ | 0.16 ✓ | 0.21 ✓ | 0.69 ✓ | error |
+| abc/00022541 | yes | 0.14 ✓ | 0.10 ✓ | 0.12 ✓ | 0.08 ✓ | 0.11 ✓ | 0.15 ✓ | 0.72 ✓ | error |
+| abc/00022574 | yes | 0.77 ✓ | 0.68 ✓ | 0.33 ✓ | 0.47 ✓ | 0.44 ✓ | 0.37 ✓ | 1.06 ✓ | error |
+| abc/00022607 | yes | 0.58 ✓ | 0.58 ✓ | 0.27 ✓ | 0.59 ✓ | 0.54 ✓ | 0.45 ✓ | 1.56 ✓ | error |
+| abc/00022640 | yes | 0.41 ✓ | 0.25 ✓ | 0.11 ✓ | 0.10 ✓ | 0.10 ✓ | 0.13 ✓ | 0.49 ✓ | error |
+| abc/00022673 | yes | 0.27 ✓ | 0.25 ✓ | 0.26 ✓ | 0.34 ✓ | 0.33 ✓ | 0.32 ✓ | 0.96 ✓ | error |
+| abc/00022706 | yes | 2.57 ✓ | 2.76 ✓ | 0.84 ✓ | 1.40 ✓ | 1.39 ✓ | 0.89 ✓ | 3.77 ✓ | error |
+| abc/00022739 | yes | 0.52 ✓ | 0.63 ✓ | 0.37 ✓ | 0.76 ✓ | 0.58 ✓ | 0.50 ✓ | 2.35 ✓ | error |
+| abc/00022772 | yes | 0.22 ✓ | 0.19 ✓ | 0.12 ✓ | 0.11 ✓ | 0.10 ✓ | 0.12 ✓ | 0.47 ✓ | error |
+| abc/00022805 | yes | 0.31 ✓ | 0.20 ✓ | 0.16 ✓ | 0.15 ✓ | 0.22 ✓ | 0.16 ✓ | 0.58 ✓ | error |
+| abc/00022838 | yes | 0.20 ✓ | 0.22 ✓ | 0.17 ✓ | 0.15 ✓ | 0.15 ✓ | 0.17 ✓ | 0.58 ✓ | error |
+| abc/00022871 | yes | 0.09 ✓ | 0.10 ✓ | 0.08 ✓ | 0.08 ✓ | 0.08 ✓ | 0.11 ✓ | 0.46 ✓ | error |
+| abc/00022904 | yes | 0.20 ✓ | 0.24 ✓ | 0.15 ✓ | 0.13 ✓ | 0.12 ✓ | 0.16 ✓ | 0.53 ✓ | error |
+| abc/00022937 | yes | 0.58 ✓ | 0.52 ✓ | 0.37 ✓ | 0.67 ✓ | 0.68 ✓ | 0.53 ✓ | 1.70 ✓ | error |
+| abc/00022970 | yes | 0.76 ✓ | 0.83 ✓ | 0.39 ✓ | 0.67 ✓ | 0.61 ✓ | 0.48 ✓ | 1.46 ✓ | error |
+| abc/00023003 | **no** | 0.49 | 0.55 | 0.28 | 0.38 | 0.23 | 0.22 | 0.90 | error |
+| abc/00023036 | yes | 0.18 ✓ | 0.27 ✓ | 0.18 ✓ | 0.12 ✓ | 0.12 ✓ | 0.17 ✓ | 0.54 ✓ | error |
+| abc/00023069 | yes | 0.22 ✓ | 0.22 ✓ | 0.14 ✓ | 0.15 ✓ | 0.15 ✓ | 0.17 ✓ | 0.60 ✓ | error |
+| abc/00023102 | yes | 0.54 ✓ | 0.59 ✓ | 0.26 ✓ | 0.58 ✓ | 0.48 ✓ | 0.46 ✓ | 1.68 ✓ | error |
+| abc/00023135 | yes | 0.53 ✓ | 0.57 ✓ | 0.31 ✓ | 0.81 ✓ | 0.64 ✓ | 0.55 ✓ | 2.02 ✓ | error |
+| abc/00023168 | yes | 3.21 ✓ | 4.12 ✓ | 1.22 ✓ | 3.82 ✓ | 2.34 ✓ | 1.50 ✓ | 7.37 ✓ | error |
+| abc/00023201 | yes | 0.26 ✓ | 0.15 ✓ | 0.15 ✓ | 0.13 ✓ | 0.12 ✓ | 0.15 ✓ | 0.53 ✓ | error |
+| abc/00023234 | yes | 1.06 ✓ | 0.86 ✓ | 0.37 ✓ | 0.70 ✓ | 0.59 ✓ | 0.49 ✓ | 1.92 ✓ | error |
+| abc/00023267 | yes | 3.20 ✓ | 2.96 ✓ | 2.72 ✓ | 1.84 ✓ | 1.59 ✓ | 1.14 ✓ | 4.12 ✓ | error |
+| abc/00023300 | yes | 1.05 ✓ | 0.88 ✓ | 0.55 ✓ | 1.00 ✓ | 0.52 ✓ | 0.65 ✓ | 1.81 ✓ | error |
+| abc/00023333 | yes | 0.38 ✓ | 0.31 ✓ | 0.16 ✓ | 0.22 ✓ | 0.20 ✓ | 0.22 ✓ | 0.74 ✓ | error |
+| abc/00023366 | yes | 0.10 ✓ | 0.10 ✓ | 0.09 ✓ | 0.13 ✓ | 0.10 ✓ | 0.14 ✓ | 0.48 ✓ | error |
+| abc/00023399 | yes | 0.34 ✓ | 0.21 ✓ | 0.14 ✓ | 0.17 ✓ | 0.15 ✓ | 0.17 ✓ | 0.62 ✓ | error |
+| abc/00023432 | yes | 1.39 ✓ | 1.12 ✓ | 0.43 ✓ | 0.64 ✓ | 0.55 ✓ | 0.44 ✓ | 1.69 ✓ | error |
+| abc/00023465 | yes | 0.23 ✓ | 0.19 ✓ | 0.11 ✓ | 0.11 ✓ | 0.09 ✓ | 0.12 ✓ | 0.47 ✓ | error |
+| abc/00023498 | yes | 0.31 ✓ | 0.21 ✓ | 0.13 ✓ | 0.15 ✓ | 0.16 ✓ | 0.16 ✓ | 0.62 ✓ | error |
+| abc/00023531 | yes | 0.55 ✓ | 0.62 ✓ | 0.47 ✓ | 0.81 ✓ | 0.65 ✓ | 0.58 ✓ | 2.03 ✓ | error |
+| abc/00023564 | yes | 0.48 ✓ | 0.35 ✓ | 0.21 ✓ | 0.39 ✓ | 0.30 ✓ | 0.33 ✓ | 1.15 ✓ | error |
+| abc/00023597 | yes | 2.03 ✓ | 2.39 ✓ | 0.84 ✓ | 2.07 ✓ | 1.90 ✓ | 1.27 ✓ | 3.86 ✓ | error |
+| abc/00023630 | yes | 0.58 ✓ | 0.52 ✓ | 0.39 ✓ | 0.81 ✓ | 0.68 ✓ | 0.86 ✓ | 1.56 ✓ | error |
+| abc/00023663 | yes | 0.72 ✓ | 0.86 ✓ | 0.37 ✓ | 0.75 ✓ | 0.84 ✓ | 0.49 ✓ | 1.40 ✓ | error |
+| abc/00023696 | yes | 0.51 ✓ | 0.40 ✓ | 0.24 ✓ | 0.42 ✓ | 0.35 ✓ | 0.34 ✓ | 1.26 ✓ | error |
+| abc/00023729 | yes | 1.06 ✓ | 0.93 ✓ | 0.48 ✓ | 1.00 ✓ | 0.89 ✗ | 0.63 ✗ | 2.02 ✓ | error |
+| abc/00023762 | yes | 0.52 ✓ | 0.43 ✓ | 0.28 ✓ | 0.45 ✓ | 0.36 ✓ | 0.35 ✓ | 1.25 ✓ | error |
+| abc/00023795 | yes | 0.36 ✓ | 0.35 ✓ | 0.21 ✓ | 0.37 ✓ | 0.40 ✓ | 0.36 ✓ | 1.13 ✓ | error |
+| abc/00023828 | yes | 0.19 ✓ | 0.18 ✓ | 0.18 ✓ | 0.16 ✓ | 0.12 ✓ | 0.16 ✓ | 0.50 ✓ | error |
+| abc/00023861 | yes | 1.04 ✓ | 0.96 ✓ | 0.45 ✓ | 0.99 ✓ | 0.90 ✗ | 0.65 ✗ | 1.72 ✓ | error |
+| abc/00023894 | yes | 0.76 ✓ | 0.92 ✓ | 0.42 ✓ | 0.71 ✓ | 0.63 ✓ | 0.49 ✓ | 1.46 ✓ | error |
+| abc/00023927 | yes | 0.51 ✓ | 0.40 ✓ | 0.26 ✓ | 0.43 ✓ | 0.38 ✓ | 0.41 ✓ | 1.78 ✓ | error |
+| abc/00023960 | yes | 0.10 ✓ | 0.15 ✓ | 0.17 ✓ | 0.10 ✓ | 0.16 ✓ | 0.12 ✓ | 0.54 ✓ | error |
+| abc/00023993 | yes | 20.48 ✗ | 41.89 ✗ | 3.76 ✗ | 12.26 ✗ | 11.05 ✗ | 8.78 ✗ | 25.71 ✗ | error |
+| abc/00024026 | yes | 0.16 ✓ | 0.18 ✓ | 0.09 ✓ | 0.12 ✓ | 0.12 ✓ | 0.13 ✓ | 0.52 ✓ | error |
+| abc/00024059 | yes | 0.46 ✓ | 0.34 ✓ | 0.22 ✓ | 0.23 ✓ | 0.23 ✓ | 0.24 ✓ | 0.77 ✓ | error |
+| abc/00024092 | yes | 0.50 ✓ | 0.48 ✓ | 0.25 ✓ | 0.34 ✓ | 0.30 ✓ | 0.31 ✓ | 1.15 ✓ | error |
+| abc/00024125 | yes | 8.44 ✓ | 6.25 ✓ | 0.44 ✓ | 0.35 ✓ | 0.28 ✓ | 0.27 ✓ | 0.88 ✓ | error |
+| abc/00024158 | yes | 0.61 ✓ | 0.58 ✓ | 0.35 ✓ | 0.70 ✓ | 0.70 ✓ | 0.54 ✓ | 1.46 ✓ | error |
+| abc/00024191 | yes | 0.53 ✓ | 0.48 ✓ | 0.20 ✓ | 0.47 ✓ | 0.36 ✓ | 0.35 ✓ | 1.49 ✓ | error |
+| abc/00024224 | yes | 0.57 ✓ | 0.63 ✓ | 0.27 ✓ | 0.63 ✓ | 0.75 ✓ | 0.53 ✓ | 1.83 ✓ | error |
+| abc/00024257 | yes | 0.36 ✓ | 0.32 ✓ | 0.06 ✓ | 0.11 ✓ | 0.13 ✓ | 0.11 ✓ | 0.53 ✓ | 0.03 ✓ |
+| abc/00024290 | yes | 0.78 ✓ | 0.81 ✓ | 0.39 ✓ | 0.96 ✓ | 0.60 ✓ | 0.48 ✓ | 1.37 ✓ | error |
+| abc/00024323 | yes | 0.20 ✓ | 0.19 ✓ | 0.14 ✓ | 0.10 ✓ | 0.10 ✓ | 0.12 ✓ | 0.49 ✓ | error |
+| abc/00024356 | yes | 15.04 ✓ | 17.49 ✗ | 4.59 ✓ | 6.32 ✓ | 8.19 ✓ | 4.15 ✓ | 14.24 ✓ | error |
+| abc/00024389 | yes | 0.57 ✓ | 0.61 ✓ | 0.27 ✓ | 0.59 ✓ | 0.47 ✓ | 0.45 ✓ | 1.75 ✓ | error |
+| abc/00024422 | yes | 0.58 ✓ | 0.33 ✓ | 0.26 ✓ | 0.15 ✓ | 0.14 ✓ | 0.16 ✓ | 0.72 ✓ | error |
+| abc/00024455 | yes | 0.39 ✓ | 0.41 ✓ | 0.27 ✓ | 0.11 ✓ | 0.10 ✓ | 0.19 ✓ | 0.50 ✓ | error |
+| abc/00024488 | yes | 0.29 ✓ | 0.24 ✓ | 0.10 ✓ | 0.20 ✓ | 0.16 ✓ | 0.17 ✓ | 0.74 ✓ | error |
+| abc/00024521 | yes | 0.15 ✓ | 0.17 ✓ | 0.12 ✓ | 0.20 ✓ | 0.20 ✓ | 0.20 ✓ | 0.72 ✓ | error |
+| abc/00024554 | yes | 0.38 ✓ | 0.32 ✓ | 0.10 ✓ | 0.13 ✓ | 0.11 ✓ | 0.14 ✓ | 0.53 ✓ | error |
+| abc/00024587 | yes | 0.75 ✓ | 0.72 ✓ | 0.39 ✓ | 0.46 ✓ | 0.38 ✓ | 0.37 ✓ | 1.33 ✓ | error |
+| abc/00024620 | yes | 0.37 ✓ | 0.31 ✓ | 0.27 ✓ | 0.31 ✓ | 0.17 ✓ | 0.18 ✓ | 0.67 ✓ | error |
+| abc/00024653 | yes | 0.25 ✓ | 0.20 ✓ | 0.11 ✓ | 0.11 ✓ | 0.10 ✓ | 0.17 ✓ | 0.53 ✓ | error |
+| abc/00024686 | yes | 0.80 ✓ | 0.19 ✓ | 0.31 ✓ | 0.12 ✓ | 0.15 ✓ | 0.17 ✓ | 0.56 ✓ | error |
+| abc/00024719 | yes | 0.62 ✓ | 0.59 ✓ | 0.30 ✓ | 0.73 ✓ | 0.57 ✓ | 0.48 ✓ | 1.76 ✓ | error |
+| abc/00024752 | yes | 0.18 ✓ | 0.32 ✓ | 0.15 ✓ | 0.12 ✓ | 0.11 ✓ | 0.13 ✓ | 0.56 ✓ | error |
+| abc/00024785 | yes | 0.69 ✓ | 0.96 ✓ | 0.38 ✓ | 1.13 ✓ | 1.01 ✓ | 0.91 ✓ | 2.60 ✓ | error |
+| abc/00024818 | yes | 0.27 ✓ | 0.22 ✓ | 0.06 ✓ | 0.09 ✓ | 0.09 ✓ | 0.11 ✓ | 0.45 ✓ | 0.02 ✓ |
+| abc/00024851 | yes | 0.78 ✓ | 0.58 ✓ | 0.45 ✓ | 1.59 ✓ | 1.49 ✓ | 0.86 ✓ | 2.12 ✓ | error |
+| abc/00024884 | yes | 0.36 ✓ | 0.32 ✓ | 0.24 ✓ | 0.35 ✓ | 0.31 ✓ | 0.31 ✓ | 1.12 ✓ | error |
+| abc/00024917 | yes | 0.76 ✓ | 0.80 ✓ | 0.40 ✓ | 0.49 ✓ | 0.43 ✓ | 0.43 ✓ | 1.19 ✓ | error |
+| abc/00024950 | yes | 0.38 ✓ | 0.32 ✓ | 0.20 ✓ | 0.34 ✓ | 0.28 ✓ | 0.31 ✓ | 1.15 ✓ | error |
+| abc/00024983 | yes | 2.96 ✓ | 3.59 ✓ | 1.53 ✓ | 6.86 ✗ | 5.12 ✓ | 2.95 ✓ | 8.85 ✗ | error |
+| abc/00025016 | yes | 0.22 ✓ | 0.27 ✓ | 0.14 ✓ | 0.18 ✓ | 0.15 ✓ | 0.21 ✓ | 0.54 ✓ | error |
+| abc/00025049 | yes | 0.66 ✓ | 0.35 ✓ | 0.33 ✓ | 0.27 ✓ | 0.24 ✓ | 0.25 ✓ | 0.76 ✓ | error |
+| abc/00025082 | yes | 1.08 ✓ | 0.94 ✓ | 0.46 ✓ | 0.97 ✓ | 0.88 ✗ | 0.81 ✗ | 1.95 ✓ | error |
+| abc/00025115 | yes | 0.34 ✓ | 0.48 ✓ | 0.20 ✓ | 0.31 ✓ | 0.29 ✓ | 0.27 ✓ | 0.99 ✓ | error |
+| abc/00025148 | yes | 0.42 ✓ | 0.29 ✓ | 0.10 ✓ | 0.14 ✓ | 0.15 ✓ | 0.14 ✓ | 0.58 ✓ | error |
+| abc/00025181 | yes | 0.38 ✓ | 0.36 ✓ | 0.24 ✓ | 0.17 ✓ | 0.16 ✓ | 0.19 ✓ | 0.90 ✓ | error |
+| abc/00025214 | **no** | 0.14 | 0.14 | 0.14 | 0.48 | 0.48 | 0.62 | 1.30 | error |
+| abc/00025247 | yes | 0.50 ✓ | 0.44 ✓ | 0.28 ✓ | 0.45 ✓ | 0.33 ✓ | 0.36 ✓ | 1.22 ✓ | error |
+| abc/00025280 | yes | 0.24 ✓ | 0.23 ✓ | 0.16 ✓ | 0.14 ✓ | 0.13 ✓ | 0.15 ✓ | 0.63 ✓ | error |
+| abc/00025313 | yes | 0.59 ✓ | 0.63 ✓ | 0.26 ✓ | 0.72 ✓ | 0.62 ✓ | 0.51 ✓ | 1.71 ✓ | error |
+| abc/00025346 | yes | 2.36 ✓ | 0.86 ✓ | 2.26 ✓ | 5.98 ✓ | 8.50 ✓ | 3.89 ✓ | 9.12 ✓ | error |
+| abc/00025379 | yes | 0.55 ✓ | 0.53 ✓ | 0.31 ✓ | 2.49 ✓ | 2.85 ✓ | 1.89 ✓ | 3.58 ✓ | error |
+| abc/00025412 | yes | 0.08 ✓ | 0.09 ✓ | 0.08 ✓ | 0.08 ✓ | 0.08 ✓ | 0.11 ✓ | 0.44 ✓ | error |
+| abc/00025445 | yes | 0.17 ✓ | 0.19 ✓ | 0.06 ✓ | 0.08 ✓ | 0.10 ✓ | 0.11 ✓ | 0.47 ✓ | 0.02 ✓ |
+| abc/00025478 | yes | 0.26 ✓ | 0.20 ✓ | 0.11 ✓ | 0.20 ✓ | 0.17 ✓ | 0.19 ✓ | 0.71 ✓ | error |
+| abc/00025511 | yes | 1.53 ⚠ | 3.65 ✓ | 0.67 ✓ | 2.95 ✓ | 2.48 ✓ | 1.81 ✓ | 3.48 ✓ | error |
+| abc/00025544 | yes | 12.65 ✓ | 6.79 ✓ | 0.64 ✓ | 0.25 ✓ | 0.24 ✓ | 0.23 ✓ | 0.90 ✓ | error |
+| abc/00025577 | yes | 0.25 ✓ | 0.19 ✓ | 0.13 ✓ | 0.11 ✓ | 0.11 ✓ | 0.13 ✓ | 0.47 ✓ | error |
+| abc/00025610 | yes | 0.07 ✓ | 0.07 ✓ | 0.07 ✓ | 0.24 ✓ | 0.23 ✓ | 0.24 ✓ | 0.66 ✓ | error |
+| abc/00025643 | yes | 1.15 ✓ | 1.20 ✓ | 0.39 ✓ | 0.39 ✓ | 0.39 ✓ | 0.34 ✓ | 0.85 ✓ | error |
+| abc/00025676 | yes | 1.84 ✓ | 2.79 ✓ | 1.06 ✓ | 2.30 ✗ | 2.15 ✗ | 1.81 ✗ | 4.62 ✗ | error |
+| abc/00025709 | yes | 1.94 ✓ | 1.61 ✓ | 1.64 ✓ | 2.42 ✓ | 2.79 ✓ | 1.93 ✓ | 4.15 ✓ | error |
+| abc/00025742 | **no** | 0.69 | 0.45 | 0.30 | 0.65 | 0.61 | 0.51 | 1.62 | error |
+| abc/00025775 | yes | 0.37 ✓ | 0.27 ✓ | 0.17 ✓ | 0.34 ✓ | 0.15 ✓ | 0.16 ✓ | 0.57 ✓ | error |
+| abc/00025808 | yes | 0.22 ✓ | 0.26 ✓ | 0.17 ✓ | 0.19 ✓ | 0.18 ✓ | 0.19 ✓ | 0.71 ✓ | error |
+| abc/00025841 | yes | 0.85 ✓ | 1.34 ✓ | 0.58 ✓ | 1.11 ✓ | 1.05 ✓ | 0.80 ✓ | 2.19 ✓ | error |
+| abc/00025874 | yes | 0.24 ✓ | 0.33 ✓ | 0.22 ✓ | 0.25 ✓ | 0.29 ✓ | 0.27 ✓ | 0.77 ✓ | error |
+| abc/00025907 | yes | 0.20 ✓ | 0.19 ✓ | 0.12 ✓ | 0.21 ✓ | 0.19 ✓ | 0.35 ✓ | 0.96 ✓ | error |
+| abc/00025940 | yes | 0.21 ✓ | 0.18 ✓ | 0.16 ✓ | 0.13 ✓ | 0.13 ✓ | 0.15 ✓ | 0.53 ✓ | error |
+| abc/00025973 | yes | 0.21 ✓ | 0.19 ✓ | 0.12 ✓ | 0.14 ✓ | 0.15 ✓ | 0.18 ✓ | 0.56 ✓ | error |
+| abc/00026006 | yes | 0.16 ✓ | 0.23 ✓ | 0.14 ✓ | 0.44 ✓ | 0.42 ✓ | 0.39 ✓ | 1.54 ✓ | error |
+| abc/00026039 | yes | 0.10 ✓ | 0.11 ✓ | 0.10 ✓ | 0.13 ✓ | 0.15 ✓ | 0.15 ✓ | 0.54 ✓ | error |
+| abc/00026072 | yes | 0.13 ✓ | 0.13 ✓ | 0.13 ✓ | 0.18 ✓ | 0.15 ✓ | 0.17 ✓ | 0.59 ✓ | error |
+| abc/00026105 | **no** | 1.01 | 1.06 | 0.58 | 1.00 | 0.59 | 0.61 | error | error |
+| abc/00026138 | yes | 0.08 ✓ | 0.09 ✓ | 0.10 ✓ | 0.09 ✓ | 0.08 ✓ | 0.13 ✓ | 0.44 ✓ | error |
+| abc/00026171 | **no** | 0.20 | 0.17 | 0.09 | 0.11 | 0.11 | 0.12 | 0.54 | error |
+| abc/00026204 | yes | 0.33 ✓ | 0.27 ✓ | 0.12 ✓ | 0.17 ✓ | 0.16 ✓ | 0.17 ✓ | 0.69 ✓ | error |
+| abc/00026237 | yes | 0.50 ✓ | 0.62 ✓ | 0.25 ✓ | 0.54 ✓ | 0.64 ✓ | 0.72 ✓ | 1.36 ✓ | error |
+| abc/00026270 | yes | 0.72 ✓ | 0.84 ✓ | 0.51 ✓ | 2.04 ✓ | 1.45 ✓ | 0.94 ✓ | 2.45 ✓ | error |
+| abc/00026303 | yes | 0.36 ✓ | 0.18 ✓ | 0.09 ✓ | 0.19 ✓ | 0.17 ✓ | 0.19 ✓ | 1.18 ✓ | 0.04 ✓ |
+| abc/00026336 | yes | 0.30 ✓ | 0.19 ✓ | 0.09 ✓ | 0.10 ✓ | 0.09 ✓ | 0.13 ✓ | 0.48 ✓ | error |
+| abc/00026369 | yes | 0.44 ✓ | 0.54 ✓ | 0.35 ✓ | 0.35 ✓ | 0.33 ✓ | 0.31 ✓ | 0.89 ✓ | error |
+| abc/00026402 | yes | 11.50 ✗ | 13.95 ✗ | 2.16 ✗ | 9.50 ✓ | 8.36 ✓ | 5.99 ✓ | 22.54 ✓ | error |
+| abc/00026435 | yes | 0.15 ✓ | 0.16 ✓ | 0.13 ✓ | 0.14 ✓ | 0.13 ✓ | 0.16 ✓ | 0.60 ✓ | error |
+| abc/00026468 | yes | 0.37 ✓ | 0.41 ✓ | 0.25 ✓ | 0.57 ✓ | 0.41 ✓ | 0.38 ✓ | 1.00 ✓ | error |
+| abc/00026501 | yes | 0.25 ✓ | 0.25 ✓ | 0.17 ✓ | 0.17 ✓ | 0.15 ✓ | 0.20 ✓ | 0.64 ✓ | error |
+| abc/00026534 | yes | 0.14 ✓ | 0.12 ✓ | 0.10 ✓ | 0.11 ✓ | 0.12 ✓ | 0.12 ✓ | 0.51 ✓ | error |
+| abc/00026567 | yes | 0.23 ✓ | 0.22 ✓ | 0.15 ✓ | 0.18 ✓ | 0.16 ✓ | 0.17 ✓ | 0.62 ✓ | error |
+| abc/00026600 | yes | 0.17 ✓ | 0.20 ✓ | 0.06 ✓ | 0.09 ✓ | 0.08 ✓ | 0.10 ✓ | 0.50 ✓ | 0.02 ✓ |
+| abc/00026633 | yes | 0.17 ✓ | 0.14 ✓ | 0.11 ✓ | 0.09 ✓ | 0.09 ✓ | 0.13 ✓ | 0.51 ✓ | error |
+| abc/00026666 | yes | 0.19 ✓ | 0.15 ✓ | 0.12 ✓ | 0.12 ✓ | 0.11 ✓ | 0.17 ✓ | 0.60 ✓ | error |
+| abc/00026699 | yes | 0.26 ✓ | 0.20 ✓ | 0.17 ✓ | 0.18 ✓ | 0.17 ✓ | 0.17 ✓ | 0.61 ✓ | error |
+| abc/00026732 | yes | 0.24 ✓ | 0.26 ✓ | 0.18 ✓ | 0.28 ✓ | 0.22 ✓ | 0.27 ✓ | 0.87 ✓ | error |
+| abc/00026765 | yes | 0.14 ✓ | 0.14 ✓ | 0.07 ✓ | 0.08 ✓ | 0.08 ✓ | 0.11 ✓ | 0.44 ✓ | 0.02 ✓ |
+| abc/00026798 | yes | 0.17 ✓ | 0.15 ✓ | 0.10 ✓ | 0.10 ✓ | 0.11 ✓ | 0.13 ✓ | 0.48 ✓ | error |
+| abc/00026831 | yes | 0.25 ✓ | 0.23 ✓ | 0.17 ✓ | 0.15 ✓ | 0.14 ✓ | 0.15 ✓ | 0.57 ✓ | error |
+| abc/00026864 | yes | 0.13 ✓ | 0.14 ✓ | 0.12 ✓ | 0.13 ✓ | 0.15 ✓ | 0.15 ✓ | 0.54 ✓ | error |
+| abc/00026897 | yes | 0.98 ✓ | 2.12 ✓ | 0.57 ✓ | 1.41 ✓ | 1.55 ✓ | 0.87 ✓ | 3.69 ✓ | error |
+| abc/00026930 | yes | 0.14 ✓ | 0.15 ✓ | 0.10 ✓ | 0.15 ✓ | 0.14 ✓ | 0.20 ✓ | 0.59 ✓ | error |
+| abc/00026963 | yes | 0.18 ✓ | 0.18 ✓ | 0.10 ✓ | 0.11 ✓ | 0.10 ✓ | 0.13 ✓ | 0.55 ✓ | error |
+| abc/00026996 | yes | 0.10 ✓ | 0.11 ✓ | 0.09 ✓ | 0.09 ✓ | 0.10 ✓ | 0.11 ✓ | 0.53 ✓ | error |
+| abc/00027029 | yes | 0.17 ✓ | 0.17 ✓ | 0.06 ✓ | 0.10 ✓ | 0.10 ✓ | 0.12 ✓ | 0.53 ✓ | 0.02 ✓ |
+| abc/00027062 | yes | 0.26 ✓ | 0.29 ✓ | 0.19 ✓ | 0.23 ✓ | 0.21 ✓ | 0.23 ✓ | 0.81 ✓ | error |
+| abc/00027095 | yes | 2.00 ✓ | 4.07 ✓ | 0.96 ✓ | 1.23 ✓ | 1.03 ✓ | 0.91 ✓ | 2.88 ✓ | error |
+| abc/00027128 | yes | 1.81 ✓ | 2.97 ✓ | 1.03 ✓ | 4.40 ✓ | 3.26 ✓ | 2.49 ✓ | 16.30 ✓ | error |
+| abc/00027161 | yes | 0.38 ✓ | 0.27 ✓ | 0.19 ✓ | 0.22 ✓ | 0.21 ✓ | 0.36 ✓ | 1.28 ✓ | error |
+| abc/00027194 | yes | 0.18 ✓ | 0.13 ✓ | 0.08 ✓ | 0.13 ✓ | 0.13 ✓ | 0.13 ✓ | 0.52 ✓ | error |
+| abc/00027227 | yes | 0.42 ✓ | 0.33 ✓ | 0.27 ✓ | 0.15 ✓ | 0.14 ✓ | 0.16 ✓ | 0.57 ✓ | error |
+| abc/00027260 | yes | 0.51 ✓ | 0.40 ✓ | 0.19 ✓ | 0.23 ✓ | 0.21 ✓ | 0.23 ✓ | 0.84 ✓ | error |
+| abc/00027293 | yes | 0.84 ✓ | 0.93 ✓ | 0.29 ✓ | 1.45 ✓ | 0.90 ✓ | 0.74 ✓ | 4.99 ✓ | 0.09 ✓ |
+| abc/00027326 | yes | 3.53 ✓ | 2.14 ✓ | 0.46 ✓ | 0.72 ✓ | 0.69 ✓ | 0.54 ✓ | 1.65 ✓ | error |
+| abc/00027359 | yes | 0.26 ✓ | 0.28 ✓ | 0.17 ✓ | 0.29 ✓ | 0.24 ✓ | 0.29 ✓ | 0.80 ✓ | error |
+| abc/00027392 | yes | 1.60 ✓ | 0.99 ✓ | 0.57 ✓ | 0.51 ✓ | 0.46 ✓ | 0.40 ✓ | 1.40 ✓ | error |
+| abc/00027425 | yes | 0.09 ✓ | 0.12 ✓ | 0.10 ✓ | 0.09 ✓ | 0.09 ✓ | 0.12 ✓ | 0.47 ✓ | error |
+| abc/00027458 | yes | 0.45 ✓ | 0.21 ✓ | 0.16 ✓ | 0.30 ✓ | 0.21 ✓ | 0.29 ✓ | 0.64 ✓ | error |
+| abc/00027491 | yes | 0.81 ✓ | 0.71 ✓ | 0.34 ✓ | 0.50 ✓ | 0.36 ✓ | 0.37 ✓ | 1.11 ✓ | error |
+| abc/00027524 | yes | 0.72 ✓ | 0.50 ✓ | 0.27 ✓ | 0.20 ✓ | 0.18 ✓ | 0.19 ✓ | 0.68 ✓ | error |
+| abc/00027557 | yes | 0.26 ✓ | 0.27 ✓ | 0.22 ✓ | 0.53 ✓ | 0.44 ✓ | 0.42 ✓ | 1.10 ✓ | error |
+| abc/00027590 | yes | 1.28 ✓ | 1.94 ✓ | 0.86 ✓ | 1.03 ✓ | 1.03 ✓ | 0.70 ✓ | 2.50 ✓ | error |
+| abc/00027623 | yes | 0.35 ✓ | 0.29 ✓ | 0.22 ✓ | 0.24 ✓ | 0.22 ✓ | 0.28 ✓ | 0.67 ✓ | error |
+| abc/00027656 | yes | 0.37 ✓ | 0.34 ✓ | 0.24 ✓ | 0.19 ✓ | 0.18 ✓ | 0.20 ✓ | 0.65 ✓ | error |
+| abc/00027689 | yes | 0.26 ✓ | 0.24 ✓ | 0.18 ✓ | 0.14 ✓ | 0.13 ✓ | 0.17 ✓ | 0.63 ✓ | error |
+| abc/00027722 | yes | 0.25 ✓ | 0.28 ✓ | 0.17 ✓ | 0.23 ✓ | 0.24 ✓ | 0.25 ✓ | 0.83 ✓ | error |
+| abc/00027755 | yes | 0.57 ✓ | 0.33 ✓ | 0.22 ✓ | 0.27 ✓ | 0.23 ✓ | 0.27 ✓ | 0.79 ✓ | error |
+| abc/00027788 | yes | 0.20 ✓ | 0.23 ✓ | 0.19 ✓ | 0.18 ✓ | 0.19 ✓ | 0.17 ✓ | 0.78 ✓ | error |
+| abc/00027821 | yes | 0.85 ✓ | 1.18 ✓ | 0.58 ✓ | 1.34 ✓ | 1.48 ✓ | 0.83 ✓ | 2.28 ✓ | error |
+| abc/00027854 | yes | 0.42 ✓ | 0.43 ✓ | 0.24 ✓ | 0.36 ✓ | 0.34 ✓ | 0.31 ✓ | 1.28 ✓ | error |
+| abc/00027887 | yes | 0.30 ✓ | 0.22 ✓ | 0.06 ✓ | 0.11 ✓ | 0.10 ✓ | 0.14 ✓ | 0.64 ✓ | 0.02 ✓ |
+| abc/00027920 | yes | 0.17 ✓ | 0.16 ✓ | 0.06 ✓ | 0.11 ✓ | 0.10 ✓ | 0.12 ✓ | 0.52 ✓ | 0.02 ✓ |
+| abc/00027953 | yes | 0.13 ✓ | 0.15 ✓ | 0.12 ✓ | 0.10 ✓ | 0.10 ✓ | 0.12 ✓ | 0.53 ✓ | error |
+| abc/00027986 | yes | 0.14 ✓ | 0.15 ✓ | 0.07 ✓ | 0.12 ✓ | 0.12 ✓ | 0.12 ✓ | 0.55 ✓ | 0.02 ✓ |
+| abc/00028019 | yes | 0.23 ✓ | 0.18 ✓ | 0.14 ✓ | 0.15 ✓ | 0.12 ✓ | 0.13 ✓ | 0.55 ✓ | error |
+| abc/00028052 | yes | 0.29 ✓ | 0.24 ✓ | 0.15 ✓ | 0.13 ✓ | 0.14 ✓ | 0.14 ✓ | 0.61 ✓ | error |
+| abc/00028085 | yes | 0.29 ✓ | 0.29 ✓ | 0.24 ✓ | 0.21 ✓ | 0.19 ✓ | 0.20 ✓ | 0.74 ✓ | error |
+| abc/00028118 | yes | 0.27 ✓ | 0.31 ✓ | 0.22 ✓ | 0.31 ✓ | 0.27 ✓ | 0.31 ✓ | 0.93 ✓ | error |
+| abc/00028151 | yes | 0.68 ✓ | 0.57 ✓ | 0.27 ✓ | 0.50 ✓ | 0.46 ✓ | 0.45 ✓ | 1.46 ✓ | error |
+| abc/00028184 | yes | 0.15 ✓ | 0.16 ✓ | 0.13 ✓ | 0.13 ✓ | 0.13 ✓ | 0.17 ✓ | 0.59 ✓ | error |
+| abc/00028217 | yes | 0.30 ✓ | 0.25 ✓ | 0.05 ✓ | 0.09 ✓ | 0.09 ✓ | 0.12 ✓ | 0.48 ✓ | 0.02 ✓ |
+| abc/00028250 | yes | 0.17 ✓ | 0.18 ✓ | 0.13 ✓ | 0.13 ✓ | 0.12 ✓ | 0.14 ✓ | 0.53 ✓ | error |
+| abc/00028283 | yes | 0.13 ✓ | 0.11 ✓ | 0.06 ✓ | 0.09 ✓ | 0.08 ✓ | 0.11 ✓ | 0.49 ✓ | 0.02 ✓ |
+| abc/00028316 | yes | 0.22 ✓ | 0.19 ✓ | 0.10 ✓ | 0.09 ✓ | 0.09 ✓ | 0.13 ✓ | 0.56 ✓ | error |
+| abc/00028349 | yes | 0.27 ✓ | 0.21 ✓ | 0.14 ✓ | 0.21 ✓ | 0.16 ✓ | 0.18 ✓ | 0.68 ✓ | error |
+| abc/00028382 | yes | 0.29 ✓ | 0.30 ✓ | 0.21 ✓ | 0.34 ✓ | 0.26 ✓ | 0.27 ✓ | 0.78 ✓ | error |
+| abc/00028415 | yes | 0.43 ✓ | 0.19 ✓ | 0.16 ✓ | 0.17 ✓ | 0.12 ✓ | 0.16 ✓ | 0.55 ✓ | error |
+| abc/00028448 | yes | 0.33 ✓ | 0.23 ✓ | 0.17 ✓ | 0.23 ✓ | 0.20 ✓ | 0.22 ✓ | 0.65 ✓ | error |
+| abc/00028481 | yes | 1.04 ✓ | 0.74 ✓ | 0.33 ✓ | 1.36 ✓ | 1.43 ✓ | 1.08 ✓ | 1.88 ✓ | error |
+| abc/00028514 | **no** | 3.69 | 6.86 | 1.80 | 6.97 | 2.60 | 2.17 | 21.79 | 0.16 ⚠ |
+| abc/00028547 | yes | 0.57 ✓ | 0.38 ✓ | 0.31 ✓ | 0.34 ✓ | 0.30 ✓ | 0.32 ✓ | 0.90 ✓ | error |
+| abc/00028580 | yes | 0.51 ✓ | 0.30 ✓ | 0.23 ✓ | 0.30 ✓ | 0.23 ✓ | 0.26 ✓ | 0.82 ✓ | error |
+| abc/00028613 | yes | 0.35 ✓ | 0.27 ✓ | 0.19 ✓ | 0.19 ✓ | 0.17 ✓ | 0.21 ✓ | 0.66 ✓ | error |
+| abc/00028646 | yes | 0.37 ✓ | 0.24 ✓ | 0.06 ✓ | 0.08 ✓ | 0.09 ✓ | 0.15 ✓ | 0.52 ✓ | 0.03 ✓ |
+| abc/00028679 | yes | 4.51 ✓ | 4.59 ✓ | 1.20 ✓ | 1.92 ✓ | 1.53 ✓ | 1.12 ✓ | 4.11 ✗ | error |
+| abc/00028712 | yes | 0.14 ✓ | 0.14 ✓ | 0.13 ✓ | 0.11 ✓ | 0.11 ✓ | 0.13 ✓ | 0.56 ✓ | error |
+| abc/00028745 | **no** | 0.57 ⚠ | 0.67 ⚠ | 0.33 ⚠ | 0.68 | 0.60 | 0.55 | error | error |
+| abc/00028778 | yes | 0.18 ✓ | 0.28 ✓ | 0.19 ✓ | 0.18 ✓ | 0.23 ✓ | 0.25 ✓ | 0.98 ✓ | error |
+| abc/00028811 | yes | 0.29 ✓ | 0.26 ✓ | 0.16 ✓ | 0.27 ✓ | 0.24 ✓ | 0.26 ✓ | 0.96 ✓ | error |
+| abc/00028844 | yes | 0.20 ✓ | 0.22 ✓ | 0.16 ✓ | 0.20 ✓ | 0.20 ✓ | 0.20 ✓ | 0.67 ✓ | error |
+| abc/00028877 | yes | 0.23 ✓ | 0.19 ✓ | 0.13 ✓ | 0.14 ✓ | 0.14 ✓ | 0.16 ✓ | 0.56 ✓ | error |
+| abc/00028910 | yes | 0.29 ✓ | 0.36 ✓ | 0.25 ✓ | 0.36 ✓ | 0.32 ✓ | 0.32 ✓ | 0.84 ✓ | error |
+| abc/00028943 | yes | 0.18 ✓ | 0.19 ✓ | 0.12 ✓ | 0.18 ✓ | 0.18 ✓ | 0.19 ✓ | 0.70 ✓ | error |
+| abc/00028976 | yes | 0.27 ✓ | 0.38 ✓ | 0.06 ✓ | 0.15 ✓ | 0.10 ✓ | 0.12 ✓ | 0.64 ✓ | 0.02 ✓ |
+| abc/00029009 | yes | 0.22 ✓ | 0.17 ✓ | 0.07 ✓ | 0.12 ✓ | 0.15 ✓ | 0.14 ✓ | 0.83 ✓ | error |
+| abc/00029042 | yes | 0.30 ✓ | 0.30 ✓ | 0.19 ✓ | 0.20 ✓ | 0.19 ✓ | 0.22 ✓ | 0.64 ✓ | error |
+| abc/00029075 | yes | 0.25 ✓ | 0.21 ✓ | 0.18 ✓ | 0.16 ✓ | 0.17 ✓ | 0.18 ✓ | 0.58 ✓ | error |
+| abc/00029108 | **no** | 0.31 | 0.28 | 0.11 | 0.14 | 0.14 | 0.17 | 0.58 | error |
+| abc/00029141 | yes | 27.28 ✓ | 29.09 ✓ | 2.00 ✓ | 6.30 ✓ | 26.62 ✓ | 4.04 ✓ | 25.05 ✓ | error |
+| abc/00029174 | yes | 0.27 ✓ | 0.28 ✓ | 0.15 ✓ | 0.32 ✓ | 0.28 ✓ | 0.28 ✓ | 1.07 ✓ | error |
+| abc/00029207 | yes | 0.15 ✓ | 0.13 ✓ | 0.07 ✓ | 0.13 ✓ | 0.11 ✓ | 0.14 ✓ | 0.53 ✓ | error |
+| abc/00029240 | yes | 0.23 ✓ | 0.19 ✓ | 0.13 ✓ | 0.17 ✓ | 0.17 ✓ | 0.18 ✓ | 0.62 ✓ | error |
+| abc/00029273 | yes | 0.26 ✓ | 0.18 ✓ | 0.17 ✓ | 0.13 ✓ | 0.12 ✓ | 0.13 ✓ | 0.54 ✓ | error |
+| abc/00029306 | yes | 0.26 ✓ | 0.22 ✓ | 0.12 ✓ | 0.19 ✓ | 0.17 ✓ | 0.19 ✓ | 0.76 ✓ | 0.03 ✓ |
+| abc/00029339 | yes | 0.17 ✓ | 0.17 ✓ | 0.13 ✓ | 0.22 ✓ | 0.16 ✓ | 0.18 ✓ | 0.67 ✓ | error |
+| abc/00029372 | yes | 1.48 ✓ | 1.53 ✓ | 0.66 ✓ | 1.20 ✓ | 1.10 ✓ | 0.83 ✓ | 3.14 ✓ | error |
+| abc/00029405 | yes | 1.17 ✓ | 0.87 ✓ | 0.38 ✓ | 0.90 ✓ | 0.82 ✓ | 0.88 ✓ | 2.40 ✓ | error |
+| abc/00029438 | yes | 0.52 ✓ | 0.31 ✓ | 0.22 ✓ | 0.18 ✓ | 0.17 ✓ | 0.17 ✓ | 0.74 ✓ | error |
+| abc/00029471 | yes | 0.56 ✓ | 0.31 ✓ | 0.23 ✓ | 0.29 ✓ | 0.24 ✓ | 0.27 ✓ | 0.92 ✓ | error |
+| abc/00029504 | yes | 4.63 ✓ | 4.13 ✓ | 0.86 ✓ | 1.58 ✓ | 1.70 ✓ | 1.02 ✓ | 4.98 ✓ | error |
+| abc/00029537 | yes | 0.24 ✓ | 0.29 ✓ | 0.09 ✓ | 0.11 ✓ | 0.11 ✓ | 0.13 ✓ | 0.49 ✓ | error |
+| abc/00029570 | yes | 0.35 ✓ | 0.25 ✓ | 0.15 ✓ | 0.19 ✓ | 0.16 ✓ | 0.21 ✓ | 0.65 ✓ | error |
+| abc/00029603 | yes | 1.12 ✓ | 1.01 ✓ | 0.46 ✓ | 7.51 ✓ | 5.86 ✓ | 3.32 ✓ | 6.23 ✓ | error |
+| abc/00029636 | yes | 0.12 ✓ | 0.12 ✓ | 0.11 ✓ | 0.13 ✓ | 0.13 ✓ | 0.14 ✓ | 0.53 ✓ | error |
+| abc/00029669 | yes | 0.21 ✓ | 0.17 ✓ | 0.06 ✓ | 0.09 ✓ | 0.09 ✓ | 0.10 ✓ | 0.45 ✓ | 0.02 ✓ |
+| abc/00029702 | yes | 0.40 ✓ | 0.29 ✓ | 0.32 ✓ | 0.27 ✓ | 0.27 ✓ | 0.17 ✓ | 0.68 ✓ | error |
+| abc/00029735 | yes | 0.47 ✓ | 0.32 ✓ | 0.14 ✓ | 0.26 ✓ | 0.24 ✓ | 0.25 ✓ | 0.83 ✓ | error |
+| abc/00029768 | yes | 0.23 ✓ | 0.31 ✓ | 0.08 ✓ | 0.18 ✓ | 0.16 ✓ | 0.17 ✓ | 0.63 ✓ | error |
+| abc/00029801 | **no** | 0.73 | 1.41 | 0.35 | 0.38 | 0.29 | 0.29 | 0.94 | empty |
+| abc/00029834 | yes | 0.56 ✓ | 0.52 ✓ | 0.28 ✓ | 0.82 ✓ | 0.67 ✓ | 0.62 ✓ | 1.56 ✓ | error |
+| abc/00029867 | yes | 0.10 ✓ | 0.11 ✓ | 0.16 ✓ | 0.15 ✓ | 0.14 ✓ | 0.15 ✓ | 0.48 ✓ | error |
 
 ✓ watertight · ✗ converted but open · no mark: converted, file not closed (not counted) · ⚠ surface missing (> 1%), wrong scale or empty
 
