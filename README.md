@@ -167,7 +167,7 @@ Every library that converts STEP to a mesh inside a web page, on the same 64 tes
 - **Watertight:** 52 of the 64 files describe only closed solids; the other 12 contain surface bodies or bare surfaces, so no converter can close them, and they aren't counted. Of the 52, meshStep makes 49 closed and manifold per body, the best OCCT build 42 and brepkit 26. OCCT delivers a separate patch per face; the count is taken after merging coincident vertices, which closes most of its parts.
 - **Triangle shape:** 29% of OCCT's triangles have an angle under 5°. meshStep has 1.6% such needles, and 0.2% in isotropic mode.
 - **Speed:** the viewer settings cap the edge length at 1% of the model size, so meshStep makes about 7.7× more triangles than OCCT.
-  - With one conversion at a time, meshStep takes about the same total time as occt-import-js: 117 s against 104 s for 59 models. On worker threads (`importStepAsync`) it takes 77 s, and it's 1.5–1.8× faster than OCCT on the large models.
+  - With one conversion at a time, meshStep takes about the same total time as occt-import-js: 118 s against 105 s for 60 models. On worker threads (`importStepAsync`) it takes 78 s, and it's 1.5–1.8× faster than OCCT on the large models.
   - Asked for OCCT's triangle count instead (deviation only, no edge cap), meshStep is 1.5× faster than occt-import-js and faster than every OCCT build on a fresh page.
   - brepkit is the fastest library here, but it converts only 42 of the 64 models.
 - **Where meshStep is behind:**

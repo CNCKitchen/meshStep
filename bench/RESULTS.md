@@ -24,13 +24,13 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 
 | Converter | Converted | Watertight | Flipped areas | Missing surface | Errors / timeouts |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 62 / 64 | 49 / 52 | 0 | 0 | 1 |
-| meshStep isotropic 0.2.0 | 62 / 64 | 47 / 52 | 0 | 0 | 1 |
-| meshStep (deviation only) 0.2.0 | 63 / 64 | 49 / 52 | 0 | 0 | 0 |
+| meshStep 0.2.0 | 63 / 64 | 49 / 52 | 0 | 0 | 1 |
+| meshStep isotropic 0.2.0 | 63 / 64 | 47 / 52 | 0 | 0 | 1 |
+| meshStep (deviation only) 0.2.0 | 64 / 64 | 49 / 52 | 0 | 0 | 0 |
 | occt-import-js 0.0.23 | 60 / 64 | 42 / 52 | 0 | 0 | 4 |
 | @tx-code/occt-js 0.1.7 | 60 / 64 | 39 / 52 | 0 | 2 | 2 |
 | occt-wasm 5.17.2 | 60 / 64 | 39 / 52 | 0 | 2 | 2 |
-| opencascade.js 1.1.1 | 60 / 64 | 40 / 52 | 1 | 0 | 3 |
+| opencascade.js 1.1.1 | 60 / 64 | 40 / 52 | 1 | 1 | 3 |
 | brepkit-wasm 4.11.20 | 42 / 64 | 26 / 52 | 3 | 5 | 17 |
 
 **Speed** (38 common models; ratio = geometric mean against occt-import-js, < 1 is faster)
@@ -104,7 +104,7 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 | sourcemodels/gear | **no** | 0.69 | 0.34 | 0.46 | 0.29 | 0.29 | 0.19 | 0.65 | empty |
 | sourcemodels/hose-fitting | yes | 0.52 ✓ | 0.33 ✓ | 0.24 ✓ | 0.39 ✓ | 0.24 ✓ | 0.30 ✓ | 0.80 ✓ | error |
 | sourcemodels/iso14649-demo | yes | 0.65 ✓ | 0.51 ✓ | 0.27 ✓ | 0.29 ✓ | 0.28 ✓ | 0.30 ✓ | 1.06 ✓ | 0.09 ✗ |
-| sourcemodels/jack_in_the_box | yes | 1.23 ⚠ | 0.76 ⚠ | 0.44 ⚠ | 1.51 ✓ | 1.12 ✓ | 0.95 ✓ | 2.76 ⚠ | error |
+| sourcemodels/jack_in_the_box | yes | 0.65 ✗ | 0.56 ✗ | 0.35 ✗ | 0.93 ✓ | 0.88 ✓ | 0.74 ✓ | 1.93 ⚠ | error |
 | sourcemodels/nist_ctc_01_asme1_ap242-e1 | yes | 0.62 ✓ | 0.47 ✓ | 0.30 ✓ | 0.29 ✓ | 0.25 ✓ | 0.27 ✓ | 0.93 ✓ | error |
 | sourcemodels/nist_ctc_02_asme1_ap242-e2 | **no** | 2.77 | 2.76 | 1.00 | 1.92 | 1.63 | 0.75 | 3.17 | error |
 | sourcemodels/nist_ctc_03_asme1_ap242-e2 | yes | 0.75 ✓ | 0.53 ✓ | 0.37 ✓ | 0.36 ✓ | 0.26 ✓ | 0.28 ✓ | 0.95 ✓ | 0.05 ✓ |
@@ -134,31 +134,31 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 
 ### Speed on an idle machine (one conversion at a time), fine tolerance
 
-64 models · chord tolerance 1e-4 × model diagonal, 15° · 59 models converted by every library (speed, size and shape columns use these)
+64 models · chord tolerance 1e-4 × model diagonal, 15° · 60 models converted by every library (speed, size and shape columns use these)
 
 **Robustness** (all models; watertight counts the 52 models whose STEP file describes only closed solids. The other 12 contain surface bodies or no topology, so they cannot be watertight)
 
 | Converter | Converted | Watertight | Flipped areas | Missing surface | Errors / timeouts |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 63 / 64 | 50 / 52 | 0 | 0 | 0 |
-| meshStep (workers) 0.2.0 | 63 / 64 | 50 / 52 | 0 | 0 | 0 |
+| meshStep 0.2.0 | 64 / 64 | 50 / 52 | 0 | 0 | 0 |
+| meshStep (workers) 0.2.0 | 64 / 64 | 50 / 52 | 0 | 0 | 0 |
 | occt-import-js 0.0.23 | 60 / 64 | 42 / 52 | 0 | 0 | 4 |
 
-**Speed** (59 common models; ratio = geometric mean against occt-import-js, < 1 is faster)
+**Speed** (60 common models; ratio = geometric mean against occt-import-js, < 1 is faster)
 
 | Converter | First file, fresh page | ratio | Same file again | ratio | Peak memory (median) |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 117.1 s | ×1.32 | 106.7 s | ×1.63 | 436 MB |
-| meshStep (workers) 0.2.0 | 77.2 s | ×1.20 | 70.2 s | ×1.55 | 1,057 MB |
-| occt-import-js 0.0.23 | 103.9 s | ×1.00 | 94.1 s | ×1.00 | 397 MB |
+| meshStep 0.2.0 | 117.8 s | ×1.31 | 107.2 s | ×1.61 | 435 MB |
+| meshStep (workers) 0.2.0 | 77.9 s | ×1.19 | 70.9 s | ×1.54 | 1,120 MB |
+| occt-import-js 0.0.23 | 104.9 s | ×1.00 | 94.9 s | ×1.00 | 397 MB |
 
-**Mesh** (59 common models)
+**Mesh** (60 common models)
 
 | Converter | Triangles | ratio | Min angle p5 | < 20° | < 5° | Radius ratio | Deviation p99 / tol | Max deviation ≤ 1.25 tol |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 26,798,389 | ×5.82 | 14.8° | 32.5% | 2.7% | 0.60 | 0.72 | 71% |
-| meshStep (workers) 0.2.0 | 26,798,389 | ×5.82 | 14.8° | 32.5% | 2.7% | 0.60 | 0.72 | 71% |
-| occt-import-js 0.0.23 | 9,336,705 | ×1.00 | 1.1° | 54.3% | 24.7% | 0.44 | 0.42 | 73% |
+| meshStep 0.2.0 | 26,922,933 | ×5.63 | 12.8° | 32.6% | 2.7% | 0.60 | 0.72 | 70% |
+| meshStep (workers) 0.2.0 | 26,922,933 | ×5.63 | 12.8° | 32.6% | 2.7% | 0.60 | 0.72 | 70% |
+| occt-import-js 0.0.23 | 9,488,785 | ×1.00 | 1.1° | 54.4% | 24.4% | 0.44 | 0.42 | 73% |
 
 <details><summary>Per model: time to first mesh (s) / watertight</summary>
 
@@ -205,7 +205,7 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 | sourcemodels/gear | **no** | 0.58 | 0.64 | 0.15 |
 | sourcemodels/hose-fitting | yes | 0.38 ✓ | 0.47 ✓ | 0.21 ✓ |
 | sourcemodels/iso14649-demo | yes | 0.52 ✓ | 0.52 ✓ | 0.23 ✓ |
-| sourcemodels/jack_in_the_box | yes | 0.63 ⚠ | 0.73 ⚠ | 0.96 ✓ |
+| sourcemodels/jack_in_the_box | yes | 0.66 ✗ | 0.71 ✗ | 0.94 ✓ |
 | sourcemodels/nist_ctc_01_asme1_ap242-e1 | yes | 0.43 ✓ | 0.46 ✓ | 0.24 ✓ |
 | sourcemodels/nist_ctc_02_asme1_ap242-e2 | **no** | 1.73 | 1.42 | 0.97 |
 | sourcemodels/nist_ctc_03_asme1_ap242-e2 | yes | 0.58 ✓ | 0.57 ✓ | 0.28 ✓ |
@@ -254,22 +254,22 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 
 | Converter | First file, fresh page | ratio | Same file again | ratio | Peak memory (median) |
 |---|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 303.1 s | ×1.42 | 249.4 s | ×2.11 | 332 MB |
-| meshStep isotropic 0.2.0 | 328.8 s | ×1.32 | 285.2 s | ×1.98 | 271 MB |
-| meshStep (deviation only) 0.2.0 | 102.6 s | ×0.72 | 64.8 s | ×0.68 | 222 MB |
-| occt-import-js 0.0.23 | 208.3 s | ×1.00 | 161.0 s | ×1.00 | 334 MB |
-| @tx-code/occt-js 0.1.7 | 212.4 s | ×0.93 | 168.1 s | ×0.83 | 354 MB |
-| occt-wasm 5.17.2 | 147.6 s | ×0.95 | 95.8 s | ×0.65 | 451 MB |
-| opencascade.js 1.1.1 | 503.7 s | ×3.38 | 340.2 s | ×2.27 | 881 MB |
+| meshStep 0.2.0 | 297.5 s | ×1.42 | 243.8 s | ×2.11 | 332 MB |
+| meshStep isotropic 0.2.0 | 316.8 s | ×1.32 | 273.2 s | ×1.97 | 271 MB |
+| meshStep (deviation only) 0.2.0 | 101.6 s | ×0.72 | 63.8 s | ×0.68 | 222 MB |
+| occt-import-js 0.0.23 | 205.4 s | ×1.00 | 158.1 s | ×1.00 | 334 MB |
+| @tx-code/occt-js 0.1.7 | 209.6 s | ×0.93 | 165.3 s | ×0.83 | 354 MB |
+| occt-wasm 5.17.2 | 144.2 s | ×0.95 | 92.3 s | ×0.65 | 451 MB |
+| opencascade.js 1.1.1 | 497.4 s | ×3.38 | 334.0 s | ×2.27 | 881 MB |
 | brepkit-wasm 4.11.20 | – | – | – | – | – |
 
 **Mesh** (296 common models)
 
 | Converter | Triangles | ratio | Min angle p5 | < 20° | < 5° | Radius ratio | Deviation p99 / tol | Max deviation ≤ 1.25 tol |
 |---|--:|--:|--:|--:|--:|--:|--:|--:|
-| meshStep 0.2.0 | 39,926,165 | ×15.24 | 31.6° | 21.6% | 3.2% | 0.68 | 0.78 | 80% |
-| meshStep isotropic 0.2.0 | 47,413,771 | ×13.70 | 39.2° | 7.5% | 3.2% | 0.83 | 0.74 | 82% |
-| meshStep (deviation only) 0.2.0 | 10,949,290 | ×2.98 | 8.3° | 42.6% | 7.9% | 0.52 | 0.85 | 71% |
+| meshStep 0.2.0 | 39,926,331 | ×15.24 | 31.6° | 21.6% | 3.2% | 0.68 | 0.78 | 80% |
+| meshStep isotropic 0.2.0 | 47,413,929 | ×13.70 | 39.2° | 7.5% | 3.2% | 0.83 | 0.74 | 82% |
+| meshStep (deviation only) 0.2.0 | 10,949,460 | ×2.98 | 8.3° | 42.6% | 7.9% | 0.52 | 0.85 | 71% |
 | occt-import-js 0.0.23 | 7,907,639 | ×1.00 | 1.1° | 50.2% | 15.9% | 0.51 | 0.41 | 85% |
 | @tx-code/occt-js 0.1.7 | 7,883,231 | ×1.01 | 1.1° | 50.7% | 15.6% | 0.51 | 0.41 | 84% |
 | occt-wasm 5.17.2 | 7,883,271 | ×1.01 | 1.1° | 50.7% | 15.6% | 0.51 | 0.41 | 84% |
@@ -403,7 +403,7 @@ What a web page downloads (JavaScript bundled and minified with esbuild, WebAsse
 | abc/00023894 | yes | 0.76 ✓ | 0.92 ✓ | 0.42 ✓ | 0.71 ✓ | 0.63 ✓ | 0.49 ✓ | 1.46 ✓ | error |
 | abc/00023927 | yes | 0.51 ✓ | 0.40 ✓ | 0.26 ✓ | 0.43 ✓ | 0.38 ✓ | 0.41 ✓ | 1.78 ✓ | error |
 | abc/00023960 | yes | 0.10 ✓ | 0.15 ✓ | 0.17 ✓ | 0.10 ✓ | 0.16 ✓ | 0.12 ✓ | 0.54 ✓ | error |
-| abc/00023993 | yes | 20.48 ✗ | 41.89 ✗ | 3.76 ✗ | 12.26 ✗ | 11.05 ✗ | 8.78 ✗ | 25.71 ✗ | error |
+| abc/00023993 | yes | 14.90 ✗ | 29.84 ✗ | 2.79 ✗ | 9.36 ✗ | 8.21 ✗ | 5.32 ✗ | 19.39 ✗ | error |
 | abc/00024026 | yes | 0.16 ✓ | 0.18 ✓ | 0.09 ✓ | 0.12 ✓ | 0.12 ✓ | 0.13 ✓ | 0.52 ✓ | error |
 | abc/00024059 | yes | 0.46 ✓ | 0.34 ✓ | 0.22 ✓ | 0.23 ✓ | 0.23 ✓ | 0.24 ✓ | 0.77 ✓ | error |
 | abc/00024092 | yes | 0.50 ✓ | 0.48 ✓ | 0.25 ✓ | 0.34 ✓ | 0.30 ✓ | 0.31 ✓ | 1.15 ✓ | error |
