@@ -98,6 +98,7 @@ function assemblyInfo(t: Table, s: number): {
   // geometry rep (ABSR / SHAPE_REPRESENTATION / ...) -> the solid bodies it contains
   const repOfSolid = new Map<number, number>();
   const repCtx = new Map<number, number>();
+  const repAxes = new Map<number, number[]>(); // rep -> its AXIS2_PLACEMENT_3D items
   for (const ty of ["ADVANCED_BREP_SHAPE_REPRESENTATION", "MANIFOLD_SURFACE_SHAPE_REPRESENTATION", "SHAPE_REPRESENTATION"]) {
     for (const [repId, rep] of t.byType(ty)) {
       if (rep.params[2]?.k === "ref") repCtx.set(repId, ref(rep.params[2]!));
@@ -105,6 +106,11 @@ function assemblyInfo(t: Table, s: number): {
       for (const item of refList(rep.params[1]!)) {
         const ty2 = t.typeOf(item);
         if (ty2 === "MANIFOLD_SOLID_BREP" || ty2 === "BREP_WITH_VOIDS" || ty2 === "SHELL_BASED_SURFACE_MODEL") repOfSolid.set(item, repId);
+        else if (ty2 === "AXIS2_PLACEMENT_3D") {
+          const a = repAxes.get(repId) ?? [];
+          a.push(item);
+          repAxes.set(repId, a);
+        }
       }
     }
   }
@@ -160,10 +166,33 @@ function assemblyInfo(t: Table, s: number): {
     return memo.get(rep)!;
   };
 
+  // A ROOT rep (no assembly parent) may carry its own AXIS2_PLACEMENT_3D item that is not the
+  // anchor of any ITEM_DEFINED_TRANSFORMATION: the frame its geometry is modelled in, placed in
+  // world space. OCCT applies it ("read.step.root.transformation"); ignoring it collapses
+  // part-per-rep files without an assembly tree onto the origin (jack_in_the_box: 54 ACIS
+  // parts, each in its own local frame, no NAUO/RRWT at all).
+  const idtItems = new Set<number>();
+  for (const [, idt] of t.byType("ITEM_DEFINED_TRANSFORMATION")) {
+    for (const p of [idt.params[2], idt.params[3]]) if (p?.k === "ref") idtItems.add(ref(p));
+  }
+  const rootFrame = (rep: number): Frame | undefined => {
+    for (const a of repAxes.get(rep) ?? []) {
+      if (idtItems.has(a)) continue;
+      const f = readPlacement(t, a, scaleOfRep(rep));
+      const isIdent = Math.hypot(...f.o) < 1e-9 && f.z[2] > 1 - 1e-12 && f.x[0] > 1 - 1e-12;
+      return isIdent ? undefined : f;
+    }
+    return undefined;
+  };
+
   const instances = new Map<number, Frame[]>();
   const solidScale = new Map<number, number>();
   for (const [solidId, geomRep] of repOfSolid) {
-    const worlds = worldsOf(geomRep);
+    let worlds = worldsOf(geomRep);
+    if (worlds.length === 1 && worlds[0] === IDENT) {
+      const rf = rootFrame(geomRep);
+      if (rf) worlds = [rf];
+    }
     if (worlds.length > 1 || worlds[0] !== IDENT) instances.set(solidId, worlds);
     const sc = scaleOfRep(geomRep);
     if (sc !== s) solidScale.set(solidId, sc);
