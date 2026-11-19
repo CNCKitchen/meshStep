@@ -5972,8 +5972,14 @@ function tessellateSphereCap(
   const uv = rim.map((p) => s.project(p));
   let vmin = Infinity, vmax = -Infinity, umin = Infinity, umax = -Infinity;
   for (const [u, v] of uv) { if (v < vmin) vmin = v; if (v > vmax) vmax = v; if (u < umin) umin = u; if (u > umax) umax = u; }
-  // Must be a near-constant-latitude circle spanning the whole longitude (a true parallel rim).
-  if (vmax - vmin > 0.05 || umax - umin < 0.9 * TWO_PI) return false;
+  // Net signed longitude travel of the oriented rim: it decides the enclosed pole below, and it is
+  // the real full-longitude test — the u RANGE alone also passes a short arc that merely straddles
+  // the seam (samples at u ≈ ±π: ABC 00030327, a 3mm² D-shaped patch by a pole fanned to the far
+  // pole as a whole ball).
+  let du = 0;
+  for (let i = 0; i < uv.length; i++) { let d = uv[(i + 1) % uv.length]![0] - uv[i]![0]; while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; du += d; }
+  // Must be a near-constant-latitude circle winding the whole longitude once (a true parallel rim).
+  if (vmax - vmin > 0.05 || umax - umin < 0.9 * TWO_PI || Math.abs(du) < 0.9 * TWO_PI) return false;
   const vRim = (vmin + vmax) / 2;
   // Net signed longitude travel of the oriented rim -> which pole is the enclosed (left-hand) side.
   // "Left of the rim" is defined against the FACE normal, not the surface normal: on a sameSense
@@ -5981,8 +5987,6 @@ function tessellateSphereCap(
   // material on the other side, so the enclosed pole flips with it (a hemispherical DIMPLE is a
   // sameSense=false sphere face whose eastward rim encloses the south hemisphere — picking north
   // meshes the complement and turns the pocket into a bump).
-  let du = 0;
-  for (let i = 0; i < uv.length; i++) { let d = uv[(i + 1) % uv.length]![0] - uv[i]![0]; while (d > Math.PI) d -= TWO_PI; while (d < -Math.PI) d += TWO_PI; du += d; }
   const vPole = (du >= 0) === (sign > 0) ? Math.PI / 2 : -Math.PI / 2;
 
   const R = Math.max(s.r, 1e-9);
@@ -6042,6 +6046,52 @@ function loopVectorArea(loop: BLoop, sampled: Map<number, Vec3[]>): Vec3 | null 
     nx += (a[1] - b[1]) * (a[2] + b[2]); ny += (a[2] - b[2]) * (a[0] + b[0]); nz += (a[0] - b[0]) * (a[1] + b[1]);
   }
   return [nx / 2, ny / 2, nz / 2];
+}
+
+/** Area of the sphere region a single loop bounds on the side its orientation names: LEFT of the
+ * travel seen from outside the sphere for sign = +1 (the cap mesher's rule), right for sign = -1;
+ * a FACE_BOUND written .F. (loop.reversed) runs the other way.
+ * The sampled boundary is a spherical polygon (dense on curved edges), and its enclosed solid angle
+ * is the sum of the signed solid angles of the fan triangles from a reference direction
+ * (Van Oosterom–Strackee), modulo 4π — exact whatever the rim's shape, including loops through
+ * the parametrisation poles where the (u,v) picture has no side at all. The reference is the
+ * candidate axis farthest from every boundary sample, keeping each fan triangle well-conditioned.
+ * Null when the loop has no usable samples. */
+function sphereLoopArea(s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, sign: number): number | null {
+  const c = s.f.o;
+  const dirs: Vec3[] = [];
+  for (const oe of loop.edges) {
+    const base = sampled.get(oe.edgeId); if (!base) return null;
+    const poly = oe.orient ? base : base.slice().reverse();
+    for (let i = 0; i < poly.length - 1; i++) {
+      const p = poly[i]!, dx = p[0] - c[0], dy = p[1] - c[1], dz = p[2] - c[2];
+      const L = Math.hypot(dx, dy, dz);
+      if (L > 1e-12) dirs.push([dx / L, dy / L, dz / L]);
+    }
+  }
+  if (dirs.length < 3) return null;
+  // A fan triangle degenerates when the reference is near a boundary sample OR its antipode
+  // (ref = -a zeroes both terms of the formula), so pick the axis with the largest |cos| clearance.
+  let ref: Vec3 = [0, 0, 1], refClear = Infinity;
+  const stride = Math.max(1, Math.floor(dirs.length / 2000));
+  for (let i = 0, N = 64, ga = Math.PI * (3 - Math.sqrt(5)); i < N; i++) {
+    const zc = 1 - (i + 0.5) / N, r = Math.sqrt(1 - zc * zc), th = ga * i;
+    const z: Vec3 = [r * Math.cos(th), r * Math.sin(th), zc];
+    let worst = 0;
+    for (let k = 0; k < dirs.length; k += stride) worst = Math.max(worst, Math.abs(dot(dirs[k]!, z)));
+    if (worst < refClear) { refClear = worst; ref = z; }
+  }
+  let omega = 0;
+  for (let i = 0; i < dirs.length; i++) {
+    const a = dirs[i]!, b = dirs[(i + 1) % dirs.length]!;
+    const num = dot(ref, cross(a, b));
+    const den = 1 + dot(ref, a) + dot(a, b) + dot(b, ref);
+    omega += 2 * Math.atan2(num, den);
+  }
+  const four = 4 * Math.PI;
+  let left = ((omega % four) + four) % four;
+  if ((sign < 0) !== !!loop.reversed) left = four - left;
+  return left * s.r * s.r;
 }
 
 function loopNormal(loop: BLoop, sampled: Map<number, Vec3[]>): Vec3 | null {
@@ -6131,6 +6181,68 @@ function sphereZoneChecked(z: SphereZone, verts: number[], faceIds: number[], me
   if (DBG) console.error(`[tess] sphere zone: mesh area ${area.toFixed(3)} vs ${z.area.toFixed(3)}, centroid ${(side / Math.max(area, 1e-300)).toFixed(3)} vs rim ${z.m.toFixed(3)} — rolled back`);
   verts.length = v0; faceIds.length = f0;
   return false;
+}
+
+/** Area of the triangles appended to `verts` from float index `v0` on. */
+function appendedArea(verts: number[], v0: number): number {
+  let area = 0;
+  for (let i = v0; i + 8 < verts.length; i += 9) {
+    const ax = verts[i]!, ay = verts[i + 1]!, az = verts[i + 2]!;
+    const n = cross([verts[i + 3]! - ax, verts[i + 4]! - ay, verts[i + 5]! - az], [verts[i + 6]! - ax, verts[i + 7]! - ay, verts[i + 8]! - az]);
+    area += 0.5 * Math.hypot(n[0], n[1], n[2]);
+  }
+  return area;
+}
+
+/**
+ * Side check for a single-rim sphere face of any rim shape. The oriented area E is exact
+ * (sphereLoopArea); a mesher's result is the WRONG SIDE when its area misses E but matches the
+ * complement C = 4πR² - E (anything else is some other defect, left alone). Two directions:
+ *  - too LARGE (meshed ~C where the face is the small side): always rejected — a small patch meshed
+ *    as most of a ball is never a sane reading (ABC 00030327, 00043816).
+ *  - too SMALL (meshed the small side where the orientation names the large one): rejected only
+ *    when E is at least 85% of the sphere — a ball minus a slice or cap (jack_in_the_box, ABC
+ *    00026953, 00041600, 00041808, 00046881). Below that the small side is kept: exporters do
+ *    write wrong face senses, and a consistent loop then names the complement of a perfectly
+ *    good patch (ABC 00021344: a concave spherical cup at a bar end flagged .T.) — the closed
+ *    (u,v) loop's inside, which OCCT also meshes, is the safer reading there.
+ * A rejected mesh is rolled back but kept: when no mesher produces the oriented side, `restore`
+ * re-emits the first rejection, so the face is never left worse than without the guard.
+ */
+interface SphereSideGuard {
+  run(verts: number[], faceIds: number[], mesher: () => boolean): boolean;
+  restore(verts: number[], faceIds: number[]): boolean;
+}
+function sphereSideGuard(s: Sphere, loop: BLoop, sampled: Map<number, Vec3[]>, sign: number, chordTol: number): SphereSideGuard | null {
+  const E = sphereLoopArea(s, loop, sampled, sign);
+  if (E === null) return null;
+  const full = 4 * Math.PI * s.r * s.r, C = full - E;
+  // an inscribed mesh falls short of the surface by up to ~2·chordTol/R of its area (as sphereLargeZone)
+  const slack = 0.05 + Math.min(0.5, 3 * chordTol / s.r);
+  const wrongSide = (a: number): boolean => {
+    if (Math.abs(a - E) <= slack * E) return false;
+    if (Math.abs(a - C) > slack * Math.max(C, 0.05 * full)) return false;
+    return a > E || E >= 0.85 * full;
+  };
+  let keptV: number[] | null = null, keptF: number[] | null = null;
+  return {
+    run(verts, faceIds, mesher) {
+      const v0 = verts.length, f0 = faceIds.length;
+      if (!mesher()) return false;
+      const a = appendedArea(verts, v0);
+      if (!wrongSide(a)) return true;
+      if (DBG) console.error(`[tess] sphere side: mesh area ${a.toFixed(4)} is the complement of the oriented ${E.toFixed(4)} — rolled back`);
+      if (!keptV) { keptV = verts.slice(v0); keptF = faceIds.slice(f0); }
+      verts.length = v0; faceIds.length = f0;
+      return false;
+    },
+    restore(verts, faceIds) {
+      if (!keptV || !keptF) return false;
+      for (const v of keptV) verts.push(v);
+      for (const f of keptF) faceIds.push(f);
+      return true;
+    },
+  };
 }
 
 function tessellateSphereCapAnyAxis(
@@ -6918,6 +7030,14 @@ export function createTessSession(brep: BrepModel, opts: TessOptions = {}, prep?
         // sphere zone is a revolution band like any other: band -> unroll -> param grid.
         const single = loops.length === 1;
         const zone = single ? sphereLargeZone(surface, louter, sampled, sign, chordTol) : null;
+        // Any other single rim: the grid meshes what the loop encloses in (u,v) and ignores which
+        // side the orientation names. Where the rim runs through the parametrisation poles that is
+        // a coin toss — a ball with a thin wedge cut out (jack_in_the_box: two meridians 3° apart)
+        // came out as the 3° sliver, ABC 00030327 meshed three tiny patches as whole balls. The
+        // side guard checks each mesher's area against the exact oriented area and rolls back a
+        // complement; see SphereSideGuard for when it trusts the orientation over the grid.
+        const side = single && zone === null ? sphereSideGuard(surface, louter, sampled, sign, chordTol) : null;
+        const guarded = (mesher: () => boolean): boolean => (side ? side.run(verts, faceIds, mesher) : mesher());
         ok = (single && mark(face.faceId, "sphereCap", tessellateSphereCap(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
           || (stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || (!single && mark(face.faceId, "band", tessellateRevolutionBand(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
@@ -6936,11 +7056,11 @@ export function createTessSession(brep: BrepModel, opts: TessOptions = {}, prep?
           // the oriented side with the pole re-aimed on the rim normal.
           || mark(face.faceId, "grid", zone
             ? sphereZoneChecked(zone, verts, faceIds, () => tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
-            : tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))
+            : guarded(() => tessellateParamGrid(reorientSphere(surface, loops, sampled), loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
           || (zone !== null && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
-          || (!stripped && mark(face.faceId, "region", tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))
-          || (single && mark(face.faceId, "sliver", tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol)))
-          || (single && mark(face.faceId, "sphereCap", tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign)))
+          || (!stripped && mark(face.faceId, "region", guarded(() => tessellatePeriodicRegion(surface, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))))
+          || (single && mark(face.faceId, "sliver", guarded(() => tessellateSliverLoop(surface, louter, sampled, face.faceId, verts, faceIds, sign, chordTol))))
+          || (single && mark(face.faceId, "sphereCap", guarded(() => tessellateSphereCapAnyAxis(surface, louter, sampled, face.faceId, verts, faceIds, chordTol, targetEdge, normalDev, sign))))
           // A BOUNDARY THROUGH A POLE (last resort — only reached when every mesher above
           // declined). A perforated hemisphere whose great-circle rim runs over both default
           // poles (ABC 00044535/00044791/00054689, 49 holes), a single loop climbing over a pole
@@ -6964,11 +7084,14 @@ export function createTessSession(brep: BrepModel, opts: TessOptions = {}, prep?
             if (zc) frames.push(frameOf(zc));
             for (const fr of frames) {
               if (DBG) console.error(`[tess] fid=${face.faceId} region/grid retried on a re-aimed sphere frame`);
-              if (mark(face.faceId, "region", tessellatePeriodicRegion(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
-              if (mark(face.faceId, "grid", tessellateParamGrid(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign))) return true;
+              if (mark(face.faceId, "region", guarded(() => tessellatePeriodicRegion(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))) return true;
+              if (mark(face.faceId, "grid", guarded(() => tessellateParamGrid(fr, loops, sampled, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign)))) return true;
             }
             return false;
           })();
+        // No mesher produced the oriented side: keep the first rolled-back mesh (today's result)
+        // rather than leave a hole.
+        if (!ok && side) ok = side.restore(verts, faceIds) && mark(face.faceId, "grid", true);
       }
     } else if (surface.kind === "CONICAL_SURFACE" && outer
       && (mark(face.faceId, "cone", tessellateCone(surface, outer, sampled, brep, face.faceId, verts, faceIds, targetEdge, chordTol, normalDev, sign, face.loops.length))

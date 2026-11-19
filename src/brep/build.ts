@@ -34,6 +34,9 @@ export interface OrientedEdge {
 export interface BLoop {
   outer: boolean;
   edges: OrientedEdge[];
+  /** Set when the FACE_BOUND's orientation flag is .F.: the face's boundary runs AGAINST `edges`.
+   * Consumers that read the material side from the loop direction must flip it. */
+  reversed?: true;
 }
 
 export interface BFace {
@@ -490,7 +493,10 @@ export function buildBrep(src: string): BrepModel {
     for (const bId of refList(f.params[1]!)) {
       const b = table.record(bId); // FACE_OUTER_BOUND | FACE_BOUND(name, loop#, orient)
       const edges = readLoop(ref(b.params[1]!));
-      if (edges.length > 0) loops.push({ outer: b.type === "FACE_OUTER_BOUND", edges });
+      if (edges.length === 0) continue;
+      const lp: BLoop = { outer: b.type === "FACE_OUTER_BOUND", edges };
+      if (b.params[2]?.k === "enum" && b.params[2].v === "F") lp.reversed = true;
+      loops.push(lp);
     }
     return {
       faceId: fid, surfaceId, sameSense: (enumOf(f.params[3]!) === "T") !== flip,
