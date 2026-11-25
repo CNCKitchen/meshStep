@@ -130,16 +130,33 @@ export function defaultThreads(srcLength: number): number {
   return Math.max(1, Math.min(byCores, byMemory));
 }
 
+/** Pending MessageChannels while a nextTask() yield is in flight, kept strongly rooted so
+ * Firefox's worker GC/Cycle Collector cannot collect an unrooted port pair before onmessage fires. */
+const pendingYields = new Set<MessageChannel>();
+
 /** Let pending events (worker messages) be handled. */
 function nextTask(): Promise<void> {
   return new Promise<void>((resolve) => {
     if (typeof MessageChannel === "function") {
       const ch = new MessageChannel();
-      ch.port1.onmessage = () => { ch.port1.close(); resolve(); };
+      pendingYields.add(ch);
+      ch.port1.onmessage = () => {
+        pendingYields.delete(ch);
+        ch.port1.close();
+        ch.port2.close();
+        resolve();
+      };
       ch.port2.postMessage(0);
     } else setTimeout(resolve, 0);
   });
 }
+
+/** Active pools with live workers, kept strongly rooted in module scope until close().
+ * Without a JS root, a suspended importStepAsync() call forms an isolated reference cycle
+ * (pool -> slots[].w -> message listener -> pool -> wake -> suspended Promise); in Firefox,
+ * the worker's periodic GC/Cycle Collector can sweep that cycle mid-import, silently closing
+ * the nested workers and leaving the import stalled forever. */
+const activePools = new Set<MeshPool>();
 
 /** Worker threads for one model: started when first needed, usable for several runs. */
 export class MeshPool {
@@ -188,9 +205,11 @@ export class MeshPool {
       } else if (typeof anyW.addEventListener === "function") {
         anyW.addEventListener("message", ((ev: { data: FromWorker }) => msg(ev.data)) as (x: never) => void);
         anyW.addEventListener("error", err as (x: never) => void);
+        anyW.addEventListener("messageerror", (() => err(new Error("meshStep: worker message could not be deserialized"))) as (x: never) => void);
       }
       try { w.postMessage({ type: "init", src: this.src, cfg: this.cfg } satisfies ToWorker); } catch { s.dead = true; }
     }
+    if (this.slots.length > 0) activePools.add(this);
     this.sendPrep();
   }
 
@@ -239,6 +258,7 @@ export class MeshPool {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    activePools.delete(this);
     for (const s of this.slots) { try { s.w.terminate(); } catch { /* already gone */ } }
   }
 

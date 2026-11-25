@@ -295,6 +295,20 @@ async function load3mf(req: Load3mfRequest): Promise<void> {
   );
 }
 
+/** In-flight async request promises, kept strongly rooted in module scope until settled. */
+const pendingTasks = new Set<Promise<void>>();
+
+function runAsync(task: Promise<void>): void {
+  const tracked = task
+    .catch((err: unknown) => {
+      post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
+    })
+    .finally(() => {
+      pendingTasks.delete(tracked);
+    });
+  pendingTasks.add(tracked);
+}
+
 ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
   // This script also runs as the conversion's own workers (see convert): those get the mesh
   // pool's messages, not the viewer's.
@@ -316,15 +330,11 @@ ctx.onmessage = (ev: MessageEvent<WorkerIn>) => {
     return;
   }
   if (req.type === "load3mf") {
-    load3mf(req).catch((err: unknown) => {
-      post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
-    });
+    runAsync(load3mf(req));
     return;
   }
   if (req.type !== "convert") return;
-  convert(req).catch((err: unknown) => {
-    post({ type: "error", message: err instanceof Error ? (err.stack ?? err.message) : String(err) });
-  });
+  runAsync(convert(req));
 };
 
 /** STEP path: the faces are meshed on further workers started from this one (up to half the
