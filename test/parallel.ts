@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 
-import { importStep, importStepAsync, type ImportOptions, type ImportResult } from "../src/index.ts";
+import { importStep, importStepAsync, type ImportOptions, type ImportResult, type WorkerLike } from "../src/index.ts";
 import { poolTuning } from "../src/mesh/pool.ts";
 
 // The committed fixtures are small enough to be finished by the calling thread's head start:
@@ -142,6 +142,54 @@ for (const { n, src } of fixtures) {
     createWorker: () => { created++; return new Worker(new URL("../src/mesh/face-worker.ts", import.meta.url)); },
   });
   check("createWorker: used", created === 2 && diff(serial, own) === "", `created ${created}`);
+
+  // Browser-style addEventListener worker emitting messageerror before ready falls back cleanly.
+  const makeBrowserMockWorker = (failBusy: boolean): WorkerLike & {
+    addEventListener: (ev: string, cb: (x: unknown) => void) => void;
+  } => {
+    const listeners = new Map<string, ((x: unknown) => void)[]>();
+    const emit = (ev: string, data: unknown): void => {
+      for (const cb of listeners.get(ev) ?? []) cb(data);
+    };
+    return {
+      addEventListener(ev: string, cb: (x: unknown) => void): void {
+        let list = listeners.get(ev);
+        if (!list) { list = []; listeners.set(ev, list); }
+        list.push(cb);
+      },
+      postMessage(msg: unknown): void {
+        const type = (msg as { type?: string }).type;
+        if (type === "prep") {
+          queueMicrotask(() => {
+            if (failBusy) emit("message", { data: { type: "ready" } });
+            else emit("messageerror", {});
+          });
+        } else if (type === "faces" && failBusy) {
+          queueMicrotask(() => emit("messageerror", {}));
+        }
+      },
+      terminate(): void {},
+    };
+  };
+
+  const msgErrBeforeReady = await importStepAsync(everything, {
+    threads: 2,
+    createWorker: () => makeBrowserMockWorker(false),
+  });
+  check("messageerror before ready: falls back", diff(serial, msgErrBeforeReady) === "");
+
+  let busyErr: unknown = null;
+  try {
+    await importStepAsync(everything, {
+      threads: 2,
+      createWorker: () => makeBrowserMockWorker(true),
+    });
+  } catch (e) { busyErr = e; }
+  check(
+    "messageerror while busy: rejects promptly",
+    busyErr instanceof Error && busyErr.message.includes("could not be deserialized"),
+    String(busyErr),
+  );
 }
 
 // --- with the head start, the calling thread finishes a small model itself. The head start is
